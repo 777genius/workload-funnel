@@ -49,6 +49,11 @@ implement a competing state transition.
 `workload-control/node-lifecycle` is the sole canonical owner of the Node
 aggregate. Node-execution reports requests and observations only.
 
+`workload-control/execution-reconciliation` is the sole canonical owner of
+Execution. `workload-control/result-management` is the sole canonical owner of
+ResultManifest. Node, runtime, scheduler, retention, and artifact adapters emit
+fenced observations or commands only.
+
 Pure adapter packages may be sliced by the application contract operations they
 implement, but they own no business policy. Admission, fairness, placement,
 retry, cancellation, and lifecycle decisions remain in their domain/application
@@ -134,9 +139,12 @@ normalization can change them.
 - Scheduler completion is not canonical workload success.
 - Cancellation is desired state and is complete only after observation or an
   explicit terminal reconciliation decision.
-- Secrets never appear in workload specifications, scheduler payloads, logs,
-  events, or result manifests.
+- Platform code never serializes secret values into workload specifications,
+  scheduler payloads, events, manifests, or general logs; secret-bearing child
+  output follows an explicit quarantine/redaction policy.
 - A terminal workload may outlive deleted result bytes through a tombstone.
+- Revisioned operation gates must block queued and new matching effects at the
+  final launcher/gateway boundary during restore, rollback, or critical pressure.
 
 ## Process Safety
 

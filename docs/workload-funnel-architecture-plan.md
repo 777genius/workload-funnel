@@ -457,14 +457,30 @@ one-to-one to application contracts owned by business features; they contain no
 independent business use cases. This is the only exception to using business
 names as the top-level feature dimension.
 
+Anti-corruption adapters may depend on the public contracts on both sides they
+translate, never on internals. Required edges are explicit:
+
+- `dispatcher-local` implements workload-control dispatch contracts and invokes
+  node-execution ticket contracts;
+- `scheduler-hyperqueue` implements workload-control dispatch contracts and
+  invokes only the public node shim/ticket contract;
+- `executor-systemd` implements node-execution process contracts;
+- `bridge-subscription-runtime` implements a node-execution target contract and
+  consumes a versioned external runtime client contract;
+- stores implement multiple feature-owned persistence contracts through neutral
+  values and may not import concrete scheduler/executor/runtime adapters.
+
+No core feature package depends back on an anti-corruption adapter.
+
 ### 8.4 Single mutation owner
 
 Each canonical aggregate transition has exactly one owning feature. Supporting
 features request transitions through that feature's public command or react to
-its public event. For example, `cancellation` evaluates and records cancellation
-intent, while `workload-lifecycle` alone applies the canonical attempt/run state
-transition. Node and adapter packages publish observations; they never mutate
-canonical lifecycle independently.
+its public event. For example, `workload-lifecycle.RequestCancellation` alone
+evaluates, records intent, and transitions Run/Attempt; the `cancellation`
+process manager only propagates the resulting event and reports effects. Node
+and adapter packages publish observations; they never mutate canonical
+lifecycle independently.
 
 ## 9. Package and Feature Ownership
 
@@ -494,16 +510,18 @@ src/features/
   capacity-management/
   allocation-leasing/
   dispatch-reconciliation/
+  execution-reconciliation/
   cancellation/
-  result-retention/
+  result-management/
   control-event-delivery/
   audit-history/
 ```
 
 Feature responsibilities:
 
-- `workload-lifecycle`: acceptance, runs, attempts, state transitions, replay
-  policy, terminal outcome.
+- `workload-lifecycle`: sole owner of Run/Attempt acceptance, allocation
+  attachment, cancellation intent, lifecycle transitions, replay policy, and
+  terminal outcome.
 - `tenant-admission`: quotas, fair-share, priority aging, reserved classes, and
   admission explanations.
 - `node-lifecycle`: sole canonical owner of node registration, epoch,
@@ -514,10 +532,14 @@ Feature responsibilities:
   expiry, and takeover.
 - `dispatch-reconciliation`: dispatch commands, observations, ambiguous
   outcomes, scheduler-independent convergence.
-- `cancellation`: cancel intent, propagation, observation, timeout, and forced
-  terminal operator decisions.
-- `result-retention`: manifest acceptance, checksums, retention, archive, delete,
-  and tombstones.
+- `execution-reconciliation`: sole owner of Execution aggregate, start/stop
+  effects, fenced process observations, ambiguity, and execution outcome.
+- `cancellation`: process manager for propagation, grace timers, observations,
+  and force-stop requests after `workload-lifecycle.RequestCancellation`; it
+  never mutates Run/Attempt directly.
+- `result-management`: sole owner of ResultManifest publication, checksums,
+  retention, archive/delete decisions, and tombstones. Node publication and
+  retention policy submit observations/commands only.
 - `control-event-delivery`: durable event records, subscriptions, cursors,
   deduplication metadata, and replay.
 - `audit-history`: actor, reason, policy version, decision inputs, and immutable
@@ -534,7 +556,7 @@ src/features/
   resource-enforcement/
   heartbeat-reporting/
   observation-spooling/
-  result-publication/
+  result-staging-reporting/
   execution-environment-resolution/
   node-drain-enforcement/
 ```
@@ -542,7 +564,8 @@ src/features/
 It defines executor-facing use cases and contracts without importing systemd.
 The node service uses these features to claim a fenced allocation, validate a
 ticket, resolve a configured execution environment, start and observe the
-process, publish heartbeats/results, and drain cleanly during maintenance.
+process, stage bytes and report fenced result observations, publish heartbeats,
+and drain cleanly during maintenance.
 It submits node registration/drain requests and observations to the canonical
 `workload-control/node-lifecycle` feature; it never transitions the `Node`
 aggregate itself.
@@ -721,10 +744,11 @@ Owns one execution try:
 - run and ordinal reference;
 - immutable execution generation for the concrete process;
 - revocable start fence;
-- admission and execution lifecycle;
+- admission and attempt lifecycle;
 - current allocation reference;
+- current Execution reference and terminal summary;
 - replay classification snapshot;
-- execution/result observations;
+- required ResultManifest reference and completion summary;
 - terminal attempt outcome;
 - aggregate version.
 
@@ -763,9 +787,27 @@ opaque bytes/JSON, and fingerprint. The concrete adapter owns encoding and
 schema validation; Postgres stores the neutral envelope without importing
 HyperQueue, runtime, or systemd types. Mapping payloads may not contain secrets.
 
+#### Execution aggregate
+
+Owned only by `execution-reconciliation`, it represents one concrete process
+execution and owns:
+
+- attempt/allocation/dispatch references;
+- immutable execution generation and deterministic execution ID;
+- selected node and effective execution/SandboxProfile digests;
+- desired start/stop intent and applied-effect receipts;
+- current owner-fence/writer-epoch observations;
+- monotonic source observations and ambiguity state;
+- terminal execution outcome and immutable late/conflicting evidence summary;
+- aggregate version.
+
+`WorkloadAttempt` stores only the current Execution reference and terminal
+summary. Node-execution, systemd, runtime, and scheduler adapters publish fenced
+observations; none owns or mutates canonical Execution state.
+
 #### Node aggregate
 
-Owns:
+Owned only by `node-lifecycle`, it owns:
 
 - node identity and epoch;
 - declared capabilities;
@@ -776,7 +818,7 @@ Owns:
 
 #### ResultManifest aggregate
 
-Owns:
+Owned only by `result-management`, it owns:
 
 - attempt and execution references;
 - output entries and checksums;
@@ -806,12 +848,26 @@ one Postgres transaction, `allocation-leasing`:
 - advances the capacity revision;
 - emits `AllocationReserved` through the outbox.
 
-`dispatch-reconciliation` alone consumes that event and creates canonical
-dispatch intent/state. The reservation transaction does not call a dispatch
-adapter or mutate a Dispatch aggregate.
+The ordering is explicit:
+
+1. `workload-lifecycle` requests reservation for a queued Attempt and expected
+   Attempt version.
+2. `allocation-leasing` reserves capacity and emits `AllocationReserved`.
+3. An idempotent lifecycle process manager consumes it, validates the Attempt
+   is still attachable, attaches allocation, transitions Attempt to `admitted`,
+   and emits `AttemptAdmitted` in its transaction.
+4. If cancellation/staleness prevents attachment, it emits
+   `AllocationAttachmentRejected`; `allocation-leasing` releases exactly once.
+5. `dispatch-reconciliation` consumes only `AttemptAdmitted`, creates Dispatch,
+   and later emits the conditional external submit command.
+
+Thus dispatch cannot start from `AllocationReserved` alone. Every intermediate
+state has a retryable inbox receipt and bounded reservation timeout/reconciler.
+The reservation transaction never calls a dispatch adapter or mutates Attempt
+or Dispatch aggregates.
 
 Release reverses the reservation exactly once using allocation identity and
-generation. The domain allocation policy computes validity; the persistence
+execution generation. The domain allocation policy computes validity; the persistence
 adapter provides serialization. A later sharded implementation may partition
 the ledger by pool/node without changing semantics.
 
@@ -898,6 +954,9 @@ Rules:
 - run retry policy creates a new attempt and never rewrites attempt history.
 - terminal states are append-only facts; corrections are explicit superseding
   audit decisions, not row edits that erase history.
+- Attempt `starting/running/unknown` states are lifecycle summaries advanced by
+  public Execution events through `workload-lifecycle`; adapters never write
+  them directly.
 
 ### 11.3 Allocation lifecycle
 
@@ -932,7 +991,25 @@ reconciler queries using deterministic operation identity and any adapter-owned
 external mapping that was durably received before deciding whether another
 submit is safe.
 
-### 11.5 Cancellation lifecycle
+### 11.5 Execution lifecycle
+
+```text
+prepared -> start_requested -> starting -> running -> exited
+                 |                |          |
+                 |                +------> unknown
+                 |                           |
+                 +---------------------------+
+running -> stop_requested -> stopped
+stop_requested -> exited
+unknown -> running | exited | stopped | lost | reconciliation_required
+```
+
+`execution-reconciliation` alone applies these transitions from conditional
+effect receipts and ordered observations. `exited` records exit/signal facts,
+not attempt success. `stopped` means cancellation effect and stop were observed.
+Attempt lifecycle and result policy interpret these immutable Execution facts.
+
+### 11.6 Cancellation lifecycle
 
 1. Persist `cancel_requested` with actor and reason through expected-version CAS.
 2. For queued work, cancel directly. For admitted but unstarted work, atomically
@@ -1068,14 +1145,16 @@ requirements; a workload must still run correctly after a cache miss.
 7. Calculate candidate allocations from capacity snapshots.
 8. Derate candidates using pressure and stale-observation policy.
 9. Reserve capacity transactionally.
-10. Emit dispatch work through the outbox.
+10. Emit `AllocationReserved`; attach it to Attempt before any dispatch intent
+    is eligible, following section 10.3.
 
 Every denial/defer decision includes machine-readable reasons and input
 versions. It must be explainable to an operator and future orchestrator.
 
 ### 14.2 Fairness
 
-Initial policy uses hierarchical weighted fair sharing:
+Initial policy uses hierarchical weighted Dominant Resource Fairness (DRF) per
+homogeneous capacity pool:
 
 - global pool;
 - tenant quota/weight;
@@ -1083,9 +1162,34 @@ Initial policy uses hierarchical weighted fair sharing:
 - priority with bounded aging;
 - reserved recovery capacity.
 
-High priority must not starve lower priority forever. Aging is capped and
-audited. Recovery/drain work receives a small reserved lane so output debt or
-cleanup cannot be blocked by new producers.
+For each tenant, dominant share is the maximum ratio of its currently *reserved
+grants* to effective pool capacity across configured fungible hard dimensions,
+divided by tenant weight. Charging reservations rather than sampled usage
+prevents a tenant from gaming fairness by under-declaring or producing bursty
+load. Custom resources join DRF only when they have stable fungible capacity;
+exclusive keys remain feasibility constraints.
+
+The scheduler selects the eligible tenant with the lowest weighted dominant
+share, then applies class weight and bounded aged priority inside that tenant.
+Cross-pool placement compares only explicitly normalized policy scores; it does
+not combine incomparable capacities into a false global share.
+
+High priority must not starve lower priority forever, and a stream of small jobs
+must not starve a large feasible job. Configured `maxBypassCount`/`maxQueueAge`
+eventually reserves future released capacity for the oldest eligible workload
+without killing running work. A request larger than every compatible pool's
+maximum envelope is rejected as permanently unschedulable instead of waiting.
+Deadlines never bypass tenant authorization or hard quota.
+
+Recovery/drain work receives a small reserved lane so output debt or cleanup
+cannot be blocked by new producers. Aging, bypass, reservation, and quota
+decisions are revisioned and audited.
+
+Concurrent admission replicas carry an expected admission/capacity revision.
+The allocation transaction revalidates eligibility, tenant counters, fairness
+charge, quota, and capacity, updates them with the reservation, or rejects the
+stale decision for recomputation. A read-only fairness score can never reserve
+capacity by itself.
 
 ### 14.3 Pressure-aware derating
 
@@ -1121,6 +1225,13 @@ Crossing a soft bound derates affected classes; crossing a hard safety bound
 rejects or pauses new acceptance with an explainable retry condition while
 observation and cancellation remain available.
 
+Hard acceptance bounds are linearized, not checked optimistically. After
+idempotency lookup, the acceptance transaction lock/CAS-reserves global and
+tenant queued count/bytes, recovery-debt, and configured disk budget together
+with workload creation. A duplicate returns the original receipt without
+charging again. `429`/`Retry-After` is returned only when no canonical operation
+was created. Terminal/retention transitions release counters exactly once.
+
 ### 14.4 Preemption policy
 
 Initial v1 scheduling is non-preemptive by default. Priority changes admission
@@ -1154,6 +1265,16 @@ Supported profiles are explicit:
 - `synchronous_ha`: acknowledgement requires the configured synchronous
   Postgres quorum for the stated failure domain; this may claim RPO=0 only for
   failure modes actually covered and tested by that quorum.
+- `externally_witnessed`: after the Postgres durability condition, acceptance
+  sequence/commit reference is idempotently appended to a monotonic,
+  tamper-evident watermark in an independent failure domain before success is
+  returned. This is required when restore must detect every acknowledged gap.
+
+If the database commit or external witness outcome is ambiguous, the API returns
+`acceptance_outcome_unknown` with `operationId`; only same-key retry/status
+lookup may resolve it. It never submits a second workload. Profiles without the
+external witness state their disaster RPO and cannot claim detectable
+acknowledgement continuity after losing their whole durability domain.
 
 Receipts include cluster incarnation, durability profile, immutable acceptance
 sequence, and a recoverable commit/high-watermark reference. Backup/restore
@@ -1217,7 +1338,7 @@ deduplicate with an inbox receipt.
 Required metadata:
 
 - event/command ID;
-- aggregate ID and version;
+- aggregate ID, version, and `eventOrdinal` within the mutation;
 - tenant;
 - correlation and causation IDs;
 - controller epoch;
@@ -1230,6 +1351,17 @@ is no global event order. Consumers receiving a version gap must defer, replay
 from their durable cursor, or rebuild from a canonical snapshot. They must not
 apply later state and guess the missing transition. Projection checkpoints and
 outbox compaction retain enough history/snapshot coverage for this recovery.
+
+Public durable streams add a visibility-safe `streamPosition` only after the
+canonical outbox row is committed. A serialized publisher per stream partition
+assigns positions, so transactions that commit out of order cannot create a
+cursor hole. `streamPosition` is delivery order, not global causal order.
+Aggregate causal order remains `(aggregateVersion, eventOrdinal)`.
+
+API cursors are opaque, signed, and bound to tenant, filters, schema version,
+stream partition, and snapshot watermark. Bounded keyset pages use
+`(streamPosition,eventId)`. An expired cursor returns `cursor_expired` with
+snapshot-bootstrap instructions instead of silently skipping retained history.
 
 Fact events and conditional side-effect commands are distinct schemas. Every
 external command carries `expectedDesiredVersion`, `startFence` where relevant,
@@ -1252,6 +1384,17 @@ bounded retry policy; they are never silently skipped. Inbox/outbox cleanup is
 allowed only after every relevant consumer cursor, operation retry window,
 result retention dependency, and disaster-recovery window has passed.
 
+Consumers are leased registrations with maximum lag/replay horizon, byte/count
+budget, bounded batch size, and slow-consumer policy. Expired consumers stop
+blocking compaction and must bootstrap from a snapshot plus fresh cursor.
+Observation and cancellation streams retain reserved throughput under backlog.
+
+Projection row changes and checkpoint advancement commit atomically, keyed by
+`(projectionName, projectionVersion, partition)` with event-ID deduplication and
+gap rejection. Rebuild writes a versioned shadow projection, validates it at a
+fixed stream watermark, atomically switches readers, and retains the old
+projection through the rollback window.
+
 ### 15.7 Idempotency records
 
 An idempotency identity is:
@@ -1266,6 +1409,13 @@ different canonical payload is rejected as `idempotency_conflict`; it never
 returns the earlier result as if inputs matched. Records are retained longer
 than the maximum client retry, event replay, result, backup/restore, and
 external-operation ambiguity windows.
+
+The receipt exposes `idempotencyExpiresAt`, while a compact non-secret key
+digest, request fingerprint, operation ID, and terminal disposition remain
+through the declared disaster-recovery horizon. A known key received after full
+receipt expiry returns `idempotency_key_expired`; it never creates a new
+operation. Status lookup is available by operation ID and by scoped idempotency
+identity.
 
 For workload acceptance, unique idempotency insertion/fingerprint validation,
 WorkloadSpec/Run/initial Attempt creation, audit, initial outbox, and receipt
@@ -1379,6 +1529,32 @@ forced into one artificial order: incompatible terminal facts enter
 `reconciliation_required`, preserving both. Only the current fenced reconciler
 derives a canonical transition from immutable evidence, including valid late
 observations produced by an older owner.
+
+### 16.4 Revisioned operation gates
+
+Canonical `OperationGateSet` state exists per namespace with optional
+per-adapter overrides and an optimistic revision. Independent gates control:
+
+- acceptance;
+- admission/reservation;
+- dispatch and process start;
+- automatic retry/new Attempt;
+- result finalization;
+- archive and result deletion.
+
+Observation, canonical cancellation propagation, and privileged local
+`emergency_stop` remain separately available. Restore, incompatible migration,
+rollback, and critical pressure close the necessary mutation gates before
+changing binaries or ownership.
+
+Every conditional effect handler reloads the current gate revision immediately
+before acting and persists `superseded_by_gate` without side effect when closed.
+Scheduler mutation gateways validate it at scheduler-call time. Start tickets
+carry gate revision and short validity; launchers maintain a root-owned signed
+gate/revocation snapshot. A rollback broadcasts closure, waits for gateway/node
+acknowledgements, and fences unreachable nodes or waits ticket expiry before
+switching the writer release. Closing only the database gate while an offline
+launcher still has a valid start ticket is not a completed freeze.
 
 ## 17. Privilege-Separated Node Execution and Linux Process Ownership
 
@@ -1832,17 +2008,22 @@ or escape its permitted tenant scope.
 ### 22.3 Compatibility
 
 - Contracts use explicit schema versions.
-- Unknown required fields fail validation.
-- Additive optional fields remain backwards compatible within a major version.
+- Unknown optional fields are ignored or preserved by pass-through adapters;
+  unsupported required fields, event type, closed-enum value, or major version
+  are quarantined without advancing the consumer checkpoint.
+- Additive optional fields remain backwards compatible within a major version;
+  new required fields and closed-enum variants require a new major/type.
 - Events are immutable; corrections emit new events.
 - Database migration and rolling deployment compatibility windows are tested.
 - Adapter capability versions are persisted with every dispatch.
 
-Database changes follow expand -> online backfill with durable checkpoints ->
-dual-read/compatible window -> contract. Each service release declares a schema
-compatibility range. Non-transactional DDL, downgrade restrictions, mixed
-version behavior, and rollback are explicit in each migration plan; a release
-cannot contract schema while a compatible old binary may still run.
+Database changes follow `expand -> compatible readers + dual-write ->
+version-guarded checkpointed backfill -> equivalence/constraint validation ->
+switch reads -> stop old writes -> rollback wait -> contract`. Each service
+release declares a schema compatibility range. DDL uses bounded lock/statement
+timeouts; migration ownership/backfill is resumable. Rollback does not require
+reverse data migration. A release cannot contract schema while an old binary or
+retained replay event still requires it.
 
 Every release publishes a signed compatibility manifest covering database
 schema range, API/event schemas, execution-ticket versions/key IDs, node/launcher
@@ -1850,13 +2031,19 @@ ledger formats, systemd property profile, adapter contracts, and exact
 HyperQueue version. Deployment preflight rejects an incompatible control/node/
 gateway combination.
 
+The manifest declares readable and writable ranges. Producers emit only the
+intersection supported by active consumers, offline-but-supported nodes,
+retained replay schemas, and rollback releases. Mixed-version preflight checks
+queued events and active tickets, not only running binary versions.
+
 ## 23. Security Model
 
 ### 23.1 Trust boundaries
 
 - Caller/orchestrator is untrusted for host commands and paths.
 - Control service is trusted for policy and lifecycle, not for raw secrets.
-- Node executor is privileged only enough to create controlled execution units.
+- Node agent is unprivileged; the local launcher has minimal typed systemd
+  authority and no network/database/scheduler credentials.
 - Scheduler is an external subsystem whose reports require reconciliation.
 - Workload child processes are untrusted and resource-contained.
 - `subscription-runtime` is trusted only within its project/access manifest.
@@ -1958,8 +2145,11 @@ security-sensitive mutation if it cannot be committed atomically.
 4. It computes size/checksum/type metadata from that stable view.
 5. Artifact adapter stages bytes under an immutable key derived from execution
    generation and manifest digest.
-6. It verifies server-side checksums and compare-and-set finalizes publication.
-7. Result manifest is persisted with object version IDs and publication state.
+6. Node reports a fenced `ResultStaged` observation; it does not transition the
+   canonical ResultManifest.
+7. `result-management` verifies server-side checksums, compare-and-set finalizes
+   publication, and persists ResultManifest/object version state atomically with
+   its outbox event.
 8. Required outputs are validated.
 9. Run success is derived only after the required manifest is complete.
 
@@ -1967,6 +2157,9 @@ Node upload credentials are create-only and scoped to the current allocation
 prefix. The control plane finalizes manifests; a separate retention identity
 deletes. A node cannot list, read, overwrite, or delete another allocation's
 objects.
+
+Retention schedulers request archive/delete through `result-management`
+commands. They do not mutate retention or tombstone state directly.
 
 Retries reuse immutable staging identity. Orphan staging uploads are garbage
 collected only after canonical-state and retention checks. Deletion is
@@ -1991,6 +2184,21 @@ runtime reports a structured result manifest/terminal ledger. WorkloadFunnel
 ensures the workload result is not silently discarded, but deciding whether a
 dirty worktree is integrated, duplicate, superseded, or rejected remains above
 the generic workload layer.
+
+### 24.4 Data-class retention and erasure
+
+A versioned data-class policy covers workload specs, principal references,
+canonical events, audit, idempotency receipts, projections, inbox/outbox/DLQ,
+logs, artifacts, and backups. Each class defines purpose, retention horizon,
+legal-hold precedence, restore behavior, and permitted deletion method.
+
+Erasure is an idempotent workflow across canonical and derived stores. Where
+history must remain, identifying fields are pseudonymized or crypto-erased while
+a non-personal tombstone preserves lifecycle integrity. Legal hold blocks byte
+deletion but records the pending request. A tamper-evident erasure ledger in an
+independent failure domain is replayed after restore before affected reads,
+events, projections, or artifacts resume, preventing backup restoration from
+silently resurrecting erased personal data.
 
 ## 25. Observability
 
@@ -2239,7 +2447,7 @@ Release-blocking combined scenarios include:
 - node certificate expiry/revocation and execution-ticket replay;
 - cross-tenant authorization/idempotency collision attempts;
 - secret leak attempts through every documented surface;
-- prolonged disk, inode, journal, spool, outbox, and reconciliation saturation.
+- prolonged disk, inode, journal, spool, outbox, and reconciliation saturation;
 - unauthorized systemd D-Bus and launcher-socket calls;
 - compromised node-agent attempts arbitrary executable/property/user/path;
 - Docker/containerd socket and `host_control` bypass;
@@ -2335,96 +2543,158 @@ Acceptance:
 - no spike uses a real user project;
 - Phase 1 begins only after critical gates have explicit pass/block decisions.
 
-### Phase 1: Domain safety kernel
+### Phase 1: Synthetic single-host walking slice
 
-Estimated change: 2,000-3,500 lines.
+Estimated change: 4,000-7,000 lines including tests. This phase creates one
+complete vertical path before broad policy or real host execution:
 
-- Workload/run/attempt value model.
-- Resource request and capability values.
-- Lifecycle and replay policies.
-- Allocation lease, execution generation, owner-fence, and writer-epoch model.
-- Cancellation and result manifest policies.
-- Property-based state-machine tests.
+```text
+submit API
+  -> Postgres idempotency + Workload/Run/Attempt + outbox
+  -> one static node/capacity profile
+  -> CapacityReservationLedger
+  -> AllocationReserved -> AttemptAdmitted
+  -> dispatcher-local
+  -> deterministic in-memory executor observation
+  -> empty or local-filesystem ResultManifest finalization
+  -> succeeded/failed/canceled observe API
+```
 
-Acceptance:
+Required scope:
 
-- all transition tables are executable tests;
-- stale fencing and ambiguous replay invariants are proven;
-- domain has zero infrastructure imports.
+- minimal Workload/Run/Attempt/Allocation/Dispatch/Execution/ResultManifest
+  invariants used by this path;
+- one authenticated synthetic tenant and one trusted process profile;
+- revisioned operation gates, closed by default outside a test namespace;
+- one atomic acceptance/idempotency/backlog transaction;
+- Postgres repositories, inbox/outbox, audit, and a minimal projection;
+- static capacity reservation with no overcommit;
+- `dispatcher-local` and deterministic in-memory executor;
+- `result-management` plus local filesystem artifact adapter and explicit empty
+  result manifest;
+- minimal submit, status, cancel, and operation-status APIs;
+- process-manager chain from reservation through attempt/dispatch/result;
+- restart and duplicate-delivery tests.
 
-### Phase 2: Postgres control persistence
-
-Estimated change: 2,000-3,500 lines.
-
-- Aggregate repositories and migrations.
-- Scoped idempotency records.
-- Transactional outbox and command inbox.
-- Reconciliation claims and projection cursors.
-- Audit history.
-- Crash-safe integration tests.
-
-Acceptance:
-
-- acknowledged workload survives restart;
-- duplicate submissions return the same receipt;
-- outbox/inbox duplicate tests pass;
-- optimistic conflicts do not lose updates.
-
-### Phase 3: Admission and local scheduler
-
-Estimated change: 2,000-3,500 lines.
-
-- Node/capacity snapshots.
-- Resource reservation.
-- tenant quota and weighted fairness;
-- priority aging and recovery reserve;
-- pressure derating/hysteresis;
-- deterministic local scheduler.
+No real systemd process, HyperQueue, provider runtime, multi-node, or production
+workload is enabled.
 
 Acceptance:
 
-- mixed workload simulations demonstrate bounded starvation;
-- resources are not over-reserved;
-- stale/failed pressure sensors cause conservative behavior;
-- no fixed worker-count assumption is required.
+- one synthetic workload reaches every terminal state end to end;
+- duplicate submit/cancel/events return stable receipts and do not duplicate
+  state;
+- service restart at each durable boundary converges;
+- cancellation before dispatch supersedes every queued start;
+- success is impossible without a complete manifest, including empty output;
+- architecture dependency tests pass for the first vertical feature chain.
 
-### Phase 4: Privilege-separated node execution and systemd
+### Phase 2: Lifecycle and crash-recovery hardening
 
-Estimated change: 3,500-5,500 lines.
+Estimated change: 3,000-5,000 lines.
 
-- Node registration/boot epoch/drain.
-- node-agent, root launcher, typed Unix RPC, and local ledgers;
-- ticket signing, redemption, nonce, and allowlist validation;
-- systemd transient executor.
-- cgroup resource mapping.
-- process observation, cancellation, OOM/pressure classification.
-- result publication.
-
-Acceptance:
-
-- complete process trees are owned and stoppable;
-- compromised/unprivileged node-agent inputs cannot escape launcher allowlists
-  or call systemd directly;
-- ticket/nonce replay and launcher-ledger recovery tests pass;
-- limits/weights are verified on disposable Linux hosts;
-- control service/node restarts reconcile without duplicate execution;
-- foreground ownership is demonstrated.
-
-### Phase 5: API, SDK, and operator CLI
-
-Estimated change: 1,500-2,500 lines.
-
-- Submit/observe/cancel/result/capacity APIs.
-- durable event cursors;
-- TypeScript SDK;
-- explain-admission and reconciliation CLI;
-- authn/authz and audit integration.
+- complete domain state machines and property-based transition tests;
+- separate Run/Attempt/Allocation/Dispatch/Execution identities;
+- owner fence, execution generation, writer epoch, start fence, and leases;
+- conditional commands, operation receipts, unknown-state reconciliation;
+- cancellation/effect precedence and exact-once reservation release;
+- result process manager, retention tombstone, and ambiguous artifact operations;
+- leased consumers, visibility-safe stream positions, projections, DLQ;
+- durability profiles, external witness adapter, restore quarantine;
+- kill/fault injection around every Postgres/outbox/effect boundary.
 
 Acceptance:
 
-- all mutation envelopes are idempotent/versioned;
-- SDK contract tests pass across supported versions;
-- secrets/redaction tests pass.
+- all normative lifecycle/invariant tests are executable;
+- stale owners/writers/commands cannot create effects;
+- ambiguous calls never cause blind replay;
+- recovered state has no missing event/projection transition;
+- restore cannot reopen admission before gap/execution reconciliation.
+
+### Phase 3: Admission, multidimensional capacity, and fairness
+
+Estimated change: 2,500-4,000 lines.
+
+- revisioned node/capacity snapshots and serialized resource counters;
+- weighted DRF per capacity pool and tenant/class quota;
+- bounded aging, bypass, large-workload reservation, and recovery lane;
+- priority/deadline policy without automatic preemption;
+- pressure hysteresis and hard backlog/disk/debt bounds;
+- explain-admission read models and deterministic simulations;
+- admission concurrency/fairness revision revalidation.
+
+Acceptance:
+
+- concurrent reservation simulations never overcommit hard resources;
+- mixed workload simulations demonstrate bounded starvation and tenant quotas;
+- permanently unschedulable work is rejected instead of waiting forever;
+- stale/failed pressure sensors close admission conservatively;
+- no fixed worker-count assumption is needed.
+
+### Phase 4: Privilege-separated real process execution
+
+Estimated change: 4,500-7,000 lines across independently gated slices. Real
+production starts remain disabled until every capability required by a profile
+has passed its gate.
+
+#### Phase 4A: Minimal trusted unit
+
+- unprivileged node-agent and minimal root node-launcher;
+- typed peer-checked Unix RPC;
+- signed exact-node/boot ticket and one allowlisted synthetic executable;
+- deterministic systemd unit, observe, stop, and operation-gate revocation.
+
+Gate: compromised agent input cannot select another executable, user, path,
+property, or direct D-Bus operation; complete process tree is stoppable.
+
+#### Phase 4B: Durable node recovery
+
+- nonce redemption and root launcher WAL;
+- unprivileged observation/result spool;
+- node/launcher restart, unit inventory, unknown-state reconciliation;
+- control partition policies and generation-bound emergency stop.
+
+Gate: restart/replay/ledger-full/corruption tests converge or cordon safely,
+without duplicate execution.
+
+#### Phase 4C: Resources and host survival
+
+- cgroup/systemd CPU, memory, PID, IO, disk and supported sandbox controls;
+- SandboxProfile and capability refusal;
+- HostSurvivalProfile, PSI hysteresis, OOM/pressure classification;
+- daemon-mediated/host-control restrictions.
+
+Gate: limits and control-plane survival are verified on disposable Linux hosts;
+unsupported isolation remains unschedulable.
+
+#### Phase 4D: Real result staging
+
+- quiesced root-owned staging/snapshot;
+- safe descriptor traversal and scoped upload identity;
+- fenced `ResultStaged`, result-management finalize, retention/tombstone;
+- malicious/special-file and mutation-race tests.
+
+Gate: non-empty and empty results finalize safely; node cannot access another
+allocation's artifacts.
+
+### Phase 5: Public API, SDK, operations, and observability
+
+Estimated change: 1,500-2,500 lines. This expands the minimal Phase 1 API rather
+than introducing transport late.
+
+- complete submit/observe/cancel/result/capacity/explanation APIs;
+- signed keyset cursors, snapshots, slow-consumer lifecycle;
+- TypeScript SDK and operator CLI;
+- authn/authz, data retention/erasure, and audit operations;
+- metrics, traces, health/degraded semantics, dashboards;
+- compatibility manifests and rolling migration preflight.
+
+Acceptance:
+
+- all mutation envelopes and cursor contracts are versioned/idempotent;
+- SDK and mixed-version contract tests pass;
+- security, retention, redaction, and slow-consumer tests pass;
+- operation gates can safely freeze starts/retries/deletion during rollback.
 
 ### Phase 6: `subscription-runtime` bridge
 
@@ -2483,8 +2753,8 @@ Acceptance:
 
 ### Realistic foundation size
 
-An honest production-capable first foundation is likely 15,000-25,000 lines
-including tests and migrations. A smaller 10,000-17,000-line subset may provide
+An honest production-capable first foundation is likely 20,000-35,000 lines
+including tests and migrations. A smaller 12,000-20,000-line subset may provide
 single-host value, but must not claim multi-node or ambiguous-failure guarantees
 that have not been implemented and tested.
 
@@ -2523,8 +2793,9 @@ transfer is an audited compare-and-swap. Rollback acquires a new epoch rather
 than reactivating an old writer. A legacy process that restarts with stale
 credentials/epoch can observe at most; it cannot create or mutate work.
 
-Rollback freezes admission, acquires a new writer epoch, and never performs a
-destructive database downgrade. The rollback release must remain able to
+Rollback closes and drains the operation gates from section 16.4, acquires a
+new writer epoch, and never performs a destructive database downgrade. The
+rollback release must remain able to
 observe/cancel active units and tickets created by the newer compatible release.
 Nodes roll one at a time; active workload units are not coupled to node-agent
 restart and remain under the privileged launcher/systemd boundary.
@@ -2548,16 +2819,22 @@ retry, and result deletion are disabled.
    scheduler-gateway credentials, and node enrollment credentials.
 3. Inventory node WAL/systemd units, runtime operations, scheduler mappings, and
    artifact staging for every recovered active/unknown execution.
-4. Stop it, prove absence, adopt observation under the new authority, or mark it
+4. Record the recovered canonical stream cut; invalidate/rebuild projection
+   checkpoints beyond it, reconcile external transport offsets, and replay
+   canonical outbox rows idempotently. Event/projection APIs stay quarantined;
+   duplicate post-restore notification is allowed, omission is not.
+5. Replay the external erasure ledger before enabling affected reads/events.
+6. Stop each old execution, prove absence, adopt observation under the new
+   authority, or mark it
    `reconciliation_required`. An old process may still run even though its token
    can no longer mutate canonical state.
-5. Re-enroll nodes and validate empty/stable unknown backlog.
-6. Resume observation/cancellation first, then admission only after the restore
+7. Re-enroll nodes and validate empty/stable unknown backlog.
+8. Resume observation/cancellation first, then admission only after the restore
    gate has an audited approval.
 
 `single_node_durable` cannot advertise zero-RPO disaster recovery. A deployment
 requiring no acknowledged loss for its stated node/storage failure domain must
-use and continuously test `synchronous_ha` plus the external recovery watermark.
+use and continuously test `synchronous_ha` plus `externally_witnessed`.
 
 ## 32. Operational Runbooks Required
 
@@ -2667,6 +2944,9 @@ Every production change maps its tests to the affected invariant IDs.
 | WF-INV-016 | Runtime, scheduler, and operational scripts MUST NOT bypass the node executor's outer ownership boundary. |
 | WF-INV-017 | A controller or node restart MUST reconcile durable intent and observations before accepting/claiming new work. |
 | WF-INV-018 | Canonical history MUST NOT be destructively rewritten to hide retries, ambiguity, or operator intervention. |
+| WF-INV-019 | A closed operation gate MUST prevent queued and new matching side effects at the final executor/gateway boundary. |
+| WF-INV-020 | Each canonical aggregate transition MUST have one feature owner; adapters/process managers submit commands or evidence only. |
+| WF-INV-021 | A profile claiming detectable acknowledged continuity MUST durably witness acceptance before returning success. |
 
 ## 35. Open Decisions
 
@@ -2689,15 +2969,17 @@ WorkloadFunnel v1 is complete only when:
 - a workload is accepted idempotently and survives service restart;
 - admission uses resource envelopes, fairness, quota, and pressure rather than
   only worker count;
-- allocations use leases, generations, and tested fencing;
-- a systemd executor owns and cancels complete process trees;
+- allocations use leases, immutable execution generations, owner fences, and
+  writer epochs;
+- a privilege-separated node agent/launcher owns and cancels complete process
+  trees;
 - ambiguous dispatch/execution remains explicit and cannot cause blind replay;
 - controller and node restarts reconcile safely;
 - required results are published before success and have durable retention
   state/tombstones;
 - the SDK exposes submit/observe/cancel/events/capacity;
 - a synthetic `subscription-runtime` E2E passes without raw host control;
-- local scheduler works without HyperQueue;
+- local dispatcher works without HyperQueue;
 - HyperQueue adapter, if enabled, passes exact-version failure tests;
 - dependency and feature-boundary architecture tests pass;
 - security threat model and operator runbooks are reviewed;
@@ -2736,6 +3018,9 @@ patterns and systems:
 - [Temporal task queues](https://docs.temporal.io/task-queue) and
   [activities](https://docs.temporal.io/activities) as references for durable
   dispatch/retry concepts, without introducing a Temporal dependency.
+- The original [Dominant Resource Fairness paper](https://www.usenix.org/conference/nsdi11/dominant-resource-fairness-fair-allocation-multiple-resource-types)
+  for multidimensional tenant fairness, adapted here with pool boundaries,
+  quotas, aging, and non-preemptive starvation guards.
 
 These references inform semantics. WorkloadFunnel remains a focused workload
 admission and execution control system, not a compatibility clone of any one
@@ -2743,12 +3028,15 @@ platform.
 
 ## 38. Immediate Next Actions
 
-1. Review and approve this boundary before writing production code.
+1. Complete four documented plan-hardening rounds before production code:
+   aggregate/feature ownership; distributed persistence/recovery; security and
+   host operations; vertical implementation/E2E feasibility. Each round records
+   findings, resolves every critical/high item or marks a production gate, runs
+   Markdown/consistency checks, and commits a review checkpoint.
 2. Decide license, package manager, API transport, and initial deployment scope
    through ADRs.
 3. Scaffold strict TypeScript workspace and architecture tests.
-4. Implement one complete `workload-lifecycle` feature slice as the reference
-   package pattern.
-5. Implement resource/capability values and executable state-machine tests.
-6. Add Postgres idempotency/outbox foundation before any real process launcher.
-7. Build only synthetic E2E fixtures until the safety kernel is proven.
+4. Run Phase 0.5 feasibility gates in disposable synthetic environments.
+5. Implement the complete Phase 1 walking slice, not isolated horizontal
+   packages.
+6. Keep every real process-start operation gate closed until Phase 4 gates pass.
