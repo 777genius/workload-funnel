@@ -46,6 +46,9 @@ Each canonical aggregate mutation has one owning feature. Other features and
 adapters request changes through its public commands/events; they must not
 implement a competing state transition.
 
+`workload-control/node-lifecycle` is the sole canonical owner of the Node
+aggregate. Node-execution reports requests and observations only.
+
 Pure adapter packages may be sliced by the application contract operations they
 implement, but they own no business policy. Admission, fairness, placement,
 retry, cancellation, and lifecycle decisions remain in their domain/application
@@ -64,7 +67,8 @@ WorkloadFunnel owns:
 - resource enforcement through executor capabilities;
 - result manifests, retention state, and audit events;
 - transactional outbox/inbox delivery;
-- leases, generations, and fencing tokens.
+- leases, immutable execution generations, owner fences, and namespace writer
+  epochs.
 
 WorkloadFunnel does not own:
 
@@ -83,7 +87,15 @@ adapter. `subscription-runtime` must never import WorkloadFunnel.
 For agent workloads, WorkloadFunnel's node executor owns the outer systemd and
 cgroup process boundary. `subscription-runtime` runs in foreground inside that
 boundary and owns provider/session semantics. Do not create two host-level
-process owners or independent launch loops.
+process owners or independent launch loops. The runtime bridge is composed only
+inside this node-owned path; the control service must not call it as a direct
+launcher.
+
+The node boundary is privilege-separated: an unprivileged networked node agent
+and a minimal root launcher communicating through a typed, peer-checked Unix
+socket. The agent and workloads receive no direct systemd mutation permission;
+the launcher has no network, database, scheduler, or secret-store access and
+constructs units only from validated tickets and allowlisted profiles.
 
 `hosted-agent-ops` deploys and configures WorkloadFunnel. Operational scripts
 must not become the canonical workload lifecycle implementation.
@@ -114,8 +126,9 @@ normalization can change them.
 - Delivery is at least once; handlers must deduplicate commands and events.
 - A workload run, execution attempt, resource allocation, scheduler dispatch,
   and process execution are distinct concepts.
-- Only one current allocation generation may own an attempt.
-- Fencing tokens reject stale owners after lease expiry or controller failover.
+- Only one execution generation may own the outer process for an attempt.
+- Lease takeover increments owner fence without changing process identity;
+  writer epochs reject stale control-plane deployments.
 - Missing heartbeat first becomes `unknown`, never immediately `failed`.
 - Ambiguous side-effectful workloads are not automatically replayed.
 - Scheduler completion is not canonical workload success.
