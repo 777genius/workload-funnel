@@ -68,6 +68,8 @@ function claims(): ExecutionTicketClaims {
     operationId: "start-operation-1",
     partitionPolicy: "terminate_after_grace",
     profileId: SYNTHETIC_EXECUTION_PROFILE,
+    sandboxProfileDigest:
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     schemaVersion: EXECUTION_TICKET_SCHEMA,
     ticketId: "ticket-1",
   };
@@ -119,6 +121,13 @@ describe("Phase 4A signed execution ticket", () => {
     };
     tampered.claims.allocation.ownerFence = 99;
     expect(() => verifyExecutionTicket(tampered, policy)).toThrow(
+      TicketValidationError,
+    );
+    const profileTampered = structuredClone(ticket) as unknown as {
+      claims: { sandboxProfileDigest: string };
+    };
+    profileTampered.claims.sandboxProfileDigest = "0".repeat(64);
+    expect(() => verifyExecutionTicket(profileTampered, policy)).toThrow(
       TicketValidationError,
     );
   });

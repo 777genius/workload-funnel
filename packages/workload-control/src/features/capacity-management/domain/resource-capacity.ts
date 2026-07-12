@@ -154,20 +154,33 @@ export function deriveAdmissionCapacity(
     });
   }
 
-  if (["paused", "critical"].includes(node.pressureMode)) {
+  const pressureMode = node.hostPressureState?.mode ?? node.pressureMode;
+  const pressureReasons = node.hostPressureState?.reasons;
+  if (["paused", "critical"].includes(pressureMode)) {
     return Object.freeze({
       ...base,
       effective: reported,
-      reasons: Object.freeze([`pressure_${node.pressureMode}`]),
+      reasons: Object.freeze(
+        pressureReasons === undefined
+          ? [`pressure_${pressureMode}`]
+          : [...pressureReasons],
+      ),
       recoveryReserved: reserve,
       status: "producer_paused",
     });
   }
-  if (node.pressureMode === "derated") {
+  if (pressureMode === "derated") {
     return Object.freeze({
       ...base,
-      effective: scaled(reported, policy.softPressureFactor),
-      reasons: Object.freeze(["pressure_derated"]),
+      effective: scaled(
+        reported,
+        node.hostPressureState?.derateFactor ?? policy.softPressureFactor,
+      ),
+      reasons: Object.freeze(
+        pressureReasons === undefined
+          ? ["pressure_derated"]
+          : [...pressureReasons],
+      ),
       recoveryReserved: reserve,
       status: "derated",
     });

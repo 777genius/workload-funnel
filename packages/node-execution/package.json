@@ -20,6 +20,10 @@
     "./process-lifecycle": {
       "types": "./dist/features/process-lifecycle/index.d.ts",
       "import": "./dist/features/process-lifecycle/index.js"
+    },
+    "./resource-enforcement": {
+      "types": "./dist/features/resource-enforcement/index.d.ts",
+      "import": "./dist/features/resource-enforcement/index.js"
     }
   },
   "scripts": {

@@ -1,9 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { MutationFence } from "@workload-funnel/kernel";
+import {
+  discoverSystemdCapabilities,
+  syntheticDisposableLinuxProbe,
+} from "@workload-funnel/executor-systemd/capability-discovery";
+import {
+  createSyntheticSandboxProfile,
+  mapSystemdExecutionControls,
+} from "@workload-funnel/executor-systemd/cgroup-resource-mapping";
 import { stopSyntheticTransientUnit } from "@workload-funnel/executor-systemd/transient-unit-cancellation";
 import {
   startSyntheticTransientUnit,
+  fingerprintProjectQuotaControl,
+  PROJECT_QUOTA_RECEIPT_SCHEMA,
+  type TransientProjectQuotaControl,
   type TransientUnitStartManager,
 } from "@workload-funnel/executor-systemd/transient-unit-start";
 
@@ -31,18 +42,38 @@ function startFence(): MutationFence {
   };
 }
 
+function controls() {
+  const result = mapSystemdExecutionControls(
+    createSyntheticSandboxProfile("allocation-1"),
+    discoverSystemdCapabilities(syntheticDisposableLinuxProbe()),
+    "synthetic_disposable_linux_fixture",
+  );
+  if (result.status === "unsupported") throw new Error(result.reason);
+  return result;
+}
+
 describe("systemd final MutationFence boundaries", () => {
   it("makes no manager call when the real execution mutation receives the wrong effect", () => {
     const start = vi.fn(() => "created" as const);
     const manager: TransientUnitStartManager = {
+      applyProjectQuota: vi.fn((control: TransientProjectQuotaControl) => ({
+        ...control,
+        controlDigest: fingerprintProjectQuotaControl(control),
+        registryRevision: 1,
+        schemaVersion: PROJECT_QUOTA_RECEIPT_SCHEMA,
+        status: "applied" as const,
+        verification: "exact_root_and_limits" as const,
+      })),
+      projectQuotaControl: "supported",
       startTransientService: start,
       transientServiceStart: "supported",
+      verifyProjectQuotaReceipt: vi.fn(() => true),
     };
     const unitName =
       "workload-funnel-phase4a-0123456789abcdef0123456789abcdef.service";
 
     expect(
-      startSyntheticTransientUnit(manager, unitName, startFence()),
+      startSyntheticTransientUnit(manager, unitName, startFence(), controls()),
     ).toMatchObject({ status: "started" });
     expect(start).toHaveBeenCalledOnce();
 
@@ -54,10 +85,15 @@ describe("systemd final MutationFence boundaries", () => {
     void _issuedStartRevocationRevision;
     void _startFence;
     expect(() =>
-      startSyntheticTransientUnit(manager, unitName, {
-        ...stopFence,
-        desiredEffect: "process_stop",
-      }),
+      startSyntheticTransientUnit(
+        manager,
+        unitName,
+        {
+          ...stopFence,
+          desiredEffect: "process_stop",
+        },
+        controls(),
+      ),
     ).toThrow("transient_unit_start_fence_mismatch");
     expect(start).toHaveBeenCalledOnce();
   });

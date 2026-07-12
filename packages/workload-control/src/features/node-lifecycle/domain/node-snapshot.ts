@@ -1,3 +1,8 @@
+import type {
+  HostPressureObservation,
+  HostPressureState,
+} from "./host-pressure-hysteresis.js";
+
 export type NodeSchedulingState =
   | "schedulable"
   | "cordoned"
@@ -47,6 +52,17 @@ export interface NodeSnapshot {
   readonly pressureMode: PressureMode;
   readonly consecutiveHighPressure: number;
   readonly consecutiveHealthyPressure: number;
+  readonly hostPressureObservation?: HostPressureObservation;
+  readonly hostPressureState?: HostPressureState;
+  readonly hostSurvivalProfileBinding?: VerifiedHostSurvivalProfileBinding;
+}
+
+export interface VerifiedHostSurvivalProfileBinding {
+  readonly policyDigest: string;
+  readonly policyId: string;
+  readonly policyRevision: number;
+  readonly profileId: string;
+  readonly profileRevision: number;
 }
 
 export class StaleNodeRevisionError extends Error {

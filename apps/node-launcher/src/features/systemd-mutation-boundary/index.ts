@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 
 import type { MutationFence } from "@workload-funnel/kernel";
 
+import type { SystemdCapabilityReport } from "@workload-funnel/executor-systemd/capability-discovery";
+import {
+  createSyntheticSandboxProfile,
+  fingerprintSyntheticSandboxProfile,
+  mapSystemdExecutionControls,
+} from "@workload-funnel/executor-systemd/cgroup-resource-mapping";
 import {
   stopSyntheticTransientUnit,
   type TransientUnitCancellationManager,
@@ -36,6 +42,7 @@ export type Phase4aSystemdManager = TransientUnitCancellationManager &
   TransientUnitObservationManager &
   TransientUnitStartManager & {
     readonly externalFenceEnforced: boolean;
+    readonly resourceCapabilities: SystemdCapabilityReport;
   };
 export type EmergencyStopInput = BreakGlassStopInput;
 
@@ -222,6 +229,12 @@ export class LauncherMutationBoundary {
     );
     const mutationFence: MutationFence = claims.mutationFence;
     const unitName = deterministicUnitName(claims);
+    if (
+      claims.sandboxProfileDigest !==
+      fingerprintSyntheticSandboxProfile(claims.allocation.allocationId)
+    ) {
+      throw new RootTicketVerificationError("sandbox_profile_digest_mismatch");
+    }
     const disconnectedAtMs = this.config.controlAuthority.disconnectedAtMs();
     if (disconnectedAtMs !== undefined) {
       const nowMs = this.config.controlAuthority.nowMs();
@@ -256,9 +269,32 @@ export class LauncherMutationBoundary {
           "systemd_transient_service_start_unsupported",
         );
       }
+      if (this.config.manager.projectQuotaControl !== "supported") {
+        return failure(
+          request.requestId,
+          "unsupported_host_capability",
+          "ephemeral_project_quota_unsupported",
+        );
+      }
       validateControlPartitionPolicy(claims.partitionPolicy, "side_effectful", {
         externalFenceEnforced: this.config.manager.externalFenceEnforced,
       });
+      const controls = mapSystemdExecutionControls(
+        createSyntheticSandboxProfile(claims.allocation.allocationId),
+        this.config.manager.resourceCapabilities,
+        "synthetic_disposable_linux_fixture",
+      );
+      if (controls.status === "unsupported") {
+        return failure(
+          request.requestId,
+          "unsupported_host_capability",
+          controls.missingCapabilities.join(",") || controls.reason,
+        );
+      }
+      if (controls.profileDigest !== claims.sandboxProfileDigest)
+        throw new RootTicketVerificationError(
+          "sandbox_profile_digest_mismatch",
+        );
       const ticketDigest = createHash("sha256")
         .update(JSON.stringify(request.ticket), "utf8")
         .digest("hex");
@@ -271,6 +307,7 @@ export class LauncherMutationBoundary {
             this.config.manager,
             unitName,
             mutationFence,
+            controls,
           ),
       );
       if (authorized.state === "unknown") {

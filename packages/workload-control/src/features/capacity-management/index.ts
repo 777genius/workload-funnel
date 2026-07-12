@@ -16,3 +16,7 @@ export {
   type SafetyBoundDecision,
   type SafetyBounds,
 } from "./domain/resource-capacity.js";
+export {
+  deriveHostSurvivalAdmission,
+  type HostSurvivalAdmissionDecision,
+} from "./domain/host-survival-capacity.js";

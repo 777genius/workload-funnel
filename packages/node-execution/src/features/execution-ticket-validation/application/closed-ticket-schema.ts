@@ -46,6 +46,7 @@ interface UntrustedTicketRecord {
   readonly profileId?: unknown;
   readonly revision?: unknown;
   readonly schemaVersion?: unknown;
+  readonly sandboxProfileDigest?: unknown;
   readonly signatureBase64Url?: unknown;
   readonly startFence?: unknown;
   readonly startRevocationRevision?: unknown;
@@ -244,6 +245,7 @@ export function parseExecutionTicketClaims(
       "operationId",
       "partitionPolicy",
       "profileId",
+      "sandboxProfileDigest",
       "schemaVersion",
       "ticketId",
     ],
@@ -379,9 +381,19 @@ export function parseExecutionTicketClaims(
     operationId: identifier(claims.operationId, "operationId"),
     partitionPolicy: claims.partitionPolicy,
     profileId: SYNTHETIC_EXECUTION_PROFILE,
+    sandboxProfileDigest: identifier(
+      claims.sandboxProfileDigest,
+      "sandboxProfileDigest",
+    ),
     schemaVersion: EXECUTION_TICKET_SCHEMA,
     ticketId: identifier(claims.ticketId, "ticketId"),
   };
+  if (!/^[a-f0-9]{64}$/u.test(parsed.sandboxProfileDigest)) {
+    throw new TicketValidationError(
+      "invalid_claim",
+      "sandbox profile digest is invalid",
+    );
+  }
   if (
     parsed.allocation.attemptId !== parsed.attempt.attemptId ||
     parsed.allocation.executionGeneration !== parsed.attempt.executionGeneration

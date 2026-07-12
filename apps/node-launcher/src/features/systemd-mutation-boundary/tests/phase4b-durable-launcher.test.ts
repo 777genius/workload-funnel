@@ -90,15 +90,15 @@ describe("Phase 4B durable root launcher", () => {
     expect(current.manager.starts[0]).toMatchObject({
       execStart: [
         {
-          arguments: [SYNTHETIC_EXECUTABLE, "--phase4a-tree"],
+          arguments: [SYNTHETIC_EXECUTABLE, "--phase4c-tree"],
           path: SYNTHETIC_EXECUTABLE,
         },
       ],
       properties: {
-        group: SYNTHETIC_SERVICE_USER,
-        killMode: "control-group",
-        user: SYNTHETIC_SERVICE_USER,
-        workingDirectory: SYNTHETIC_WORKING_DIRECTORY,
+        Group: SYNTHETIC_SERVICE_USER,
+        KillMode: "control-group",
+        User: SYNTHETIC_SERVICE_USER,
+        WorkingDirectory: SYNTHETIC_WORKING_DIRECTORY,
       },
       unitName,
     });

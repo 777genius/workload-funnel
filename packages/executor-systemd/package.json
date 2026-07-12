@@ -6,9 +6,22 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@workload-funnel/kernel": "workspace:*"
+    "@workload-funnel/kernel": "workspace:*",
+    "@workload-funnel/node-execution": "workspace:*"
   },
   "exports": {
+    "./capability-discovery": {
+      "types": "./dist/features/capability-discovery/index.d.ts",
+      "import": "./dist/features/capability-discovery/index.js"
+    },
+    "./cgroup-resource-mapping": {
+      "types": "./dist/features/cgroup-resource-mapping/index.d.ts",
+      "import": "./dist/features/cgroup-resource-mapping/index.js"
+    },
+    "./journal-result-collection": {
+      "types": "./dist/features/journal-result-collection/index.d.ts",
+      "import": "./dist/features/journal-result-collection/index.js"
+    },
     "./transient-unit-cancellation": {
       "types": "./dist/features/transient-unit-cancellation/index.d.ts",
       "import": "./dist/features/transient-unit-cancellation/index.js"

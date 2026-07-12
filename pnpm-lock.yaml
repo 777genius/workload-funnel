@@ -95,6 +95,9 @@ importers:
       '@workload-funnel/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@workload-funnel/node-execution':
+        specifier: workspace:*
+        version: link:../node-execution
 
   packages/kernel: {}
 

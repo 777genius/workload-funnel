@@ -42,3 +42,13 @@ export {
   AdmissionExplanationView,
   type AdmissionExplanationProjection,
 } from "./application/admission-explanation-view.js";
+export {
+  decideHostControlAdmission,
+  decideSandboxAdmission,
+  hardIsolationCapabilitiesForDelegatedWork,
+  type HostControlAdmissionContext,
+  type HostControlAdmissionDecision,
+  type HostControlMode,
+  type SandboxAdmissionDecision,
+  type SandboxAdmissionProfile,
+} from "./domain/host-control-policy.js";

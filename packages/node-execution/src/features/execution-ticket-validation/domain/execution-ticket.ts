@@ -3,7 +3,7 @@ import {
   type MutationFence,
 } from "@workload-funnel/kernel";
 
-export const EXECUTION_TICKET_SCHEMA = "phase4b.execution-ticket.v1" as const;
+export const EXECUTION_TICKET_SCHEMA = "phase4c.execution-ticket.v1" as const;
 export const SYNTHETIC_EXECUTION_PROFILE = "synthetic-process-tree-v1" as const;
 
 export interface ClusterAuthority {
@@ -63,6 +63,7 @@ export interface ExecutionTicketClaims {
     | "continue_until_deadline"
     | "executor_fenced";
   readonly profileId: typeof SYNTHETIC_EXECUTION_PROFILE;
+  readonly sandboxProfileDigest: string;
   readonly schemaVersion: typeof EXECUTION_TICKET_SCHEMA;
   readonly ticketId: string;
 }
@@ -123,6 +124,7 @@ export function canonicalExecutionTicketClaims(
     String(claims.gate.revision),
     "true",
     claims.profileId,
+    claims.sandboxProfileDigest,
     claims.nonce,
     claims.operationId,
     claims.partitionPolicy,

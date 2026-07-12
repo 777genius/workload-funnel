@@ -2,7 +2,18 @@ import { generateKeyPairSync } from "node:crypto";
 
 import { expect } from "vitest";
 
-import type { SyntheticTransientUnit } from "@workload-funnel/executor-systemd/transient-unit-start";
+import {
+  discoverSystemdCapabilities,
+  syntheticDisposableLinuxProbe,
+  type SystemdCapabilityReport,
+} from "@workload-funnel/executor-systemd/capability-discovery";
+import { createSyntheticSandboxProfile } from "@workload-funnel/executor-systemd/cgroup-resource-mapping";
+import type {
+  SyntheticTransientUnit,
+  TransientProjectQuotaControl,
+  VerifiedProjectQuotaReceipt,
+} from "@workload-funnel/executor-systemd/transient-unit-start";
+import { ProjectQuotaRegistry } from "@workload-funnel/executor-systemd/transient-unit-start";
 import {
   AUTHORITY_INSTALL_SCHEMA,
   RootAuthorityInstaller,
@@ -23,6 +34,7 @@ import {
   SYNTHETIC_EXECUTION_PROFILE,
   type ExecutionTicketClaims,
 } from "@workload-funnel/node-execution/execution-ticket-validation";
+import { fingerprintSandboxProfile } from "@workload-funnel/node-execution/resource-enforcement";
 import {
   fingerprintMutationFence,
   type MutationFence,
@@ -78,13 +90,46 @@ export class SyntheticSystemdManager {
   public readonly externalFenceEnforced: boolean;
   public readonly transientServiceObservation = "supported" as const;
   public readonly transientServiceStart = "supported" as const;
+  public readonly projectQuotaControl = "supported" as const;
+  public readonly resourceCapabilities: SystemdCapabilityReport;
   public readonly starts: SyntheticTransientUnit[] = [];
+  public readonly quotas: TransientProjectQuotaControl[] = [];
   public readonly processTrees = new Map<string, boolean[]>();
   public stopCalls = 0;
   public crashAfterStart = false;
+  public returnStaleQuotaReceipt = false;
+  readonly #quotaRegistry = new ProjectQuotaRegistry();
 
-  public constructor(externalFenceEnforced = false) {
+  public constructor(
+    externalFenceEnforced = false,
+    resourceCapabilities = discoverSystemdCapabilities(
+      syntheticDisposableLinuxProbe(),
+    ),
+  ) {
     this.externalFenceEnforced = externalFenceEnforced;
+    this.resourceCapabilities = resourceCapabilities;
+  }
+
+  public applyProjectQuota(
+    control: TransientProjectQuotaControl,
+  ): VerifiedProjectQuotaReceipt {
+    const receipt = this.#quotaRegistry.ensure(control);
+    if (receipt.status === "applied") {
+      this.quotas.push(Object.freeze({ ...control }));
+    }
+    return this.returnStaleQuotaReceipt
+      ? Object.freeze({
+          ...receipt,
+          registryRevision: receipt.registryRevision + 1,
+        })
+      : receipt;
+  }
+
+  public verifyProjectQuotaReceipt(
+    control: TransientProjectQuotaControl,
+    receipt: VerifiedProjectQuotaReceipt,
+  ): boolean {
+    return this.#quotaRegistry.verify(control, receipt);
   }
 
   public startTransientService(
@@ -213,6 +258,9 @@ export function ticketClaims(
     operationId: overrides.operationId ?? "start-operation-1",
     partitionPolicy: overrides.partitionPolicy ?? "terminate_after_grace",
     profileId: SYNTHETIC_EXECUTION_PROFILE,
+    sandboxProfileDigest: fingerprintSandboxProfile(
+      createSyntheticSandboxProfile(required(fence.allocationId)),
+    ),
     schemaVersion: EXECUTION_TICKET_SCHEMA,
     ticketId: overrides.ticketId ?? "ticket-1",
   };
