@@ -38,9 +38,41 @@ importers:
 
   apps/control-service:
     dependencies:
+      '@workload-funnel/artifact-store-filesystem':
+        specifier: workspace:*
+        version: link:../../packages/artifact-store-filesystem
+      '@workload-funnel/dispatcher-local':
+        specifier: workspace:*
+        version: link:../../packages/dispatcher-local
+      '@workload-funnel/store-postgres':
+        specifier: workspace:*
+        version: link:../../packages/store-postgres
+      '@workload-funnel/store-sqlite':
+        specifier: workspace:*
+        version: link:../../packages/store-sqlite
       '@workload-funnel/workload-control':
         specifier: workspace:*
         version: link:../../packages/workload-control
+
+  packages/artifact-store-filesystem: {}
+
+  packages/dispatcher-local:
+    dependencies:
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
+
+  packages/store-postgres:
+    dependencies:
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
+
+  packages/store-sqlite:
+    dependencies:
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
 
   packages/workload-control: {}
 

@@ -4,14 +4,62 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "@workload-funnel/workload-control/tenant-admission": fileURLToPath(
-        new URL(
-          "./packages/workload-control/src/features/tenant-admission/index.ts",
-          import.meta.url,
+    alias: [
+      {
+        find: /^@workload-funnel\/artifact-store-filesystem\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/artifact-store-filesystem/src/features/$1/index.ts",
+            import.meta.url,
+          ),
         ),
-      ),
-    },
+      },
+      {
+        find: /^@workload-funnel\/control-service\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./apps/control-service/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/dispatcher-local\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/dispatcher-local/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/store-postgres\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/store-postgres/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/store-sqlite\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/store-sqlite/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/workload-control\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/workload-control/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+    ],
   },
   test: {
     include: [

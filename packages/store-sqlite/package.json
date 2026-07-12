@@ -1,0 +1,44 @@
+{
+  "name": "@workload-funnel/store-sqlite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Disposable SQLite persistence adapters for WorkloadFunnel",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/workload-control": "workspace:*"
+  },
+  "exports": {
+    "./audit-ledger-persistence": {
+      "types": "./dist/features/audit-ledger-persistence/index.d.ts",
+      "import": "./dist/features/audit-ledger-persistence/index.js"
+    },
+    "./canonical-transaction": {
+      "types": "./dist/features/canonical-transaction/index.d.ts",
+      "import": "./dist/features/canonical-transaction/index.js"
+    },
+    "./command-inbox": {
+      "types": "./dist/features/command-inbox/index.d.ts",
+      "import": "./dist/features/command-inbox/index.js"
+    },
+    "./projection-checkpoints": {
+      "types": "./dist/features/projection-checkpoints/index.d.ts",
+      "import": "./dist/features/projection-checkpoints/index.js"
+    },
+    "./reconciliation-claims": {
+      "types": "./dist/features/reconciliation-claims/index.d.ts",
+      "import": "./dist/features/reconciliation-claims/index.js"
+    },
+    "./transactional-outbox": {
+      "types": "./dist/features/transactional-outbox/index.d.ts",
+      "import": "./dist/features/transactional-outbox/index.js"
+    },
+    "./workload-persistence": {
+      "types": "./dist/features/workload-persistence/index.d.ts",
+      "import": "./dist/features/workload-persistence/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

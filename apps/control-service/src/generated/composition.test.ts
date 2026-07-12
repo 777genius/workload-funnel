@@ -11,6 +11,8 @@ describe.each([
     const service = profile.createControlService();
 
     expect(Object.isFrozen(service)).toBe(true);
+    expect(service.phase1.participantCount).toBe(7);
+    expect(service.phase1.profile).toBe(profile.profileId.split("-")[1]);
     expect(
       service.evaluateCapabilityRequirements([
         "external_scheduler_dispatch",
@@ -27,6 +29,17 @@ describe.each([
 });
 
 describe("control-postgres Phase 0 profile", () => {
+  it("declares atomic acceptance and bounded synthetic capacity", () => {
+    const service = postgres.createControlService();
+
+    expect(
+      service.evaluateCapabilityRequirements([
+        "bounded_capacity_reservation",
+        "postgres_atomic_acceptance",
+      ]),
+    ).toEqual({ status: "satisfied" });
+  });
+
   it("fails closed when artifact capabilities are absent", () => {
     const service = postgres.createControlService();
 
@@ -53,6 +66,7 @@ describe("control-sqlite Phase 0 profile", () => {
       service.evaluateCapabilityRequirements([
         "artifact_retention_deletion",
         "artifact_verification",
+        "bounded_capacity_reservation",
         "local_dispatch",
       ]),
     ).toEqual({ status: "satisfied" });

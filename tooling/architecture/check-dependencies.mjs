@@ -88,6 +88,42 @@ function checkCycles(rules) {
   for (const nodeId of rules.keys()) visit(nodeId, []);
 }
 
+function checkCompositionInventory(plan, rules) {
+  const expected = plan.match(
+    /contains exactly (\d+) `B`, (\d+) `C`, (\d+) `E`, and (\d+) `K`/u,
+  );
+  if (expected === null) {
+    failures.push("Architecture plan has no composition inventory counts");
+    return;
+  }
+  const relations = ["B", "C", "E", "K"];
+  const expectedCounts = expected.slice(1).map(Number);
+  for (const [index, relation] of relations.entries()) {
+    const count = [...plan.matchAll(new RegExp(`^${relation}\\|`, "gmu"))]
+      .length;
+    if (count !== expectedCounts[index]) {
+      failures.push(
+        `${relation} inventory count ${String(count)} does not match ${String(expectedCounts[index])}`,
+      );
+    }
+  }
+  const kernelRows = [...plan.matchAll(/^K\|([^|]+)\|[^\n]+$/gmu)].map(
+    (match) => match[1],
+  );
+  if (new Set(kernelRows).size !== kernelRows.length) {
+    failures.push("Composition inventory has duplicate K rows");
+  }
+  const missingKernelRows = [...rules.keys()].filter(
+    (nodeId) => !kernelRows.includes(nodeId),
+  );
+  const extraKernelRows = kernelRows.filter((nodeId) => !rules.has(nodeId));
+  if (missingKernelRows.length > 0 || extraKernelRows.length > 0) {
+    failures.push(
+      `K inventory differs from DAG nodes (missing=${missingKernelRows.join(",")}; extra=${extraKernelRows.join(",")})`,
+    );
+  }
+}
+
 function nodeForSource(path) {
   const normalized = relative(repositoryRoot, path).split(sep).join("/");
   const packageMatch = normalized.match(
@@ -139,7 +175,10 @@ function sourcePathForRelativeImport(sourcePath, specifier) {
 
 function targetNodeForWorkspaceImport(specifier) {
   const match = specifier.match(/^@workload-funnel\/([^/]+)\/([^/]+)$/);
-  return match === null ? undefined : `${match[1]}/${match[2]}`;
+  if (match === null) return undefined;
+  return match[1] === "control-service"
+    ? `apps/control-service/${match[2]}`
+    : `${match[1]}/${match[2]}`;
 }
 
 function workspaceForSource(path) {
@@ -168,6 +207,7 @@ function checkLayerDirection(sourcePath, targetPath) {
 const plan = await readFile(architecturePlanPath, "utf8");
 const rules = parseDependencyRules(plan);
 checkCycles(rules);
+checkCompositionInventory(plan, rules);
 
 const sourceFiles = (
   await Promise.all(
@@ -214,6 +254,9 @@ for (const path of productionFiles) {
   }
 
   const source = await readFile(path, "utf8");
+  if (source.split(/\r?\n/u).length > 800) {
+    failures.push(`${displayPath} exceeds the 800-line source hard cap`);
+  }
   if (/\brequire\s*\(/u.test(source)) {
     failures.push(
       `${displayPath} uses CommonJS require instead of static ESM imports`,

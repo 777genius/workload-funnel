@@ -2,13 +2,18 @@
   "manifestVersion": 1,
   "profiles": [
     {
-      "availableCapabilities": ["local_dispatch"],
+      "availableCapabilities": [
+        "bounded_capacity_reservation",
+        "local_dispatch",
+        "postgres_atomic_acceptance"
+      ],
       "profileId": "control-postgres"
     },
     {
       "availableCapabilities": [
         "artifact_retention_deletion",
         "artifact_verification",
+        "bounded_capacity_reservation",
         "local_dispatch"
       ],
       "profileId": "control-sqlite"

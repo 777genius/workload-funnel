@@ -717,7 +717,8 @@ from those node/target pairs; generation fails if re-rendering changes a byte.
 | `apps/control-service/transport-http` | `apps/control-service/authentication`, `apps/control-service/authorization`, `apps/control-service/node-controller`, `apps/control-service/reconciliation-controller`, `apps/control-service/result-controller`, `apps/control-service/workload-controller` |
 | `apps/control-service/authentication` | ∅ |
 | `apps/control-service/authorization` | `workload-control/tenant-admission` |
-| `apps/control-service/workload-controller` | `workload-control/cancellation`, `workload-control/tenant-admission`, `workload-control/workload-lifecycle` |
+| `apps/control-service/phase1-synthetic-runtime` | `dispatcher-local/capability-discovery`, `dispatcher-local/dispatch-cancellation`, `dispatcher-local/dispatch-observation`, `dispatcher-local/dispatch-submission`, `store-postgres/audit-ledger-persistence`, `store-postgres/canonical-transaction`, `store-postgres/command-inbox`, `store-postgres/projection-checkpoints`, `store-postgres/reconciliation-claims`, `store-postgres/transactional-outbox`, `store-postgres/workload-persistence`, `store-sqlite/audit-ledger-persistence`, `store-sqlite/canonical-transaction`, `store-sqlite/command-inbox`, `store-sqlite/projection-checkpoints`, `store-sqlite/reconciliation-claims`, `store-sqlite/transactional-outbox`, `store-sqlite/workload-persistence`, `workload-control/allocation-leasing`, `workload-control/audit-history`, `workload-control/cancellation`, `workload-control/canonical-transaction-coordination`, `workload-control/capacity-management`, `workload-control/control-event-delivery`, `workload-control/dispatch-reconciliation`, `workload-control/execution-reconciliation`, `workload-control/node-lifecycle`, `workload-control/operation-gating`, `workload-control/ownership-transfer`, `workload-control/result-management`, `workload-control/tenant-admission`, `workload-control/workload-lifecycle` |
+| `apps/control-service/workload-controller` | `apps/control-service/phase1-synthetic-runtime`, `workload-control/cancellation`, `workload-control/tenant-admission`, `workload-control/workload-lifecycle` |
 | `apps/control-service/node-controller` | `workload-control/allocation-leasing`, `workload-control/capacity-management`, `workload-control/node-lifecycle` |
 | `apps/control-service/reconciliation-controller` | `workload-control/dispatch-reconciliation`, `workload-control/execution-reconciliation`, `workload-control/ownership-transfer` |
 | `apps/control-service/result-controller` | `workload-control/result-management` |
@@ -1054,6 +1055,7 @@ array bytes and do not embed an unescaped separator in a Markdown table.
 B|control-postgres|control-postgres.apps.control.service.authentication|apps/control-service/authentication::Entrypoint|apps/control-service/authentication|createProvider|empty|exactly_one
 B|control-postgres|control-postgres.apps.control.service.authorization|apps/control-service/authorization::Entrypoint|apps/control-service/authorization|createProvider|empty|exactly_one
 B|control-postgres|control-postgres.apps.control.service.node.controller|apps/control-service/node-controller::Entrypoint|apps/control-service/node-controller|createProvider|empty|exactly_one
+B|control-postgres|control-postgres.apps.control.service.phase1.synthetic.runtime|apps/control-service/phase1-synthetic-runtime::Phase1SyntheticService|apps/control-service/phase1-synthetic-runtime|createPhase1SyntheticService|empty|exactly_one
 B|control-postgres|control-postgres.apps.control.service.reconciliation.controller|apps/control-service/reconciliation-controller::Entrypoint|apps/control-service/reconciliation-controller|createProvider|empty|exactly_one
 B|control-postgres|control-postgres.apps.control.service.result.controller|apps/control-service/result-controller::Entrypoint|apps/control-service/result-controller|createProvider|empty|exactly_one
 B|control-postgres|control-postgres.apps.control.service.transport.http|apps/control-service/transport-http::Entrypoint|apps/control-service/transport-http|createProvider|authenticated_transport|exactly_one
@@ -1117,6 +1119,7 @@ B|control-postgres|control-postgres.workload.control.workload.lifecycle.transact
 B|control-sqlite|control-sqlite.apps.control.service.authentication|apps/control-service/authentication::Entrypoint|apps/control-service/authentication|createProvider|empty|exactly_one
 B|control-sqlite|control-sqlite.apps.control.service.authorization|apps/control-service/authorization::Entrypoint|apps/control-service/authorization|createProvider|empty|exactly_one
 B|control-sqlite|control-sqlite.apps.control.service.node.controller|apps/control-service/node-controller::Entrypoint|apps/control-service/node-controller|createProvider|empty|exactly_one
+B|control-sqlite|control-sqlite.apps.control.service.phase1.synthetic.runtime|apps/control-service/phase1-synthetic-runtime::Phase1SyntheticService|apps/control-service/phase1-synthetic-runtime|createPhase1SyntheticService|empty|exactly_one
 B|control-sqlite|control-sqlite.apps.control.service.reconciliation.controller|apps/control-service/reconciliation-controller::Entrypoint|apps/control-service/reconciliation-controller|createProvider|empty|exactly_one
 B|control-sqlite|control-sqlite.apps.control.service.result.controller|apps/control-service/result-controller::Entrypoint|apps/control-service/result-controller|createProvider|empty|exactly_one
 B|control-sqlite|control-sqlite.apps.control.service.transport.http|apps/control-service/transport-http::Entrypoint|apps/control-service/transport-http|createProvider|authenticated_transport|exactly_one
@@ -1253,6 +1256,7 @@ C|control-postgres|control-postgres.workload.control.tenant.admission|apps/contr
 C|control-postgres|control-postgres.apps.control.service.authentication|apps/control-service/composition-postgres|createControlService|apps/control-service/authentication::Entrypoint
 C|control-postgres|control-postgres.apps.control.service.authorization|apps/control-service/composition-postgres|createControlService|apps/control-service/authorization::Entrypoint
 C|control-postgres|control-postgres.apps.control.service.node.controller|apps/control-service/composition-postgres|createControlService|apps/control-service/node-controller::Entrypoint
+C|control-postgres|control-postgres.apps.control.service.phase1.synthetic.runtime|apps/control-service/composition-postgres|createControlService|apps/control-service/phase1-synthetic-runtime::Phase1SyntheticService
 C|control-postgres|control-postgres.apps.control.service.reconciliation.controller|apps/control-service/composition-postgres|createControlService|apps/control-service/reconciliation-controller::Entrypoint
 C|control-postgres|control-postgres.apps.control.service.result.controller|apps/control-service/composition-postgres|createControlService|apps/control-service/result-controller::Entrypoint
 C|control-postgres|control-postgres.apps.control.service.transport.http|apps/control-service/composition-postgres|createControlService|apps/control-service/transport-http::Entrypoint
@@ -1411,6 +1415,7 @@ C|control-sqlite|control-sqlite.workload.control.tenant.admission|apps/control-s
 C|control-sqlite|control-sqlite.apps.control.service.authentication|apps/control-service/composition-sqlite|createControlService|apps/control-service/authentication::Entrypoint
 C|control-sqlite|control-sqlite.apps.control.service.authorization|apps/control-service/composition-sqlite|createControlService|apps/control-service/authorization::Entrypoint
 C|control-sqlite|control-sqlite.apps.control.service.node.controller|apps/control-service/composition-sqlite|createControlService|apps/control-service/node-controller::Entrypoint
+C|control-sqlite|control-sqlite.apps.control.service.phase1.synthetic.runtime|apps/control-service/composition-sqlite|createControlService|apps/control-service/phase1-synthetic-runtime::Phase1SyntheticService
 C|control-sqlite|control-sqlite.apps.control.service.reconciliation.controller|apps/control-service/composition-sqlite|createControlService|apps/control-service/reconciliation-controller::Entrypoint
 C|control-sqlite|control-sqlite.apps.control.service.result.controller|apps/control-service/composition-sqlite|createControlService|apps/control-service/result-controller::Entrypoint
 C|control-sqlite|control-sqlite.apps.control.service.transport.http|apps/control-service/composition-sqlite|createControlService|apps/control-service/transport-http::Entrypoint
@@ -1718,6 +1723,7 @@ K|apps/control-service/authorization|Identifier+OperationId
 K|apps/control-service/composition-postgres|empty
 K|apps/control-service/composition-sqlite|empty
 K|apps/control-service/node-controller|Identifier+OperationId
+K|apps/control-service/phase1-synthetic-runtime|empty
 K|apps/control-service/reconciliation-controller|Identifier+OperationId
 K|apps/control-service/result-controller|Identifier+OperationId
 K|apps/control-service/transport-http|Identifier+OperationId
@@ -1868,9 +1874,9 @@ K|workload-control/tenant-admission|Identifier+OperationId+OptimisticVersion+Utc
 K|workload-control/workload-lifecycle|Identifier+OperationId+OptimisticVersion+UtcInstant+MutationFence
 ```
 
-This checked-in block contains exactly 198 `B`, 456 `C`, 8 `E`, and 153 `K`
-records. The section 8.3.1 compile relation contains 153 nodes and 480 edges;
-the separate runtime construction relation contains the 456 concrete `C`
+This checked-in block contains exactly 200 `B`, 458 `C`, 8 `E`, and 154 `K`
+records. The section 8.3.1 compile relation contains 154 nodes and 511 edges;
+the separate runtime construction relation contains the 458 concrete `C`
 records above. These counts
 are verification outputs, not substitute acceptance criteria: the parser still
 compares every complete record/key/edge and permits a reviewed count change only
@@ -6320,7 +6326,7 @@ PASS area remains normative. This single table is the blocker map:
 
 | Combined finding | Normative resolution |
 | --- | --- |
-| High A compile DAG versus runtime injection | Sections 8.3.2-8.3.3 redefine `C` as the actual runtime receiver independently of the provider-to-contract compile edge; all store/adapter contract outputs feed owner factories, compile-only adapter imports no longer become `FeatureApi` inputs, all 198 `B`/456 `C` records are closed, and generated roots topologically call and type-check exact factories without owner-to-adapter imports. |
+| High A compile DAG versus runtime injection | Sections 8.3.2-8.3.3 redefine `C` as the actual runtime receiver independently of the provider-to-contract compile edge; all store/adapter contract outputs feed owner factories, compile-only adapter imports no longer become `FeatureApi` inputs, all 200 `B`/458 `C` records are closed, and generated roots topologically call and type-check exact factories without owner-to-adapter imports. |
 | High B seven canonical transaction participants | Sections 9.2 and 15.2.1-15.2.2 define seven public contracts/factories, exact owner-store inputs, 14 participant `B` bindings, their `C` inputs/outputs in both profiles, direct constructor injection into the actual coordinator factory, the ten-bundle mode matrix, startup rejection, compile fixtures, result-owner ranks 90/100, and allocation-owner-only rank-160 finalization. |
 | High C namespace pin feasibility | Section 17.2 forbids the anchor-private bind, requires verified `SCM_RIGHTS` FD transfer or verified `/proc` open, makes the host-namespace launcher create/reopen the bind, performs pre/post PID-start and InvocationID checks, and closes launcher/anchor restart, host reboot, lifetime and cleanup; Phase 0.5 proves host mountinfo visibility. |
 | Semantic terminal precedence and rejection recovery | Sections 10.3-10.3.1 add atomic `attach-allocation-v1`, make rejection plus nonterminal rollback one commit, and provide the exhaustive `Q/R/A/RB/I0/IR/IA/IRB` shared `L40/L50/L60` table for both commit orders. Historical Allocation can never become absence, rollback never proves terminality, every rejection has a continuation, and terminal release cannot precede its unique intent. |

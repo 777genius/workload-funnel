@@ -2,13 +2,65 @@
   "name": "@workload-funnel/workload-control",
   "version": "0.1.0",
   "private": true,
-  "description": "Canonical workload admission policies for WorkloadFunnel",
+  "description": "Canonical workload lifecycle and control policies for WorkloadFunnel",
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./allocation-leasing": {
+      "types": "./dist/features/allocation-leasing/index.d.ts",
+      "import": "./dist/features/allocation-leasing/index.js"
+    },
+    "./audit-history": {
+      "types": "./dist/features/audit-history/index.d.ts",
+      "import": "./dist/features/audit-history/index.js"
+    },
+    "./cancellation": {
+      "types": "./dist/features/cancellation/index.d.ts",
+      "import": "./dist/features/cancellation/index.js"
+    },
+    "./canonical-transaction-coordination": {
+      "types": "./dist/features/canonical-transaction-coordination/index.d.ts",
+      "import": "./dist/features/canonical-transaction-coordination/index.js"
+    },
+    "./capacity-management": {
+      "types": "./dist/features/capacity-management/index.d.ts",
+      "import": "./dist/features/capacity-management/index.js"
+    },
+    "./control-event-delivery": {
+      "types": "./dist/features/control-event-delivery/index.d.ts",
+      "import": "./dist/features/control-event-delivery/index.js"
+    },
+    "./dispatch-reconciliation": {
+      "types": "./dist/features/dispatch-reconciliation/index.d.ts",
+      "import": "./dist/features/dispatch-reconciliation/index.js"
+    },
+    "./execution-reconciliation": {
+      "types": "./dist/features/execution-reconciliation/index.d.ts",
+      "import": "./dist/features/execution-reconciliation/index.js"
+    },
+    "./node-lifecycle": {
+      "types": "./dist/features/node-lifecycle/index.d.ts",
+      "import": "./dist/features/node-lifecycle/index.js"
+    },
+    "./operation-gating": {
+      "types": "./dist/features/operation-gating/index.d.ts",
+      "import": "./dist/features/operation-gating/index.js"
+    },
+    "./ownership-transfer": {
+      "types": "./dist/features/ownership-transfer/index.d.ts",
+      "import": "./dist/features/ownership-transfer/index.js"
+    },
+    "./result-management": {
+      "types": "./dist/features/result-management/index.d.ts",
+      "import": "./dist/features/result-management/index.js"
+    },
     "./tenant-admission": {
       "types": "./dist/features/tenant-admission/index.d.ts",
       "import": "./dist/features/tenant-admission/index.js"
+    },
+    "./workload-lifecycle": {
+      "types": "./dist/features/workload-lifecycle/index.d.ts",
+      "import": "./dist/features/workload-lifecycle/index.js"
     }
   },
   "scripts": {

@@ -17,3 +17,4 @@ export {
   createCapabilityRequirementEvaluator,
   type EvaluateCapabilityRequirements,
 } from "./application/evaluate-capability-requirements.js";
+export { createTenantAdmissionTransactionParticipant } from "./application/transaction-participant.js";

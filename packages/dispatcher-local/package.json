@@ -1,0 +1,32 @@
+{
+  "name": "@workload-funnel/dispatcher-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Deterministic local dispatch adapter for synthetic WorkloadFunnel profiles",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/workload-control": "workspace:*"
+  },
+  "exports": {
+    "./capability-discovery": {
+      "types": "./dist/features/capability-discovery/index.d.ts",
+      "import": "./dist/features/capability-discovery/index.js"
+    },
+    "./dispatch-cancellation": {
+      "types": "./dist/features/dispatch-cancellation/index.d.ts",
+      "import": "./dist/features/dispatch-cancellation/index.js"
+    },
+    "./dispatch-observation": {
+      "types": "./dist/features/dispatch-observation/index.d.ts",
+      "import": "./dist/features/dispatch-observation/index.js"
+    },
+    "./dispatch-submission": {
+      "types": "./dist/features/dispatch-submission/index.d.ts",
+      "import": "./dist/features/dispatch-submission/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

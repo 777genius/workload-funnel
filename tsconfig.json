@@ -4,6 +4,21 @@
     "baseUrl": ".",
     "noEmit": true,
     "paths": {
+      "@workload-funnel/artifact-store-filesystem/*": [
+        "packages/artifact-store-filesystem/src/features/*/index.ts"
+      ],
+      "@workload-funnel/control-service/*": [
+        "apps/control-service/src/features/*/index.ts"
+      ],
+      "@workload-funnel/dispatcher-local/*": [
+        "packages/dispatcher-local/src/features/*/index.ts"
+      ],
+      "@workload-funnel/store-postgres/*": [
+        "packages/store-postgres/src/features/*/index.ts"
+      ],
+      "@workload-funnel/store-sqlite/*": [
+        "packages/store-sqlite/src/features/*/index.ts"
+      ],
       "@workload-funnel/workload-control/*": [
         "packages/workload-control/src/features/*/index.ts"
       ]

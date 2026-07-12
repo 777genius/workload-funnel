@@ -1,0 +1,17 @@
+{
+  "name": "@workload-funnel/artifact-store-filesystem",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Safe local filesystem artifact adapters for WorkloadFunnel",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./verify-finalize": {
+      "types": "./dist/features/verify-finalize/index.d.ts",
+      "import": "./dist/features/verify-finalize/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}
