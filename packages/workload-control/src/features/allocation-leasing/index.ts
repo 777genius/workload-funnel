@@ -34,3 +34,17 @@ export {
   type AllocationService,
 } from "./application/allocation-service.js";
 export { createAllocationLeasingTransactionParticipant } from "./application/transaction-participant.js";
+export {
+  HardResourceOvercommitError,
+  SerializedCapacityReservationLedger,
+  StaleCapacityDecisionError,
+  type CapacityLedgerSnapshot,
+  type ReservationResources,
+  type ReserveResourcesCommand,
+  type ResourceReservation,
+} from "./domain/resource-reservation-ledger.js";
+export {
+  AdmissionCoordinator,
+  type CapacitySource,
+  type CommittedAdmission,
+} from "./application/admission-coordinator.js";
