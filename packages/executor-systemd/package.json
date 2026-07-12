@@ -1,0 +1,25 @@
+{
+  "name": "@workload-funnel/executor-systemd",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fail-closed systemd transient-unit adapter contracts",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./transient-unit-cancellation": {
+      "types": "./dist/features/transient-unit-cancellation/index.d.ts",
+      "import": "./dist/features/transient-unit-cancellation/index.js"
+    },
+    "./transient-unit-observation": {
+      "types": "./dist/features/transient-unit-observation/index.d.ts",
+      "import": "./dist/features/transient-unit-observation/index.js"
+    },
+    "./transient-unit-start": {
+      "types": "./dist/features/transient-unit-start/index.d.ts",
+      "import": "./dist/features/transient-unit-start/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

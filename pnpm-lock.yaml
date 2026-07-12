@@ -54,6 +54,21 @@ importers:
         specifier: workspace:*
         version: link:../../packages/workload-control
 
+  apps/node-agent:
+    dependencies:
+      '@workload-funnel/node-execution':
+        specifier: workspace:*
+        version: link:../../packages/node-execution
+
+  apps/node-launcher:
+    dependencies:
+      '@workload-funnel/executor-systemd':
+        specifier: workspace:*
+        version: link:../../packages/executor-systemd
+      '@workload-funnel/node-execution':
+        specifier: workspace:*
+        version: link:../../packages/node-execution
+
   packages/artifact-store-filesystem: {}
 
   packages/dispatcher-local:
@@ -61,6 +76,10 @@ importers:
       '@workload-funnel/workload-control':
         specifier: workspace:*
         version: link:../workload-control
+
+  packages/executor-systemd: {}
+
+  packages/node-execution: {}
 
   packages/store-postgres:
     dependencies:

@@ -1,0 +1,21 @@
+{
+  "name": "@workload-funnel/node-execution",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node-local execution contracts and trusted ticket validation",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./execution-ticket-validation": {
+      "types": "./dist/features/execution-ticket-validation/index.d.ts",
+      "import": "./dist/features/execution-ticket-validation/index.js"
+    },
+    "./process-lifecycle": {
+      "types": "./dist/features/process-lifecycle/index.d.ts",
+      "import": "./dist/features/process-lifecycle/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

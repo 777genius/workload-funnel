@@ -1,0 +1,11 @@
+{
+  "name": "@workload-funnel/node-launcher",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/executor-systemd": "workspace:*",
+    "@workload-funnel/node-execution": "workspace:*"
+  }
+}

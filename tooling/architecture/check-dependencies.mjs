@@ -9,6 +9,11 @@ const architecturePlanPath = join(
 );
 const sourceRoots = ["apps", "packages"];
 const failures = [];
+const applicationWorkspaceNames = new Set(
+  (await readdir(join(repositoryRoot, "apps"), { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name),
+);
 
 async function walk(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -176,8 +181,8 @@ function sourcePathForRelativeImport(sourcePath, specifier) {
 function targetNodeForWorkspaceImport(specifier) {
   const match = specifier.match(/^@workload-funnel\/([^/]+)\/([^/]+)$/);
   if (match === null) return undefined;
-  return match[1] === "control-service"
-    ? `apps/control-service/${match[2]}`
+  return applicationWorkspaceNames.has(match[1])
+    ? `apps/${match[1]}/${match[2]}`
     : `${match[1]}/${match[2]}`;
 }
 

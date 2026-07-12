@@ -33,6 +33,42 @@ export default defineConfig({
         ),
       },
       {
+        find: /^@workload-funnel\/executor-systemd\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/executor-systemd/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/node-execution\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/node-execution/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/node-agent\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./apps/node-agent/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/node-launcher\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./apps/node-launcher/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
         find: /^@workload-funnel\/store-postgres\/(.+)$/,
         replacement: fileURLToPath(
           new URL(

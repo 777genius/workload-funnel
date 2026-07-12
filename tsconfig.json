@@ -13,6 +13,18 @@
       "@workload-funnel/dispatcher-local/*": [
         "packages/dispatcher-local/src/features/*/index.ts"
       ],
+      "@workload-funnel/executor-systemd/*": [
+        "packages/executor-systemd/src/features/*/index.ts"
+      ],
+      "@workload-funnel/node-execution/*": [
+        "packages/node-execution/src/features/*/index.ts"
+      ],
+      "@workload-funnel/node-agent/*": [
+        "apps/node-agent/src/features/*/index.ts"
+      ],
+      "@workload-funnel/node-launcher/*": [
+        "apps/node-launcher/src/features/*/index.ts"
+      ],
       "@workload-funnel/store-postgres/*": [
         "packages/store-postgres/src/features/*/index.ts"
       ],
