@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workload-funnel.invalid/schemas/phase-0-5-evidence.json",
+  "additionalProperties": false,
+  "properties": {
+    "decisions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": { "minLength": 1, "type": "string" },
+          "evidence": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "detail": { "type": "string" },
+                "id": { "minLength": 1, "type": "string" },
+                "outcome": { "type": "boolean" }
+              },
+              "required": ["detail", "id", "outcome"],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "gateId": { "minLength": 1, "type": "string" },
+          "invariantIds": {
+            "items": { "pattern": "^WF-INV-[0-9]{3}$", "type": "string" },
+            "minItems": 1,
+            "type": "array"
+          },
+          "productionGate": { "const": "closed" },
+          "reasonCode": { "minLength": 1, "type": "string" },
+          "requiredHostEvidence": {
+            "items": { "minLength": 1, "type": "string" },
+            "minItems": 1,
+            "type": "array"
+          },
+          "status": { "enum": ["pass", "unsupported"] }
+        },
+        "required": [
+          "capability",
+          "evidence",
+          "gateId",
+          "invariantIds",
+          "productionGate",
+          "status"
+        ],
+        "type": "object"
+      },
+      "maxItems": 7,
+      "minItems": 7,
+      "type": "array"
+    },
+    "schemaVersion": { "const": 1 }
+  },
+  "required": ["decisions", "schemaVersion"],
+  "type": "object"
+}

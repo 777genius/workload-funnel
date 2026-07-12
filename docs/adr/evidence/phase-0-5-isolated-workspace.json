@@ -1,0 +1,261 @@
+{
+  "decisions": [
+    {
+      "capability": "deterministic_systemd_process_ownership",
+      "evidence": [
+        {
+          "detail": "linux",
+          "id": "systemd.platform",
+          "outcome": true
+        },
+        {
+          "detail": "systemd",
+          "id": "systemd.pid1",
+          "outcome": true
+        },
+        {
+          "detail": "true",
+          "id": "systemd.cgroup-v2",
+          "outcome": true
+        },
+        {
+          "detail": "systemctl=true;systemd-run=true",
+          "id": "systemd.commands",
+          "outcome": true
+        },
+        {
+          "detail": "false",
+          "id": "systemd.disposable-host-attestation",
+          "outcome": false
+        }
+      ],
+      "gateId": "systemd_nested_lifecycle",
+      "invariantIds": ["WF-INV-003", "WF-INV-004", "WF-INV-015", "WF-INV-017"],
+      "productionGate": "closed",
+      "reasonCode": "disposable_host_attestation_missing",
+      "requiredHostEvidence": [
+        "Run on a disposable Linux host booted with systemd as PID 1 and unified cgroup v2.",
+        "Start a deterministic wf-feasibility-* transient unit with KillMode=control-group, MemoryMax and TasksMax.",
+        "Capture unit name, InvocationID, MainPID, ControlGroup and node WAL before killing the harness at each durable boundary.",
+        "Prove every descendant is absent after stop and classify separate bounded memory and PID limit fixtures from systemd/cgroup observations."
+      ],
+      "status": "unsupported"
+    },
+    {
+      "capability": "pinned_execution_paths",
+      "evidence": [
+        {
+          "detail": "linux",
+          "id": "namespace.platform",
+          "outcome": true
+        },
+        {
+          "detail": "systemd",
+          "id": "namespace.systemd-pid1",
+          "outcome": true
+        },
+        {
+          "detail": "false",
+          "id": "namespace.nsfs",
+          "outcome": false
+        },
+        {
+          "detail": "unshare=true;nsenter=true",
+          "id": "namespace.tools",
+          "outcome": true
+        },
+        {
+          "detail": "false",
+          "id": "namespace.scm-rights-helper",
+          "outcome": false
+        }
+      ],
+      "gateId": "namespace_anchor_fd_pin",
+      "invariantIds": ["WF-INV-003", "WF-INV-043", "WF-INV-049", "WF-INV-053"],
+      "productionGate": "closed",
+      "reasonCode": "verified_namespace_probe_unavailable",
+      "requiredHostEvidence": [
+        "Build and run a peer-reviewed SCM_RIGHTS/setns probe on a disposable root-capable systemd host.",
+        "Record boot ID, anchor InvocationID/MainPID/PID-start/nsfs inode before and after launcher pinning.",
+        "Prove the launcher-created root-owned nsfs bind in launcher and fresh host mountinfo, and prove private mounts appear only after setns.",
+        "Kill after every WAL boundary; restart launcher and anchor, reject all substituted identities and PID reuse, then reboot and reject the old WAL/path.",
+        "Prove fixed workload join, privilege drop/exec, and child-first cleanup without pathname, JoinsNamespaceOf, or unpinned-PID fallback."
+      ],
+      "status": "unsupported"
+    },
+    {
+      "capability": "foreground_runtime_ownership",
+      "evidence": [
+        {
+          "detail": "true",
+          "id": "runtime.foreground-child",
+          "outcome": true
+        },
+        {
+          "detail": "true",
+          "id": "runtime.no-daemon-escape",
+          "outcome": true
+        },
+        {
+          "detail": "true",
+          "id": "runtime.duplicate-receipt",
+          "outcome": true
+        },
+        {
+          "detail": "false",
+          "id": "runtime.outer-systemd-boundary",
+          "outcome": false
+        }
+      ],
+      "gateId": "foreground_runtime_ownership",
+      "invariantIds": ["WF-INV-003", "WF-INV-005", "WF-INV-016", "WF-INV-027"],
+      "productionGate": "closed",
+      "reasonCode": "foreground_runtime_outer_boundary_unverified",
+      "requiredHostEvidence": [
+        "Run the synthetic runtime as the foreground ExecStart process of the passed deterministic transient unit.",
+        "Capture MainPID/cgroup membership and prove no tmux, daemon, double-fork, or host-level child escapes.",
+        "Crash before effect, after effect/before receipt, and after durable receipt; show duplicate operation IDs never repeat a known effect."
+      ],
+      "status": "unsupported"
+    },
+    {
+      "capability": "postgres_atomic_acceptance",
+      "evidence": [
+        {
+          "detail": "false",
+          "id": "postgres.psql",
+          "outcome": false
+        },
+        {
+          "detail": "false",
+          "id": "postgres.disposable-database",
+          "outcome": false
+        },
+        {
+          "detail": "false",
+          "id": "postgres.crash-matrix",
+          "outcome": false
+        }
+      ],
+      "gateId": "postgres_atomic_acceptance",
+      "invariantIds": ["WF-INV-001", "WF-INV-005", "WF-INV-008", "WF-INV-025"],
+      "productionGate": "closed",
+      "reasonCode": "disposable_postgres_probe_unavailable",
+      "requiredHostEvidence": [
+        "Provide WF_FEASIBILITY_POSTGRES_URL for a dedicated database whose name starts wf_feasibility_.",
+        "Apply the probe schema and capture one transaction containing idempotency receipt, canonical workload mutation, and outbox insert.",
+        "SIGKILL before/after BEGIN, each statement, COMMIT request/result, and response ack; recover to zero state or one stable workload/outbox receipt.",
+        "Run concurrent duplicate requests and prove stable identity with one canonical mutation and one outbox operation."
+      ],
+      "status": "unsupported"
+    },
+    {
+      "capability": "bounded_capacity_reservation",
+      "evidence": [
+        {
+          "detail": "{\"reserved\":{\"cpu\":8,\"memory\":10},\"revision\":6}",
+          "id": "capacity.no-overcommit",
+          "outcome": true
+        },
+        {
+          "detail": "conflicts=4;bound=4",
+          "id": "capacity.bounded-cas",
+          "outcome": true
+        },
+        {
+          "detail": "conflicts=4",
+          "id": "capacity.contention",
+          "outcome": true
+        }
+      ],
+      "gateId": "bounded_capacity_ledger_cas",
+      "invariantIds": ["WF-INV-007", "WF-INV-042", "WF-INV-046"],
+      "productionGate": "closed",
+      "reasonCode": "transactional_capacity_contention_unverified",
+      "requiredHostEvidence": [
+        "Run concurrent reservations against the disposable canonical database using the planned compare-and-swap transaction and hard-resource dimensions.",
+        "Capture bounded retry counts, committed revisions, rejected reservations, and final totals under contention.",
+        "Prove no hard-resource overcommit across process crashes and transaction retries before enabling this capability."
+      ],
+      "status": "unsupported"
+    },
+    {
+      "capability": "hyperqueue_ambiguous_submit_reconciliation",
+      "evidence": [
+        {
+          "detail": "false",
+          "id": "hyperqueue.cli-present",
+          "outcome": false
+        },
+        {
+          "detail": "unavailable",
+          "id": "hyperqueue.exact-version",
+          "outcome": false
+        },
+        {
+          "detail": "false",
+          "id": "hyperqueue.operation-lookup",
+          "outcome": false
+        },
+        {
+          "detail": "false",
+          "id": "hyperqueue.failure-matrix",
+          "outcome": false
+        }
+      ],
+      "gateId": "pinned_hyperqueue_cli_boundary",
+      "invariantIds": [
+        "WF-INV-005",
+        "WF-INV-012",
+        "WF-INV-015",
+        "WF-INV-031",
+        "WF-INV-037"
+      ],
+      "productionGate": "closed",
+      "reasonCode": "hyperqueue_ambiguous_submit_reconciliation_unsupported",
+      "requiredHostEvidence": [
+        "Run the exact research pin hq 0.26.2 against a disposable isolated server and worker; record binary digest and version output.",
+        "Route the sole mutation credential through the final-boundary harness and serialize the complete operation identity with each CLI call.",
+        "Capture submit timeout, server restart, worker loss, cancel, exact lookup, journal prune, and malformed-output transcripts.",
+        "Prove a timed-out submit is uniquely found by persisted operation identity; otherwise retain the replayable-only restriction."
+      ],
+      "status": "unsupported"
+    },
+    {
+      "capability": "pressure_fail_closed_admission",
+      "evidence": [
+        {
+          "detail": "[{\"reason\":\"cpu_pressure\",\"status\":\"closed\"},{\"reason\":\"memory_pressure\",\"status\":\"closed\"},{\"reason\":\"io_pressure\",\"status\":\"closed\"},{\"reason\":\"disk_pressure\",\"status\":\"closed\"},{\"reason\":\"inodes_pressure\",\"status\":\"closed\"}]",
+          "id": "pressure.all-dimensions-close",
+          "outcome": true
+        },
+        {
+          "detail": "true",
+          "id": "pressure.stale-sensor-closes",
+          "outcome": true
+        },
+        {
+          "detail": "cpu,memory,io,disk,inodes",
+          "id": "pressure.synthetic-load-dimensions",
+          "outcome": true
+        },
+        {
+          "detail": "under_1000ms",
+          "id": "pressure.control-responsive",
+          "outcome": true
+        }
+      ],
+      "gateId": "pressure_admission_fail_closed",
+      "invariantIds": ["WF-INV-013", "WF-INV-015", "WF-INV-019", "WF-INV-023"],
+      "productionGate": "closed",
+      "reasonCode": "host_saturation_isolation_unverified",
+      "requiredHostEvidence": [
+        "Saturate CPU, memory, IO, disk, and inodes independently on a disposable host while protected control services run in their production cgroups.",
+        "Capture PSI, cgroup and admission observations proving each gate closes before exhaustion.",
+        "Prove protected control services remain responsive and recovery reopens admission only after fresh healthy observations."
+      ],
+      "status": "unsupported"
+    }
+  ],
+  "schemaVersion": 1
+}

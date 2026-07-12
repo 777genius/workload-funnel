@@ -17,6 +17,7 @@ export default defineConfig({
     include: [
       "packages/**/src/features/**/tests/**/*.test.ts",
       "apps/**/*.test.ts",
+      "tooling/phase-0-5/**/*.test.mjs",
     ],
     passWithNoTests: false,
   },

@@ -15,6 +15,7 @@
     "changeset:status": "changeset status --since=main",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm architecture:check && pnpm exports:check",
     "exports:check": "node tooling/architecture/check-package-exports.mjs",
+    "feasibility:run": "node tooling/phase-0-5/run.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "generate": "node tooling/architecture/generate-composition.mjs",

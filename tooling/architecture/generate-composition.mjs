@@ -10,8 +10,15 @@ const failures = [];
 const allowedCapabilities = new Set([
   "artifact_retention_deletion",
   "artifact_verification",
+  "bounded_capacity_reservation",
+  "deterministic_systemd_process_ownership",
   "external_scheduler_dispatch",
+  "foreground_runtime_ownership",
+  "hyperqueue_ambiguous_submit_reconciliation",
   "local_dispatch",
+  "pinned_execution_paths",
+  "postgres_atomic_acceptance",
+  "pressure_fail_closed_admission",
   "provider_runtime_execution",
 ]);
 const expectedProfileIds = ["control-postgres", "control-sqlite"];

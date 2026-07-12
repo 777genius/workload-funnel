@@ -6,6 +6,9 @@ import {
   type CapabilityName,
   createCapabilityRequirementEvaluator,
   decideCapabilityAdmission,
+  markCapabilityUnsupported,
+  passCapabilityGate,
+  supportedCapabilityNames,
 } from "../index.js";
 
 describe("capability admission", () => {
@@ -78,5 +81,53 @@ describe("capability admission", () => {
       expect(Object.isFrozen(decision.missingCapabilities)).toBe(true);
       expect(Object.isFrozen(decision)).toBe(true);
     }
+  });
+
+  it("represents feasibility pass and unsupported decisions explicitly", () => {
+    const decisions = [
+      passCapabilityGate("bounded_capacity_reservation", ["capacity.cas"]),
+      markCapabilityUnsupported(
+        "pinned_execution_paths",
+        "host_namespace_probe_unavailable",
+        ["namespace.prerequisites"],
+      ),
+    ];
+
+    expect([...supportedCapabilityNames(decisions)]).toEqual([
+      "bounded_capacity_reservation",
+    ]);
+    expect(decisions[1]).toEqual({
+      capability: "pinned_execution_paths",
+      evidenceIds: ["namespace.prerequisites"],
+      reasonCode: "host_namespace_probe_unavailable",
+      status: "unsupported",
+    });
+    expect(Object.isFrozen(decisions[1]?.evidenceIds)).toBe(true);
+    expect(
+      decideCapabilityAdmission(
+        [CapabilityRequirement.from("pinned_execution_paths")],
+        supportedCapabilityNames(decisions),
+      ),
+    ).toEqual({
+      missingCapabilities: ["pinned_execution_paths"],
+      status: "unschedulable_missing_capability",
+    });
+  });
+
+  it("rejects an unsupported decision without a stable reason code", () => {
+    expect(() =>
+      markCapabilityUnsupported("pinned_execution_paths", "", []),
+    ).toThrow("Unsupported capability requires a stable reason code");
+  });
+
+  it("fails closed when capability evidence conflicts", () => {
+    expect(
+      supportedCapabilityNames([
+        passCapabilityGate("pinned_execution_paths", ["probe.pass"]),
+        markCapabilityUnsupported("pinned_execution_paths", "probe_conflict", [
+          "probe.unsupported",
+        ]),
+      ]),
+    ).toEqual(new Set());
   });
 });

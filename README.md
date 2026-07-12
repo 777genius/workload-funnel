@@ -50,18 +50,22 @@ The approved foundation is Node.js 24, pnpm 10.33.4, the
 and all packages remain private until the explicit transition gates in
 [ADR-0001](docs/adr/0001-phase-0-foundation-decisions.md) pass.
 
-Only active code exists: one `workload-control/tenant-admission` vertical
+Active product code remains one `workload-control/tenant-admission` vertical
 slice and the two fixed Phase 0 control-profile composition outputs. The slice
 demonstrates an immutable domain value, fail-closed domain policy, application
 use case, feature public API, and focused tests. The profiles advertise only
 their fixed local capabilities and return
 `unschedulable_missing_capability` for absent later-phase capabilities. They do
-not dispatch or launch work.
+not dispatch or launch work. Phase 0.5 also has seven executable, synthetic
+feasibility harnesses documented in
+[ADR-0002](docs/adr/0002-phase-0-5-feasibility-gates.md). Unsupported host
+capabilities remain typed, unschedulable, and closed.
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm check
 pnpm build
+pnpm feasibility:run
 git diff --check
 ```
 

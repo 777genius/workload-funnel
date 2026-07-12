@@ -4,6 +4,12 @@ export {
   type CapabilityName,
 } from "./domain/capability-requirement.js";
 export {
+  markCapabilityUnsupported,
+  passCapabilityGate,
+  supportedCapabilityNames,
+  type CapabilityGateDecision,
+} from "./domain/capability-gate-decision.js";
+export {
   decideCapabilityAdmission,
   type CapabilityAdmissionDecision,
 } from "./domain/capability-admission-policy.js";
