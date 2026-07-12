@@ -1,0 +1,38 @@
+{
+  "name": "workload-funnel",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/generate-composition.mjs --check",
+    "build": "pnpm --filter './packages/*' build",
+    "changeset": "changeset",
+    "changeset:status": "changeset status --since=main",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm architecture:check && pnpm exports:check",
+    "exports:check": "node tooling/architecture/check-package-exports.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "generate": "node tooling/architecture/generate-composition.mjs",
+    "lint": "pnpm lint:code && pnpm lint:docs",
+    "lint:code": "eslint . --max-warnings=0",
+    "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.pnpm-store\"",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@changesets/cli": "2.29.8",
+    "@eslint/js": "9.39.4",
+    "@types/node": "24.13.3",
+    "eslint": "9.39.4",
+    "markdownlint-cli2": "0.19.0",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.54.0",
+    "vitest": "4.1.10"
+  }
+}

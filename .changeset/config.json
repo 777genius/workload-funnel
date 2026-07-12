@@ -1,0 +1,19 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.1.2/schema.json",
+  "access": "restricted",
+  "baseBranch": "main",
+  "bumpVersionsWithWorkspaceProtocolOnly": true,
+  "commit": false,
+  "fixed": [],
+  "ignore": ["@workload-funnel/control-service"],
+  "linked": [],
+  "privatePackages": {
+    "tag": false,
+    "version": true
+  },
+  "snapshot": {
+    "prereleaseTemplate": "{tag}-{commit}-{datetime}",
+    "useCalculatedVersion": false
+  },
+  "updateInternalDependencies": "patch"
+}

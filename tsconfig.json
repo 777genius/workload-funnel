@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "noEmit": true,
+    "paths": {
+      "@workload-funnel/workload-control/*": [
+        "packages/workload-control/src/features/*/index.ts"
+      ]
+    },
+    "types": ["node"]
+  },
+  "exclude": ["**/dist/**", "**/node_modules/**", ".pnpm-store", ".tmp"],
+  "include": ["apps/**/*.ts", "packages/**/*.ts", "vitest.config.ts"]
+}

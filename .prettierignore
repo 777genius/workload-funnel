@@ -1,0 +1,7 @@
+docs/workload-funnel-architecture-plan.md
+node_modules
+.pnpm-store
+.tmp
+dist
+coverage
+pnpm-lock.yaml

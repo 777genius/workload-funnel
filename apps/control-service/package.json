@@ -1,0 +1,10 @@
+{
+  "name": "@workload-funnel/control-service",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/workload-control": "workspace:*"
+  }
+}

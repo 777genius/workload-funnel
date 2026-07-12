@@ -1,0 +1,17 @@
+{
+  "name": "@workload-funnel/workload-control",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Canonical workload admission policies for WorkloadFunnel",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./tenant-admission": {
+      "types": "./dist/features/tenant-admission/index.d.ts",
+      "import": "./dist/features/tenant-admission/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

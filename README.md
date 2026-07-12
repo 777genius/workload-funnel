@@ -5,8 +5,8 @@
 WorkloadFunnel is a durable workload admission and execution system for agents,
 jobs, builds, tests, benchmarks, and general processes.
 
-The project is currently in the architecture and foundation phase. Its source of
-truth is:
+The project is in Phase 0: decisions and skeleton. It has no production launch
+path. Its architecture source of truth is:
 
 - [Architecture and implementation plan](docs/workload-funnel-architecture-plan.md)
 
@@ -43,8 +43,35 @@ The domain and application packages must not import HyperQueue, systemd,
 Postgres, SQLite, Docker, Kubernetes, Codex, Claude, or any project-specific
 orchestrator.
 
+## Phase 0 workspace
+
+The approved foundation is Node.js 24, pnpm 10.33.4, the
+`@workload-funnel/*` package scope, Changesets, and the MIT License. The repository
+and all packages remain private until the explicit transition gates in
+[ADR-0001](docs/adr/0001-phase-0-foundation-decisions.md) pass.
+
+Only active code exists: one `workload-control/tenant-admission` vertical
+slice and the two fixed Phase 0 control-profile composition outputs. The slice
+demonstrates an immutable domain value, fail-closed domain policy, application
+use case, feature public API, and focused tests. The profiles advertise only
+their fixed local capabilities and return
+`unschedulable_missing_capability` for absent later-phase capabilities. They do
+not dispatch or launch work.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm check
+pnpm build
+git diff --check
+```
+
+Individual gates are available as `format:check`, `lint`, `typecheck`, `test`,
+`architecture:check`, and `exports:check`. `pnpm generate` regenerates the two
+checked composition outputs from
+`tooling/architecture/composition.source.json`.
+
 ## Status
 
-No production API or compatibility guarantee exists yet. The repository remains
-private until the architecture, security model, package names, and license are
-explicitly approved.
+No production API or compatibility guarantee exists. Phase 0 does not include
+host launching, scheduler/provider integration, persistence, production
+workloads, or testing against real user projects.

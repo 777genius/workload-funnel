@@ -1906,7 +1906,6 @@ Missing or extra filesystem slices, nodes, bindings, consumer inputs, roots,
 exports, symbols, capabilities, or ordered-many indexes fail `ARCH-001`,
 `ARCH-014`, and `ARCH-020`; there is no warning mode.
 
-
 ### 8.4 Single mutation owner
 
 Each canonical aggregate transition has exactly one owning feature. Supporting
@@ -5146,8 +5145,9 @@ The wrapper mapping is exact and bijective:
 `already_applied -> already_applied`, `rejected -> rejected`,
 `superseded -> superseded`, and `unknown -> unknown`. Any other pairing is a
 schema and compile-time exhaustiveness error; decoding selects the discriminant
-and validates the correspondingly narrowed evidence branch. `superseded` means the final scheduler authority performed zero
-mutation for this operation after comparing newer authority; it is not an
+and validates the correspondingly narrowed evidence branch. `superseded` means
+the final scheduler authority performed zero mutation for this operation after
+comparing newer authority; it is not an
 adapter rejection or queue discard. A timeout maps to `unknown`, never
 `rejected`. Every
 mutating receipt therefore carries section 15.5's operation,
