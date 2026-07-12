@@ -17,9 +17,25 @@
       "types": "./dist/features/canonical-transaction/index.d.ts",
       "import": "./dist/features/canonical-transaction/index.js"
     },
+    "./cancellation-coordinator-persistence": {
+      "types": "./dist/features/cancellation-coordinator-persistence/index.d.ts",
+      "import": "./dist/features/cancellation-coordinator-persistence/index.js"
+    },
+    "./capacity-reservation-ledger-persistence": {
+      "types": "./dist/features/capacity-reservation-ledger-persistence/index.d.ts",
+      "import": "./dist/features/capacity-reservation-ledger-persistence/index.js"
+    },
     "./command-inbox": {
       "types": "./dist/features/command-inbox/index.d.ts",
       "import": "./dist/features/command-inbox/index.js"
+    },
+    "./namespace-ownership-persistence": {
+      "types": "./dist/features/namespace-ownership-persistence/index.d.ts",
+      "import": "./dist/features/namespace-ownership-persistence/index.js"
+    },
+    "./ownership-transfer-coordinator-persistence": {
+      "types": "./dist/features/ownership-transfer-coordinator-persistence/index.d.ts",
+      "import": "./dist/features/ownership-transfer-coordinator-persistence/index.js"
     },
     "./projection-checkpoints": {
       "types": "./dist/features/projection-checkpoints/index.d.ts",

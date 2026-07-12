@@ -14,6 +14,14 @@ import type {
   CancellationSaga,
   CancellationSagaStore,
 } from "../domain/cancellation-saga.js";
+import {
+  closeCancellationBarrier,
+  createCancellationSaga,
+  recordAuthorityEvidence,
+  recordCancellationExecutionEvidence,
+  recordCancellationRelease,
+  recordStartRevocation,
+} from "../domain/cancellation-saga.js";
 
 export interface CancellationProcessManager {
   quiesce(operationId: string, status: WorkloadStatus): CancellationSaga;
@@ -31,35 +39,64 @@ export function createCancellationProcessManager(
   const manager: CancellationProcessManager = {
     quiesce(operationId, status) {
       const prior = store.get(operationId);
-      if (prior?.state === "completed") return prior;
+      if (
+        prior?.state === "completed" ||
+        prior?.state === "release_committed"
+      ) {
+        return prior;
+      }
       assertGateOpen(gates(), "cancel");
       const revokedAttempt = Object.freeze({
         ...status.attempt,
         cancellationDesired: "requested" as const,
         startAuthorization: "revoked" as const,
+        startRevocationRevision: status.attempt.startRevocationRevision + 1,
         version: status.attempt.version + 1,
       });
       lifecycle.applyAttempt(revokedAttempt);
       if (revokedAttempt.allocationId !== undefined)
         dispatcher.cancel(revokedAttempt.allocationId);
-      if (revokedAttempt.dispatchId !== undefined)
-        executor.stop(revokedAttempt.dispatchId);
-      if (revokedAttempt.allocationId !== undefined)
-        allocations.release(revokedAttempt.allocationId);
-      const quiesced: CancellationSaga = Object.freeze({
-        attemptId: status.attempt.attemptId,
+      const stopObservation =
+        revokedAttempt.dispatchId === undefined
+          ? undefined
+          : executor.stop(revokedAttempt.dispatchId);
+      let saga = createCancellationSaga(
         operationId,
-        runId: status.run.runId,
-        state: "execution_stopped",
-        version: (prior?.version ?? 0) + 1,
+        status.run.runId,
+        status.attempt.attemptId,
+      );
+      saga = recordStartRevocation(
+        saga,
+        revokedAttempt.startRevocationRevision,
+      );
+      saga = recordAuthorityEvidence(saga, {
+        authorityId: "deterministic-in-memory-final-authority",
+        evidenceDigest: `synthetic-authority:${operationId}:${String(revokedAttempt.startRevocationRevision)}`,
+        kind: "acknowledged",
+        revision: revokedAttempt.startRevocationRevision,
       });
-      store.save(quiesced);
-      return quiesced;
+      saga = recordCancellationExecutionEvidence(saga, {
+        evidenceDigest:
+          stopObservation === undefined
+            ? `synthetic-absence:${operationId}`
+            : `synthetic-stop:${stopObservation.executionId}:${String(stopObservation.sequence)}`,
+        kind: stopObservation === undefined ? "not_submitted" : "stopped",
+      });
+      saga = closeCancellationBarrier(saga, [
+        "deterministic-in-memory-final-authority",
+      ]);
+      const releaseReceipt =
+        revokedAttempt.allocationId === undefined
+          ? `no-allocation:${status.attempt.attemptId}:${operationId}`
+          : allocations.release(revokedAttempt.allocationId).proofId;
+      saga = recordCancellationRelease(saga, releaseReceipt);
+      store.save(saga);
+      return saga;
     },
     complete(operationId, status) {
       const prior = store.get(operationId);
       if (prior?.state === "completed") return prior;
-      if (prior?.state !== "execution_stopped") {
+      if (prior?.state !== "release_committed") {
         throw new Error("Cancellation cannot complete before quiescence");
       }
       lifecycle.applyAttempt(

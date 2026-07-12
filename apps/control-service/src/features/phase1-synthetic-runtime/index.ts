@@ -8,3 +8,7 @@ export {
   type SyntheticDatabaseProfile,
   type SyntheticArtifactWriter,
 } from "./application/synthetic-state.js";
+export {
+  createSyntheticExternalWitness,
+  type SyntheticExternalWitnessState,
+} from "./application/synthetic-external-witness.js";

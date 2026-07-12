@@ -54,6 +54,7 @@ export function createResultManagementService(
           ...(executionId === undefined ? {} : { executionId }),
           resultManifestId: `manifest-${attemptId.slice("attempt-".length)}`,
           retentionClass: "synthetic-ephemeral",
+          retentionState: "active",
           version: 1,
         }),
       );

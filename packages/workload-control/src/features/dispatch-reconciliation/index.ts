@@ -1,8 +1,15 @@
 export type {
   Dispatch,
+  DispatchEvidence,
+  DispatchEvidenceKind,
   DispatchMapping,
   DispatchReceipt,
 } from "./domain/dispatch.js";
+export {
+  InvalidDispatchTransitionError,
+  reconcileUnknownDispatch,
+  transitionDispatch,
+} from "./domain/dispatch-machine.js";
 export type { DispatchStore } from "./application/contracts/dispatch-store.js";
 export type {
   DispatchCanceler,

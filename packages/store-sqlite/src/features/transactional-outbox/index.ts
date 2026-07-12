@@ -5,9 +5,11 @@ import type {
 
 export function createSqliteOutboxStore(
   messages: Map<string, OutboxMessage>,
+  faults?: Readonly<{ hit(boundary: string): void }>,
 ): OutboxStore {
   const store: OutboxStore = {
     append(kind, aggregateId, stableKey) {
+      faults?.hit("outbox:before-insert");
       const messageId = `message:${stableKey}`;
       const prior = messages.get(messageId);
       if (prior !== undefined) return prior;
@@ -19,14 +21,17 @@ export function createSqliteOutboxStore(
         sequence: messages.size + 1,
       });
       messages.set(messageId, message);
+      faults?.hit("outbox:after-insert");
       return message;
     },
     markDelivered(messageId) {
+      faults?.hit("outbox:before-ack");
       const message = messages.get(messageId);
       if (message === undefined)
         throw new Error("Outbox message does not exist");
       const delivered = Object.freeze({ ...message, delivered: true });
       messages.set(messageId, delivered);
+      faults?.hit("outbox:after-ack");
       return delivered;
     },
     pending: () =>

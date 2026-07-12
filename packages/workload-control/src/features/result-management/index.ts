@@ -2,7 +2,21 @@ export {
   IncompleteResultManifestError,
   type ResultEntry,
   type ResultManifest,
+  type ArtifactOperation,
+  type ResultTombstone,
 } from "./domain/result-manifest.js";
+export {
+  InvalidRetentionTransitionError,
+  markArtifactOperationUnknown,
+  markRetentionDue,
+  prepareArtifactOperation,
+  reconcileArtifactOperation,
+  tombstoneResult,
+} from "./domain/result-manifest.js";
+export {
+  decideResultCompletion,
+  type ResultCompletionReceipt,
+} from "./application/result-process-manager.js";
 export type { ResultStore } from "./application/contracts/result-store.js";
 export {
   createResultManagementService,

@@ -42,6 +42,10 @@
       "types": "./dist/features/node-lifecycle/index.d.ts",
       "import": "./dist/features/node-lifecycle/index.js"
     },
+    "./namespace-ownership": {
+      "types": "./dist/features/namespace-ownership/index.d.ts",
+      "import": "./dist/features/namespace-ownership/index.js"
+    },
     "./operation-gating": {
       "types": "./dist/features/operation-gating/index.d.ts",
       "import": "./dist/features/operation-gating/index.js"

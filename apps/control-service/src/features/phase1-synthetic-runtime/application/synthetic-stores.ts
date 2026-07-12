@@ -79,6 +79,8 @@ export function capacityLedger(
         attemptId: input.attemptId,
         executionGeneration: input.executionGeneration,
         nodeId: "synthetic-node-1" as const,
+        leaseState: "unowned" as const,
+        ownerFence: 0,
         resources: input.request,
         state: "reserved" as const,
         version: 1,

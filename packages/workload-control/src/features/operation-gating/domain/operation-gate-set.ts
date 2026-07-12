@@ -1,9 +1,16 @@
 export type OperationGate =
   | "accept"
+  | "acceptance"
+  | "admission_reservation"
   | "dispatch"
+  | "dispatch_submit"
   | "start"
+  | "process_start"
+  | "automatic_retry"
   | "cancel"
-  | "result_finalize";
+  | "result_finalize"
+  | "result_archive"
+  | "result_delete";
 
 export interface OperationGateSet {
   readonly namespaceId: string;
@@ -42,10 +49,17 @@ export function openSyntheticTestGates(
     revision: current.revision + 1,
     open: new Set<OperationGate>([
       "accept",
+      "acceptance",
+      "admission_reservation",
       "dispatch",
+      "dispatch_submit",
       "start",
+      "process_start",
+      "automatic_retry",
       "cancel",
       "result_finalize",
+      "result_archive",
+      "result_delete",
     ]),
   });
 }

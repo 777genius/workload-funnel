@@ -1,4 +1,8 @@
 export type TerminalOutcome = "succeeded" | "failed" | "canceled";
+export type AttemptTerminalDisposition =
+  | TerminalOutcome
+  | "publication_failure"
+  | "lost";
 export type AttemptState =
   | "queued"
   | "admitted"
@@ -6,7 +10,24 @@ export type AttemptState =
   | "starting"
   | "running"
   | "publishing_results"
+  | "unknown"
+  | "reconciliation_required"
+  | "lost"
   | TerminalOutcome;
+
+export type CancellationDesired = "none" | "requested";
+
+export interface TerminalizationIntent {
+  readonly terminalizationIntentId: string;
+  readonly executionGeneration: string;
+  readonly allocationId?: string;
+  readonly disposition: AttemptTerminalDisposition;
+  readonly evidenceKind: string;
+  readonly evidenceVersion: number;
+  readonly evidenceDigest: string;
+  readonly precedenceDecision: "completion_won" | "cancellation_won";
+  readonly creatingOperationId: string;
+}
 
 export interface ResourceRequest {
   readonly cpuMillis: number;
@@ -39,7 +60,7 @@ export interface Run {
   readonly runId: string;
   readonly workloadId: string;
   readonly attemptId: string;
-  readonly cancellationDesired: "none" | "requested";
+  readonly cancellationDesired: CancellationDesired;
   readonly state: "accepted" | "active" | TerminalOutcome;
   readonly terminalOutcome?: TerminalOutcome;
   readonly version: number;
@@ -50,12 +71,16 @@ export interface Attempt {
   readonly runId: string;
   readonly executionGeneration: string;
   readonly state: AttemptState;
-  readonly cancellationDesired: "none" | "requested";
+  readonly cancellationDesired: CancellationDesired;
   readonly startAuthorization: "authorized" | "revoked";
+  readonly startFence: string;
+  readonly startRevocationRevision: number;
   readonly allocationId?: string;
   readonly dispatchId?: string;
   readonly executionId?: string;
   readonly resultManifestId?: string;
+  readonly terminalizationIntent?: TerminalizationIntent;
+  readonly terminalReleaseReceiptId?: string;
   readonly attachmentRejections: number;
   readonly reservationRequestRevision: number;
   readonly version: number;

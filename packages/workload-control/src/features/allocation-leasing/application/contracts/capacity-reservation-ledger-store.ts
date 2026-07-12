@@ -3,7 +3,9 @@ import type {
   AllocationReleaseReceipt,
   CapacitySnapshot,
   ReservationRollbackReceipt,
+  TerminalReleaseReceipt,
 } from "../../domain/allocation.js";
+import type { TerminalReleaseRequest } from "../terminal-release.js";
 import type { ResourceRequest } from "@workload-funnel/workload-control/workload-lifecycle";
 
 export interface ReserveAllocationInput {
@@ -20,4 +22,13 @@ export interface CapacityReservationLedgerStore {
   rollbackAttachment(allocationId: string): ReservationRollbackReceipt;
   release(allocationId: string): AllocationReleaseReceipt;
   releaseReceipt(allocationId: string): AllocationReleaseReceipt | undefined;
+}
+
+export interface OwnerSafeCapacityReservationLedgerStore extends CapacityReservationLedgerStore {
+  releaseTerminal(request: TerminalReleaseRequest): TerminalReleaseReceipt;
+  terminalReleaseReceipt(
+    attemptId: string,
+    executionGeneration: string,
+    terminalizationIntentId: string,
+  ): TerminalReleaseReceipt | undefined;
 }

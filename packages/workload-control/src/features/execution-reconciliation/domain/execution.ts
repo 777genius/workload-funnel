@@ -6,7 +6,20 @@ export interface Execution {
   readonly allocationId: string;
   readonly attemptId: string;
   readonly executionGeneration: string;
-  readonly state: "prepared" | "running" | "exited" | "stopped";
+  readonly state:
+    | "prepared"
+    | "start_requested"
+    | "starting"
+    | "running"
+    | "stop_requested"
+    | "exited"
+    | "stopped"
+    | "superseded"
+    | "unknown"
+    | "lost"
+    | "reconciliation_required";
+  readonly ownerFence?: number;
+  readonly writerEpoch?: number;
   readonly terminalOutcome?: TerminalOutcome;
   readonly observationSequence: number;
   readonly version: number;

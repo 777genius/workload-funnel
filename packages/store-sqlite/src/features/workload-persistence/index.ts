@@ -53,7 +53,9 @@ export function createSqliteLifecycleRepository(
         executionGeneration,
         reservationRequestRevision: 0,
         runId,
+        startFence: `start-fence-${suffix}`,
         startAuthorization: "authorized",
+        startRevocationRevision: 0,
         state: "queued",
         version: 1,
       });

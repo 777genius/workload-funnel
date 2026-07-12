@@ -7,11 +7,42 @@ export interface Dispatch {
   readonly desired: "submit" | "cancel" | "suppressed";
   readonly observed:
     | "pending"
+    | "submitting"
     | "accepted"
+    | "starting"
     | "running"
     | "terminal"
+    | "unknown"
+    | "absent"
+    | "reconciliation_required"
     | "suppressed";
+  readonly lastEvidence?: DispatchEvidence;
   readonly version: number;
+}
+
+export type DispatchEvidenceKind =
+  | "execution_terminal"
+  | "node_process"
+  | "adapter_lookup"
+  | "scheduler_event"
+  | "submit_receipt"
+  | "absence_proof"
+  | "exhausted";
+
+export interface DispatchEvidence {
+  readonly kind: DispatchEvidenceKind;
+  readonly source: string;
+  readonly sourceEpoch: number;
+  readonly sourceSequence: number;
+  readonly digest: string;
+  readonly complete: boolean;
+  readonly observed:
+    | "accepted"
+    | "starting"
+    | "running"
+    | "terminal"
+    | "absent"
+    | "reconciliation_required";
 }
 
 export interface DispatchMapping {
