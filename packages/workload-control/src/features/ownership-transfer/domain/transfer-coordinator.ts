@@ -19,6 +19,7 @@ export interface OwnershipTransferCoordinator {
   readonly step: TransferCoordinatorStep;
   readonly ownershipVersion: number;
   readonly gateRevision: number;
+  readonly mutationFence: MutationFence;
   readonly evidenceDigests: Readonly<Record<string, string>>;
   readonly version: number;
 }
@@ -56,6 +57,7 @@ export function advanceOwnershipTransferCoordinator(
   evidenceDigest: string,
   ownershipVersion = coordinator.ownershipVersion,
   gateRevision = coordinator.gateRevision,
+  mutationFence = coordinator.mutationFence,
 ): OwnershipTransferCoordinator {
   if (coordinator.step === step) {
     if (coordinator.evidenceDigests[step] !== evidenceDigest) {
@@ -77,6 +79,7 @@ export function advanceOwnershipTransferCoordinator(
       [step]: evidenceDigest,
     }),
     gateRevision,
+    mutationFence,
     ownershipVersion,
     step,
     version: coordinator.version + 1,
@@ -90,3 +93,4 @@ export function nextOwnershipTransferStep(
     return undefined;
   return steps[steps.indexOf(coordinator.step) + 1];
 }
+import type { MutationFence } from "@workload-funnel/kernel";

@@ -2,18 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   InvalidExecutionTransitionError,
-  compareMutationFence,
   createEffectReceipt,
-  fingerprintMutationFence,
   handleConditionalEffect,
   mapTerminalExecutionToAttempt,
   supersedeExecution,
   transitionExecution,
   type EffectReceiptEvidence,
   type Execution,
+} from "../index.js";
+import {
+  compareMutationFence,
+  fingerprintMutationFence,
   type FenceAuthoritySnapshot,
   type MutationFence,
-} from "../index.js";
+} from "@workload-funnel/kernel";
 
 function fence(overrides: Partial<MutationFence> = {}): MutationFence {
   return Object.freeze({
@@ -46,14 +48,23 @@ function authority(
   overrides: Partial<FenceAuthoritySnapshot> = {},
 ): FenceAuthoritySnapshot {
   return Object.freeze({
+    allocationId: "allocation-1",
+    attemptId: "attempt-1",
     clusterIncarnation: "incarnation-1",
     clusterIncarnationVersion: 1,
+    desiredEffect: "process_start",
+    effectScopeKey: "start:attempt-1",
+    executionGeneration: "generation-1",
     expectedDesiredVersion: 1,
+    namespaceId: "test://phase2",
     namespaceWriterEpoch: 3,
+    nodeId: "node-1",
     nodeBootEpoch: 9,
     openGates: new Set(["process_start"]),
     operationGateRevision: 7,
     ownerFence: 4,
+    requiredGate: "process_start",
+    startFence: "start-fence-1",
     startRevocationRevision: 0,
     supersessionKey: "desired-start-1",
     ...overrides,

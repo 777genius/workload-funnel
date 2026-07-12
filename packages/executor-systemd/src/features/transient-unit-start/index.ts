@@ -1,3 +1,8 @@
+import {
+  type MutationFence,
+  validateMutationFence,
+} from "@workload-funnel/kernel";
+
 export const SYNTHETIC_EXECUTABLE =
   "/usr/libexec/workload-funnel/synthetic-process-tree" as const;
 export const SYNTHETIC_SERVICE_USER = "workload-funnel-synthetic" as const;
@@ -88,12 +93,17 @@ export function syntheticTransientUnit(
 export function startSyntheticTransientUnit(
   manager: TransientUnitStartManager,
   unitName: string,
+  mutationFence: MutationFence,
 ): TransientUnitStartResult {
   if (manager.transientServiceStart !== "supported") {
     return {
       evidence: "systemd_transient_service_start_unsupported",
       status: "unsupported",
     };
+  }
+  validateMutationFence(mutationFence);
+  if (mutationFence.desiredEffect !== "process_start") {
+    throw new Error("transient_unit_start_fence_mismatch");
   }
   manager.startTransientService(syntheticTransientUnit(unitName));
   return { status: "started", unitName };

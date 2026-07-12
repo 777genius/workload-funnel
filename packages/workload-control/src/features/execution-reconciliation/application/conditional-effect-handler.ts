@@ -3,11 +3,11 @@ import { createEffectReceipt } from "../domain/effect-receipt.js";
 import type {
   FenceAuthoritySnapshot,
   MutationFence,
-} from "../domain/mutation-fence.js";
+} from "@workload-funnel/kernel";
 import {
   compareMutationFence,
   fingerprintMutationFence,
-} from "../domain/mutation-fence.js";
+} from "@workload-funnel/kernel";
 
 export interface ConditionalEffectCommand {
   readonly operationId: string;

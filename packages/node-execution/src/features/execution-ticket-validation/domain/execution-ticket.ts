@@ -1,4 +1,9 @@
-export const EXECUTION_TICKET_SCHEMA = "phase4a.execution-ticket.v1" as const;
+import {
+  serializeMutationFence,
+  type MutationFence,
+} from "@workload-funnel/kernel";
+
+export const EXECUTION_TICKET_SCHEMA = "phase4b.execution-ticket.v1" as const;
 export const SYNTHETIC_EXECUTION_PROFILE = "synthetic-process-tree-v1" as const;
 
 export interface ClusterAuthority {
@@ -29,11 +34,12 @@ export interface AttemptStartAuthority {
 
 export interface NodeBootAuthority {
   readonly bootId: string;
+  readonly bootEpoch: number;
   readonly nodeId: string;
 }
 
 export interface ProcessStartGateAuthority {
-  readonly effect: "process_start";
+  readonly effect: "process_start" | "process_stop";
   readonly open: true;
   readonly revision: number;
 }
@@ -46,8 +52,16 @@ export interface ExecutionTicketClaims {
   readonly gate: ProcessStartGateAuthority;
   readonly issuedAtMs: number;
   readonly issuerKeyId: string;
+  readonly mutationFence: MutationFence;
+  readonly mutationFenceFingerprint: string;
   readonly namespace: NamespaceAuthority;
   readonly node: NodeBootAuthority;
+  readonly nonce: string;
+  readonly operationId: string;
+  readonly partitionPolicy:
+    | "terminate_after_grace"
+    | "continue_until_deadline"
+    | "executor_fenced";
   readonly profileId: typeof SYNTHETIC_EXECUTION_PROFILE;
   readonly schemaVersion: typeof EXECUTION_TICKET_SCHEMA;
   readonly ticketId: string;
@@ -104,10 +118,16 @@ export function canonicalExecutionTicketClaims(
     String(claims.attempt.startRevocationRevision),
     claims.node.nodeId,
     claims.node.bootId,
+    String(claims.node.bootEpoch),
     claims.gate.effect,
     String(claims.gate.revision),
     "true",
     claims.profileId,
+    claims.nonce,
+    claims.operationId,
+    claims.partitionPolicy,
+    serializeMutationFence(claims.mutationFence),
+    claims.mutationFenceFingerprint,
     String(claims.issuedAtMs),
     String(claims.expiresAtMs),
   ];

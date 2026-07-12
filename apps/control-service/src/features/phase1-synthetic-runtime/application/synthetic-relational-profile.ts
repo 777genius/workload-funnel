@@ -1,6 +1,7 @@
 // Synthetic/disposable relational profiles; no external database or process is used.
 import {
   createAllocationLeasingTransactionParticipant,
+  createAllocationEffectCommand,
   createAllocationService,
   type Allocation,
 } from "@workload-funnel/workload-control/allocation-leasing";
@@ -35,8 +36,14 @@ import {
 } from "@workload-funnel/workload-control/cancellation";
 import { createCapacityManagementTransactionParticipant } from "@workload-funnel/workload-control/capacity-management";
 import { createControlEventDeliveryTransactionParticipant } from "@workload-funnel/workload-control/control-event-delivery";
-import { createLocalDispatcher } from "@workload-funnel/workload-control/dispatch-reconciliation";
-import { createDeterministicExecutor } from "@workload-funnel/workload-control/execution-reconciliation";
+import {
+  createDispatchSubmissionCommand,
+  createLocalDispatcher,
+} from "@workload-funnel/workload-control/dispatch-reconciliation";
+import {
+  createDeterministicExecutor,
+  createExecutionStartCommand,
+} from "@workload-funnel/workload-control/execution-reconciliation";
 import { assertGateOpen } from "@workload-funnel/workload-control/operation-gating";
 import {
   createOwnershipTransferService,
@@ -70,6 +77,11 @@ import {
   resultStore,
 } from "./synthetic-stores.js";
 import { ownershipTransferCoordinatorStore } from "./synthetic-ownership-stores.js";
+import {
+  prepareSyntheticEffectFence,
+  prepareSyntheticResultFinalizeCommand,
+  publishSyntheticResultFiles,
+} from "./synthetic-fence-flow.js";
 
 const principal: AuthenticatedPrincipal = Object.freeze({
   namespaceId: "test://phase1/walking-slice",
@@ -227,8 +239,14 @@ export function createPhase1SyntheticService(
   const dispatcher = createLocalDispatcher(
     dispatchStore(state),
     () => state.gateSet,
-    createLocalDispatchSubmitter(state.localDispatchEffects),
-    createLocalDispatchCanceler(state.localDispatchEffects),
+    createLocalDispatchSubmitter(
+      state.localDispatchEffects,
+      state.localDispatchHighWatermarks,
+    ),
+    createLocalDispatchCanceler(
+      state.localDispatchEffects,
+      state.localDispatchHighWatermarks,
+    ),
   );
   const executor = createDeterministicExecutor(
     executionStore(state),
@@ -271,22 +289,6 @@ export function createPhase1SyntheticService(
     return status;
   }
 
-  function publishResultFiles(
-    attemptId: string,
-    files: WorkloadStatus["workload"]["spec"]["resultFiles"],
-  ) {
-    return files.map((file) =>
-      Object.freeze({
-        ...file,
-        location: `file://${database.artifacts.write(
-          attemptId,
-          file.path,
-          file.content,
-        )}`,
-      }),
-    );
-  }
-
   function stepAttempt(attempt: Attempt): boolean {
     const status = statusForAttempt(attempt);
     if (
@@ -299,9 +301,7 @@ export function createPhase1SyntheticService(
           `result:${attempt.attemptId}`,
           () => {
             const finalized = results.finalize(
-              attempt.attemptId,
-              attempt.executionId,
-              [],
+              prepareSyntheticResultFinalizeCommand(state, attempt, []),
             );
             lifecycle.applyAttempt(
               Object.freeze({
@@ -336,7 +336,24 @@ export function createPhase1SyntheticService(
               reservedId !== undefined &&
               attempt.allocationId === undefined
             ) {
-              allocations.release(reservedId);
+              const reserved = state.allocations.get(reservedId);
+              if (reserved === undefined)
+                throw new Error("Reserved Allocation does not exist");
+              allocations.release(
+                createAllocationEffectCommand(
+                  reservedId,
+                  attempt.attemptId,
+                  prepareSyntheticEffectFence(
+                    state,
+                    attempt,
+                    "process_stop",
+                    "cancel",
+                    `process:${attempt.attemptId}`,
+                    attempt.version + 1,
+                    reserved,
+                  ),
+                ),
+              );
             }
             cancellation.quiesce(operationId, status);
             state.terminalReleaseAttempts.add(attempt.attemptId);
@@ -436,10 +453,28 @@ export function createPhase1SyntheticService(
       return true;
     }
     if (attempt.state === "admitted" && attempt.allocationId !== undefined) {
-      const allocation = allocations.activate(attempt.allocationId);
+      const dispatchId = `dispatch-${attempt.allocationId.slice("allocation-".length)}`;
+      const mutationFence = prepareSyntheticEffectFence(
+        state,
+        attempt,
+        "dispatch_submit",
+        "dispatch_submit",
+        `dispatch:${dispatchId}`,
+        1,
+      );
+      const allocation = allocations.activate(
+        createAllocationEffectCommand(
+          attempt.allocationId,
+          attempt.attemptId,
+          mutationFence,
+        ),
+      );
       const receipt = dispatcher.submit(
-        allocation,
-        attempt.startAuthorization === "authorized",
+        createDispatchSubmissionCommand(
+          allocation,
+          mutationFence,
+          attempt.startAuthorization === "authorized",
+        ),
       );
       lifecycle.applyAttempt(
         Object.freeze({
@@ -460,7 +495,21 @@ export function createPhase1SyntheticService(
       const dispatch = state.dispatches.get(attempt.dispatchId);
       if (allocation === undefined || dispatch === undefined)
         throw new Error("Process-manager attachment missing");
-      const execution = executor.start(attempt, allocation, dispatch);
+      const execution = executor.start(
+        createExecutionStartCommand(
+          attempt,
+          allocation,
+          dispatch,
+          prepareSyntheticEffectFence(
+            state,
+            attempt,
+            "process_start",
+            "process_start",
+            `process:${attempt.attemptId}`,
+            1,
+          ),
+        ),
+      );
       lifecycle.applyAttempt(
         Object.freeze({
           ...attempt,
@@ -492,11 +541,15 @@ export function createPhase1SyntheticService(
           `result:${attempt.attemptId}`,
           () => {
             const manifest = results.finalize(
-              attempt.attemptId,
-              attempt.executionId,
-              publishResultFiles(
-                attempt.attemptId,
-                status.workload.spec.resultFiles,
+              prepareSyntheticResultFinalizeCommand(
+                state,
+                attempt,
+                publishSyntheticResultFiles(
+                  state,
+                  database.artifacts,
+                  attempt.attemptId,
+                  status.workload.spec.resultFiles,
+                ),
               ),
             );
             lifecycle.applyAttempt(
@@ -531,7 +584,20 @@ export function createPhase1SyntheticService(
           () => {
             if (attempt.allocationId === undefined)
               throw new Error("Terminal Attempt is missing its Allocation");
-            allocations.release(attempt.allocationId);
+            allocations.release(
+              createAllocationEffectCommand(
+                attempt.allocationId,
+                attempt.attemptId,
+                prepareSyntheticEffectFence(
+                  state,
+                  attempt,
+                  "artifact_finalize",
+                  "result_finalize",
+                  `result-finalize:${attempt.attemptId}`,
+                  attempt.version + 1,
+                ),
+              ),
+            );
             state.terminalReleaseAttempts.add(attempt.attemptId);
           },
         );

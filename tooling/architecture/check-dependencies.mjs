@@ -131,6 +131,7 @@ function checkCompositionInventory(plan, rules) {
 
 function nodeForSource(path) {
   const normalized = relative(repositoryRoot, path).split(sep).join("/");
+  if (normalized.startsWith("packages/kernel/src/")) return "kernel";
   const packageMatch = normalized.match(
     /^packages\/([^/]+)\/src\/features\/([^/]+)\//,
   );
@@ -179,6 +180,7 @@ function sourcePathForRelativeImport(sourcePath, specifier) {
 }
 
 function targetNodeForWorkspaceImport(specifier) {
+  if (specifier === "@workload-funnel/kernel") return "kernel";
   const match = specifier.match(/^@workload-funnel\/([^/]+)\/([^/]+)$/);
   if (match === null) return undefined;
   return applicationWorkspaceNames.has(match[1])
@@ -252,7 +254,7 @@ for (const path of productionFiles) {
     );
     continue;
   }
-  if (!rules.has(sourceNode)) {
+  if (sourceNode !== "kernel" && !rules.has(sourceNode)) {
     failures.push(
       `${displayPath} maps to unknown architecture node ${sourceNode}`,
     );
@@ -309,7 +311,10 @@ for (const path of productionFiles) {
         failures.push(
           `${displayPath} imports its own feature through its package export`,
         );
-      } else if (rules.get(sourceNode)?.has(targetNode) !== true) {
+      } else if (
+        targetNode !== "kernel" &&
+        rules.get(sourceNode)?.has(targetNode) !== true
+      ) {
         failures.push(
           `${sourceNode} may not import ${targetNode} (${displayPath})`,
         );

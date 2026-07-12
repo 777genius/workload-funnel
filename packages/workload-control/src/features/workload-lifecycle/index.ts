@@ -47,6 +47,10 @@ export {
 } from "./application/workload-service.js";
 export { createWorkloadLifecycleTransactionParticipant } from "./application/transaction-participant.js";
 export {
+  prepareSyntheticMutationFence,
+  type SyntheticMutationFencePreparationCommand,
+} from "./application/mutation-fence-preparation.js";
+export {
   assertRestoreAdmissionOpen,
   confirmAcceptanceWitness,
   createAcceptanceDurabilityReceipt,

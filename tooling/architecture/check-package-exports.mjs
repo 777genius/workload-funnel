@@ -14,6 +14,24 @@ for (const directory of packageDirectories.filter((entry) =>
   const manifest = JSON.parse(
     await readFile(join(packageRoot, "package.json"), "utf8"),
   );
+  if (manifest.name === "@workload-funnel/kernel") {
+    const declaration = manifest.exports?.["."];
+    if (
+      declaration?.types !== "./dist/index.d.ts" ||
+      declaration?.import !== "./dist/index.js" ||
+      Object.keys(declaration ?? {})
+        .sort()
+        .join() !== "import,types"
+    ) {
+      failures.push(
+        "@workload-funnel/kernel must export only its built public index",
+      );
+    }
+    await readFile(join(packageRoot, "src/index.ts"), "utf8").catch(() => {
+      failures.push("@workload-funnel/kernel has no public src/index.ts");
+    });
+    continue;
+  }
   const featuresRoot = join(packageRoot, "src/features");
   const features = (await readdir(featuresRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())

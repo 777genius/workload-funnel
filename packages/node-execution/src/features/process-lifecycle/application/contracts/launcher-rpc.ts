@@ -3,6 +3,7 @@ import {
   type SignedExecutionTicket,
   TicketValidationError,
 } from "@workload-funnel/node-execution/execution-ticket-validation";
+import type { MutationFence } from "@workload-funnel/kernel";
 
 export const LAUNCHER_RPC_PROTOCOL = "phase4a.launcher-rpc.v1" as const;
 
@@ -17,13 +18,19 @@ export interface LauncherRpcRequest {
   readonly method: "observe" | "start" | "stop";
   readonly protocolVersion: typeof LAUNCHER_RPC_PROTOCOL;
   readonly requestId: string;
-  readonly ticket: SignedExecutionTicket;
+  readonly ticket: SignedExecutionTicket & {
+    readonly claims: SignedExecutionTicket["claims"] & {
+      readonly mutationFence: MutationFence;
+    };
+  };
 }
 
 export type LauncherErrorCode =
   | "authority_mismatch"
+  | "launcher_cordoned"
   | "malformed_request"
   | "peer_not_authorized"
+  | "replay_rejected"
   | "production_start_disabled"
   | "ticket_rejected"
   | "unsupported_host_capability";
@@ -204,8 +211,10 @@ export function parseLauncherRpcResponse(payload: string): LauncherRpcResponse {
     assertExactKeys(error, ["code", "message"], "response.error");
     const allowedCodes: ReadonlySet<string> = new Set<LauncherErrorCode>([
       "authority_mismatch",
+      "launcher_cordoned",
       "malformed_request",
       "peer_not_authorized",
+      "replay_rejected",
       "production_start_disabled",
       "ticket_rejected",
       "unsupported_host_capability",

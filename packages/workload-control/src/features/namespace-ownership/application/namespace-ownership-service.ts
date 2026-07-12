@@ -21,25 +21,48 @@ export interface NamespaceOwnershipService {
     operationId: string,
     targetWriterId: string,
     authorities: readonly string[],
+    mutationFence: MutationFence,
   ): NamespaceOwnership;
-  abort(namespaceId: string, operationId: string): NamespaceOwnership;
+  abort(
+    namespaceId: string,
+    operationId: string,
+    mutationFence: MutationFence,
+  ): NamespaceOwnership;
   advance(
     namespaceId: string,
     operationId: string,
     targetRelease: string,
+    mutationFence: MutationFence,
   ): NamespaceOwnership;
   acknowledge(
     namespaceId: string,
     operationId: string,
     acknowledgement: AuthorityInstallAcknowledgement,
+    mutationFence: MutationFence,
   ): NamespaceOwnership;
-  complete(namespaceId: string, operationId: string): NamespaceOwnership;
+  complete(
+    namespaceId: string,
+    operationId: string,
+    mutationFence: MutationFence,
+  ): NamespaceOwnership;
   get(namespaceId: string): NamespaceOwnership | undefined;
 }
 
 export function createNamespaceOwnershipService(
   store: NamespaceOwnershipStore,
 ): NamespaceOwnershipService {
+  function assertNamespaceMutationFence(
+    ownership: NamespaceOwnership,
+    mutationFence: MutationFence,
+  ): void {
+    validateMutationFence(mutationFence);
+    if (
+      mutationFence.namespaceId !== ownership.namespaceId ||
+      mutationFence.namespaceWriterEpoch !== ownership.writerEpoch
+    ) {
+      throw new Error("namespace_mutation_fence_mismatch");
+    }
+  }
   function current(namespaceId: string): NamespaceOwnership {
     const value = store.get(namespaceId);
     if (value === undefined)
@@ -63,8 +86,10 @@ export function createNamespaceOwnershipService(
       operationId: string,
       targetWriterId: string,
       authorities: readonly string[],
+      mutationFence: MutationFence,
     ) {
       const before = current(namespaceId);
+      assertNamespaceMutationFence(before, mutationFence);
       return save(
         before,
         beginOwnershipTransfer(before, {
@@ -75,8 +100,13 @@ export function createNamespaceOwnershipService(
         }),
       );
     },
-    abort(namespaceId: string, operationId: string) {
+    abort(
+      namespaceId: string,
+      operationId: string,
+      mutationFence: MutationFence,
+    ) {
       const before = current(namespaceId);
+      assertNamespaceMutationFence(before, mutationFence);
       if (
         before.transfer?.operationId === operationId &&
         before.transfer.state === "aborted"
@@ -88,8 +118,14 @@ export function createNamespaceOwnershipService(
         abortOwnershipTransfer(before, operationId, before.version),
       );
     },
-    advance(namespaceId: string, operationId: string, targetRelease: string) {
+    advance(
+      namespaceId: string,
+      operationId: string,
+      targetRelease: string,
+      mutationFence: MutationFence,
+    ) {
       const before = current(namespaceId);
+      assertNamespaceMutationFence(before, mutationFence);
       if (
         before.transfer?.operationId === operationId &&
         before.transfer.state === "epoch_advanced"
@@ -110,8 +146,16 @@ export function createNamespaceOwnershipService(
       namespaceId: string,
       operationId: string,
       acknowledgement: AuthorityInstallAcknowledgement,
+      mutationFence: MutationFence,
     ) {
       const before = current(namespaceId);
+      assertNamespaceMutationFence(before, mutationFence);
+      if (
+        acknowledgement.tupleFingerprint !==
+        fingerprintMutationFence(mutationFence)
+      ) {
+        throw new Error("namespace_authority_fence_fingerprint_mismatch");
+      }
       return save(
         before,
         acknowledgeOwnershipAuthority(
@@ -122,8 +166,13 @@ export function createNamespaceOwnershipService(
         ),
       );
     },
-    complete(namespaceId: string, operationId: string) {
+    complete(
+      namespaceId: string,
+      operationId: string,
+      mutationFence: MutationFence,
+    ) {
       const before = current(namespaceId);
+      assertNamespaceMutationFence(before, mutationFence);
       if (
         before.transfer?.operationId === operationId &&
         before.transfer.state === "completed"
@@ -138,3 +187,8 @@ export function createNamespaceOwnershipService(
     get: (namespaceId: string) => store.get(namespaceId),
   });
 }
+import {
+  fingerprintMutationFence,
+  type MutationFence,
+  validateMutationFence,
+} from "@workload-funnel/kernel";

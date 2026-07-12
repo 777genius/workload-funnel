@@ -1,0 +1,17 @@
+{
+  "name": "@workload-funnel/kernel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dependency-free canonical primitives for WorkloadFunnel",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

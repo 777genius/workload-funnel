@@ -15,6 +15,8 @@ import type {
   Dispatch,
   DispatchMapping,
 } from "@workload-funnel/workload-control/dispatch-reconciliation";
+import type { ArtifactFinalizeCommand } from "@workload-funnel/workload-control/result-management";
+import type { LocalDispatchFenceHighWatermark } from "@workload-funnel/dispatcher-local/dispatch-submission";
 import type { Execution } from "@workload-funnel/workload-control/execution-reconciliation";
 import {
   createClosedGateSet,
@@ -34,7 +36,7 @@ import type {
 
 export interface SyntheticArtifactWriter {
   readonly root: string;
-  write(attemptId: string, path: string, content: string): string;
+  write(command: ArtifactFinalizeCommand): string;
 }
 
 export type SyntheticDatabaseProfile = "postgres" | "sqlite";
@@ -60,6 +62,7 @@ export interface DurableState {
   dispatches: Map<string, Dispatch>;
   dispatchByAllocation: Map<string, string>;
   localDispatchEffects: Map<string, "accepted" | "canceled">;
+  localDispatchHighWatermarks: Map<string, LocalDispatchFenceHighWatermark>;
   mappings: Map<string, DispatchMapping>;
   executions: Map<string, Execution>;
   executionByDispatch: Map<string, string>;
@@ -112,6 +115,7 @@ function createState(): DurableState {
     inbox: new Map(),
     lockTrace: [],
     localDispatchEffects: new Map(),
+    localDispatchHighWatermarks: new Map(),
     manifestByAttempt: new Map(),
     manifests: new Map(),
     mappings: new Map(),

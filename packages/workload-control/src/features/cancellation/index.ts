@@ -14,5 +14,6 @@ export {
 } from "./domain/cancellation-saga.js";
 export {
   createCancellationProcessManager,
+  type CancellationMutationCommand,
   type CancellationProcessManager,
 } from "./application/cancellation-process-manager.js";

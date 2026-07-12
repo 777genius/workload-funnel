@@ -18,6 +18,14 @@ export interface OperationGateSet {
   readonly open: ReadonlySet<OperationGate>;
 }
 
+export interface OperationGateMutationCommand {
+  readonly authorizationGate: OperationGate;
+  readonly current: OperationGateSet;
+  readonly expectedRevision: number;
+  readonly gates: readonly OperationGate[];
+  readonly mutationFence: MutationFence;
+}
+
 export class ClosedOperationGateError extends Error {
   public constructor(gate: OperationGate) {
     super(`Operation gate is closed: ${gate}`);
@@ -65,10 +73,14 @@ export function openSyntheticTestGates(
 }
 
 export function closeOperationGates(
-  current: OperationGateSet,
-  expectedRevision: number,
-  gates: readonly OperationGate[],
+  command: OperationGateMutationCommand,
 ): OperationGateSet {
+  const { current, expectedRevision, gates, mutationFence } = command;
+  assertMutationFenceGateOpen(
+    current,
+    mutationFence,
+    command.authorizationGate,
+  );
   if (current.revision !== expectedRevision)
     throw new Error("Stale operation gate revision");
   const open = new Set(current.open);
@@ -80,9 +92,29 @@ export function closeOperationGates(
   });
 }
 
+export function assertMutationFenceGateOpen(
+  gates: OperationGateSet,
+  mutationFence: MutationFence,
+  requiredGate: OperationGate,
+): void {
+  validateMutationFence(mutationFence);
+  if (
+    mutationFence.namespaceId !== gates.namespaceId ||
+    mutationFence.operationGateRevision !== gates.revision ||
+    mutationFence.requiredGate !== requiredGate
+  ) {
+    throw new Error("mutation_fence_gate_mismatch");
+  }
+  assertGateOpen(gates, requiredGate);
+}
+
 export function assertGateOpen(
   gates: OperationGateSet,
   gate: OperationGate,
 ): void {
   if (!gates.open.has(gate)) throw new ClosedOperationGateError(gate);
 }
+import {
+  type MutationFence,
+  validateMutationFence,
+} from "@workload-funnel/kernel";

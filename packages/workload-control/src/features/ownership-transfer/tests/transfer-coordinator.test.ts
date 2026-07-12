@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { MutationFence } from "@workload-funnel/kernel";
 
 import {
   advanceOwnershipTransferCoordinator,
@@ -6,10 +7,29 @@ import {
   nextOwnershipTransferStep,
 } from "../index.js";
 
+const mutationFence: MutationFence = Object.freeze({
+  attemptId: "attempt-transfer-1",
+  clusterIncarnation: "synthetic-phase1-cluster",
+  clusterIncarnationVersion: 1,
+  desiredEffect: "process_start",
+  effectScopeKey: "process:attempt-transfer-1",
+  executionGeneration: "generation-transfer-1",
+  expectedDesiredVersion: 1,
+  issuedStartRevocationRevision: 0,
+  namespaceId: "namespace-1",
+  namespaceWriterEpoch: 1,
+  operationGateRevision: 5,
+  requiredGate: "process_start",
+  schemaVersion: 1,
+  startFence: "start-transfer-1",
+  supersessionKey: "process:attempt-transfer-1",
+});
+
 function coordinator() {
   return createOwnershipTransferCoordinator({
     authorityIds: ["launcher-1", "gateway-1"],
     gateRevision: 5,
+    mutationFence,
     namespaceId: "namespace-1",
     operationId: "transfer-1",
     ownershipVersion: 1,

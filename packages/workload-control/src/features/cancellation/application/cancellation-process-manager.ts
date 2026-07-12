@@ -1,14 +1,19 @@
 import type { AllocationService } from "@workload-funnel/workload-control/allocation-leasing";
+import {
+  type MutationFence,
+  validateMutationFence,
+} from "@workload-funnel/kernel";
 import type { LocalDispatcher } from "@workload-funnel/workload-control/dispatch-reconciliation";
 import type { DeterministicExecutor } from "@workload-funnel/workload-control/execution-reconciliation";
 import {
-  assertGateOpen,
+  assertMutationFenceGateOpen,
   type OperationGateSet,
 } from "@workload-funnel/workload-control/operation-gating";
 import type {
   WorkloadLifecycleService,
   WorkloadStatus,
 } from "@workload-funnel/workload-control/workload-lifecycle";
+import { prepareSyntheticMutationFence } from "@workload-funnel/workload-control/workload-lifecycle";
 
 import type {
   CancellationSaga,
@@ -28,6 +33,13 @@ export interface CancellationProcessManager {
   complete(operationId: string, status: WorkloadStatus): CancellationSaga;
 }
 
+export interface CancellationMutationCommand {
+  readonly dispatchCancellationFence?: MutationFence;
+  readonly operationId: string;
+  readonly processStopFence: MutationFence;
+  readonly status: WorkloadStatus;
+}
+
 export function createCancellationProcessManager(
   store: CancellationSagaStore,
   lifecycle: WorkloadLifecycleService,
@@ -36,8 +48,67 @@ export function createCancellationProcessManager(
   executor: DeterministicExecutor,
   gates: () => OperationGateSet,
 ): CancellationProcessManager {
+  function prepareCommand(
+    operationId: string,
+    status: WorkloadStatus,
+  ): CancellationMutationCommand {
+    const gateSet = gates();
+    const allocation = allocations.getByAttempt(status.attempt.attemptId);
+    const dispatch =
+      status.attempt.allocationId === undefined
+        ? undefined
+        : dispatcher.get(status.attempt.allocationId);
+    const authority =
+      allocation === undefined
+        ? {}
+        : {
+            allocation: {
+              allocationId: allocation.allocationId,
+              ownerFence: allocation.ownerFence,
+            },
+          };
+    const processStopFence: MutationFence = prepareSyntheticMutationFence({
+      ...authority,
+      attempt: status.attempt,
+      desiredEffect: "process_stop",
+      effectScopeKey: `process:${status.attempt.attemptId}`,
+      expectedDesiredVersion: status.attempt.version + 1,
+      gateRevision: gateSet.revision,
+      namespaceId: gateSet.namespaceId,
+      requiredGate: "cancel",
+      supersessionKey: `process:${status.attempt.attemptId}`,
+    });
+    const dispatchCancellationFence: MutationFence | undefined =
+      dispatch === undefined
+        ? undefined
+        : prepareSyntheticMutationFence({
+            ...authority,
+            attempt: status.attempt,
+            desiredEffect: "dispatch_cancel",
+            effectScopeKey: `dispatch:${dispatch.dispatchId}`,
+            expectedDesiredVersion: dispatch.version + 1,
+            gateRevision: gateSet.revision,
+            namespaceId: gateSet.namespaceId,
+            requiredGate: "cancel",
+            supersessionKey: `dispatch:${dispatch.dispatchId}`,
+          });
+    validateMutationFence(processStopFence);
+    if (dispatchCancellationFence !== undefined) {
+      validateMutationFence(dispatchCancellationFence);
+    }
+    return Object.freeze({
+      ...(dispatchCancellationFence === undefined
+        ? {}
+        : { dispatchCancellationFence }),
+      operationId,
+      processStopFence,
+      status,
+    });
+  }
+
   const manager: CancellationProcessManager = {
     quiesce(operationId, status) {
+      const command = prepareCommand(operationId, status);
       const prior = store.get(operationId);
       if (
         prior?.state === "completed" ||
@@ -45,7 +116,7 @@ export function createCancellationProcessManager(
       ) {
         return prior;
       }
-      assertGateOpen(gates(), "cancel");
+      assertMutationFenceGateOpen(gates(), command.processStopFence, "cancel");
       const revokedAttempt = Object.freeze({
         ...status.attempt,
         cancellationDesired: "requested" as const,
@@ -54,12 +125,22 @@ export function createCancellationProcessManager(
         version: status.attempt.version + 1,
       });
       lifecycle.applyAttempt(revokedAttempt);
-      if (revokedAttempt.allocationId !== undefined)
-        dispatcher.cancel(revokedAttempt.allocationId);
+      if (
+        revokedAttempt.allocationId !== undefined &&
+        command.dispatchCancellationFence !== undefined
+      ) {
+        dispatcher.cancel({
+          allocationId: revokedAttempt.allocationId,
+          mutationFence: command.dispatchCancellationFence,
+        });
+      }
       const stopObservation =
         revokedAttempt.dispatchId === undefined
           ? undefined
-          : executor.stop(revokedAttempt.dispatchId);
+          : executor.stop({
+              dispatchId: revokedAttempt.dispatchId,
+              mutationFence: command.processStopFence,
+            });
       let saga = createCancellationSaga(
         operationId,
         status.run.runId,
@@ -88,7 +169,11 @@ export function createCancellationProcessManager(
       const releaseReceipt =
         revokedAttempt.allocationId === undefined
           ? `no-allocation:${status.attempt.attemptId}:${operationId}`
-          : allocations.release(revokedAttempt.allocationId).proofId;
+          : allocations.release({
+              allocationId: revokedAttempt.allocationId,
+              attemptId: revokedAttempt.attemptId,
+              mutationFence: command.processStopFence,
+            }).proofId;
       saga = recordCancellationRelease(saga, releaseReceipt);
       store.save(saga);
       return saga;

@@ -5,6 +5,9 @@
   "description": "Fail-closed systemd transient-unit adapter contracts",
   "license": "MIT",
   "type": "module",
+  "dependencies": {
+    "@workload-funnel/kernel": "workspace:*"
+  },
   "exports": {
     "./transient-unit-cancellation": {
       "types": "./dist/features/transient-unit-cancellation/index.d.ts",

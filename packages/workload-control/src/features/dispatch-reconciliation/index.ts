@@ -12,7 +12,9 @@ export {
 } from "./domain/dispatch-machine.js";
 export type { DispatchStore } from "./application/contracts/dispatch-store.js";
 export type {
+  DispatchMutationAuthority,
   DispatchCanceler,
+  DispatchCancellationInput,
   DispatchCapabilityProvider,
   DispatchObserver,
   DispatchSubmissionEvidence,
@@ -20,6 +22,10 @@ export type {
   DispatchSubmitter,
 } from "./application/contracts/dispatch-adapter.js";
 export {
+  createSyntheticDispatchSubmissionCommand,
+  createDispatchSubmissionCommand,
+  type DispatchCancellationCommand,
   createLocalDispatcher,
+  type DispatchSubmissionCommand,
   type LocalDispatcher,
 } from "./application/local-dispatcher.js";

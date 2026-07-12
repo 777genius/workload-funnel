@@ -31,6 +31,8 @@ export type {
 } from "./application/contracts/capacity-reservation-ledger-store.js";
 export {
   createAllocationService,
+  createAllocationEffectCommand,
+  type AllocationEffectCommand,
   type AllocationService,
 } from "./application/allocation-service.js";
 export { createAllocationLeasingTransactionParticipant } from "./application/transaction-participant.js";

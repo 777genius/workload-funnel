@@ -16,6 +16,7 @@
       "@workload-funnel/executor-systemd/*": [
         "packages/executor-systemd/src/features/*/index.ts"
       ],
+      "@workload-funnel/kernel": ["packages/kernel/src/index.ts"],
       "@workload-funnel/node-execution/*": [
         "packages/node-execution/src/features/*/index.ts"
       ],

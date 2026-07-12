@@ -2,8 +2,10 @@ import type { Allocation } from "@workload-funnel/workload-control/allocation-le
 import type { Dispatch } from "@workload-funnel/workload-control/dispatch-reconciliation";
 import {
   assertGateOpen,
+  assertMutationFenceGateOpen,
   type OperationGateSet,
 } from "@workload-funnel/workload-control/operation-gating";
+import type { MutationFence } from "@workload-funnel/kernel";
 import type {
   Attempt,
   TerminalOutcome,
@@ -13,17 +15,34 @@ import type { ExecutionStore } from "./contracts/execution-store.js";
 import type { Execution, ExecutorObservation } from "../domain/execution.js";
 
 export interface DeterministicExecutor {
-  start(
-    attempt: Attempt,
-    allocation: Allocation,
-    dispatch: Dispatch,
-  ): Execution;
+  start(command: ExecutionStartCommand): Execution;
   observeTerminal(
     dispatchId: string,
     outcome: TerminalOutcome,
   ): ExecutorObservation;
-  stop(dispatchId: string): ExecutorObservation | undefined;
+  stop(command: ExecutionStopCommand): ExecutorObservation | undefined;
   get(dispatchId: string): Execution | undefined;
+}
+
+export interface ExecutionStartCommand {
+  readonly allocation: Allocation;
+  readonly attempt: Attempt;
+  readonly dispatch: Dispatch;
+  readonly mutationFence: MutationFence;
+}
+
+export interface ExecutionStopCommand {
+  readonly dispatchId: string;
+  readonly mutationFence: MutationFence;
+}
+
+export function createExecutionStartCommand(
+  attempt: Attempt,
+  allocation: Allocation,
+  dispatch: Dispatch,
+  mutationFence: MutationFence,
+): ExecutionStartCommand {
+  return Object.freeze({ allocation, attempt, dispatch, mutationFence });
 }
 
 export function createDeterministicExecutor(
@@ -31,10 +50,12 @@ export function createDeterministicExecutor(
   gates: () => OperationGateSet,
 ): DeterministicExecutor {
   const executor: DeterministicExecutor = {
-    start(attempt, allocation, dispatch) {
+    start(command) {
+      const { allocation, attempt, dispatch, mutationFence } = command;
       const prior = store.getByDispatch(dispatch.dispatchId);
       if (prior !== undefined) return prior;
       assertGateOpen(gates(), "start");
+      assertMutationFenceGateOpen(gates(), mutationFence, "process_start");
       if (
         attempt.startAuthorization !== "authorized" ||
         dispatch.observed === "suppressed"
@@ -42,6 +63,17 @@ export function createDeterministicExecutor(
         throw new Error(
           "A revoked or suppressed start cannot create an execution",
         );
+      }
+      if (
+        mutationFence.desiredEffect !== "process_start" ||
+        mutationFence.attemptId !== attempt.attemptId ||
+        mutationFence.executionGeneration !== attempt.executionGeneration ||
+        mutationFence.allocationId !== allocation.allocationId ||
+        mutationFence.ownerFence !== allocation.ownerFence ||
+        mutationFence.effectScopeKey !== `process:${attempt.attemptId}` ||
+        mutationFence.supersessionKey !== mutationFence.effectScopeKey
+      ) {
+        throw new Error("execution_start_fence_mismatch");
       }
       const execution: Execution = Object.freeze({
         allocationId: allocation.allocationId,
@@ -73,9 +105,23 @@ export function createDeterministicExecutor(
         terminalOutcome: outcome,
       });
     },
-    stop(dispatchId) {
-      const execution = store.getByDispatch(dispatchId);
+    stop(command) {
+      const execution = store.getByDispatch(command.dispatchId);
       if (execution === undefined) return undefined;
+      assertMutationFenceGateOpen(gates(), command.mutationFence, "cancel");
+      if (
+        command.mutationFence.desiredEffect !== "process_stop" ||
+        command.mutationFence.attemptId !== execution.attemptId ||
+        command.mutationFence.executionGeneration !==
+          execution.executionGeneration ||
+        command.mutationFence.allocationId !== execution.allocationId ||
+        command.mutationFence.effectScopeKey !==
+          `process:${execution.attemptId}` ||
+        command.mutationFence.supersessionKey !==
+          command.mutationFence.effectScopeKey
+      ) {
+        throw new Error("execution_stop_fence_mismatch");
+      }
       const stopped: Execution = Object.freeze({
         ...execution,
         observationSequence: execution.observationSequence + 1,

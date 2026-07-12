@@ -5,6 +5,10 @@
   "description": "Safe local filesystem artifact adapters for WorkloadFunnel",
   "license": "MIT",
   "type": "module",
+  "dependencies": {
+    "@workload-funnel/kernel": "workspace:*",
+    "@workload-funnel/workload-control": "workspace:*"
+  },
   "exports": {
     "./verify-finalize": {
       "types": "./dist/features/verify-finalize/index.d.ts",

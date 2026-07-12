@@ -42,6 +42,12 @@ export default defineConfig({
         ),
       },
       {
+        find: "@workload-funnel/kernel",
+        replacement: fileURLToPath(
+          new URL("./packages/kernel/src/index.ts", import.meta.url),
+        ),
+      },
+      {
         find: /^@workload-funnel\/node-execution\/(.+)$/,
         replacement: fileURLToPath(
           new URL(
@@ -101,6 +107,7 @@ export default defineConfig({
     include: [
       "packages/**/src/features/**/tests/**/*.test.ts",
       "apps/**/*.test.ts",
+      "tooling/architecture/**/*.test.mjs",
       "tooling/phase-0-5/**/*.test.mjs",
     ],
     passWithNoTests: false,

@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "@workload-funnel/executor-systemd": "workspace:*",
+    "@workload-funnel/kernel": "workspace:*",
     "@workload-funnel/node-execution": "workspace:*"
   }
 }

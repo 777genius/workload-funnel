@@ -5,6 +5,9 @@
   "description": "Canonical workload lifecycle and control policies for WorkloadFunnel",
   "license": "MIT",
   "type": "module",
+  "dependencies": {
+    "@workload-funnel/kernel": "workspace:*"
+  },
   "exports": {
     "./allocation-leasing": {
       "types": "./dist/features/allocation-leasing/index.d.ts",

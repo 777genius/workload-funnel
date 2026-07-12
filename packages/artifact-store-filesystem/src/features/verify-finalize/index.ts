@@ -10,6 +10,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
+import {
+  compareMutationFence,
+  fingerprintMutationFence,
+  type MutationFence,
+  validateMutationFence,
+} from "@workload-funnel/kernel";
+import type { ArtifactFinalizeCommand } from "@workload-funnel/workload-control/result-management";
+
+export type { ArtifactFinalizeCommand } from "@workload-funnel/workload-control/result-management";
+
 export class UnsafeArtifactPathError extends Error {
   public constructor() {
     super("Artifact path escapes or traverses an unsafe filesystem object");
@@ -18,20 +28,78 @@ export class UnsafeArtifactPathError extends Error {
 }
 
 export interface LocalArtifactWriter {
-  write(attemptId: string, path: string, content: string): Promise<string>;
+  write(command: ArtifactFinalizeCommand): Promise<string>;
 }
 
 export interface SynchronousLocalArtifactWriter {
   readonly root: string;
-  write(attemptId: string, path: string, content: string): string;
+  write(command: ArtifactFinalizeCommand): string;
+}
+
+function assertArtifactFinalizeFence(
+  command: ArtifactFinalizeCommand,
+  highWatermarks: Map<
+    string,
+    Readonly<{
+      fingerprint: string;
+      version: number;
+    }>
+  >,
+  nowMs: () => number,
+  commitHighWatermark: boolean,
+): void {
+  const mutationFence: MutationFence = command.mutationFence;
+  validateMutationFence(mutationFence);
+  const comparison = compareMutationFence(
+    mutationFence,
+    command.authority,
+    nowMs(),
+  );
+  const pathScope = Buffer.from(command.path, "utf8").toString("base64url");
+  if (
+    mutationFence.desiredEffect !== "artifact_finalize" ||
+    mutationFence.requiredGate !== "result_finalize" ||
+    mutationFence.clusterIncarnation !== "synthetic-phase1-cluster" ||
+    !mutationFence.namespaceId.startsWith("test://phase1/") ||
+    mutationFence.attemptId !== command.attemptId ||
+    mutationFence.effectScopeKey !==
+      `artifact-finalize:${command.attemptId}:${pathScope}` ||
+    mutationFence.supersessionKey !== mutationFence.effectScopeKey ||
+    comparison !== "current"
+  ) {
+    throw new Error(`artifact_finalize_fence_mismatch:${comparison}`);
+  }
+  const fingerprint = fingerprintMutationFence(mutationFence);
+  const prior = highWatermarks.get(mutationFence.effectScopeKey);
+  if (
+    prior !== undefined &&
+    (prior.version > mutationFence.expectedDesiredVersion ||
+      (prior.version === mutationFence.expectedDesiredVersion &&
+        prior.fingerprint !== fingerprint))
+  ) {
+    throw new Error("artifact_finalize_stale_fence");
+  }
+  if (commitHighWatermark) {
+    highWatermarks.set(mutationFence.effectScopeKey, {
+      fingerprint,
+      version: mutationFence.expectedDesiredVersion,
+    });
+  }
 }
 
 export function createLocalFilesystemArtifactWriter(
   root: string,
+  nowMs: () => number = Date.now,
 ): LocalArtifactWriter {
   const absoluteRoot = resolve(root);
+  const highWatermarks = new Map<
+    string,
+    Readonly<{ fingerprint: string; version: number }>
+  >();
   const writer: LocalArtifactWriter = {
-    async write(attemptId, path, content) {
+    async write(command) {
+      const { attemptId, content, path } = command;
+      assertArtifactFinalizeFence(command, highWatermarks, nowMs, false);
       if (path.startsWith("/") || path.split("/").includes("..")) {
         throw new UnsafeArtifactPathError();
       }
@@ -61,6 +129,7 @@ export function createLocalFilesystemArtifactWriter(
       if (existing?.isSymbolicLink() === true || existing?.isFile() === false) {
         throw new UnsafeArtifactPathError();
       }
+      assertArtifactFinalizeFence(command, highWatermarks, nowMs, true);
       await writeFile(target, content, { encoding: "utf8", flag: "wx" });
       return target;
     },
@@ -68,12 +137,20 @@ export function createLocalFilesystemArtifactWriter(
   return Object.freeze(writer);
 }
 
-export function createDisposableSynchronousArtifactWriter(): SynchronousLocalArtifactWriter {
+export function createDisposableSynchronousArtifactWriter(
+  nowMs: () => number = Date.now,
+): SynchronousLocalArtifactWriter {
   const root = mkdtempSync(join(tmpdir(), "workload-funnel-phase1-artifacts-"));
   const canonicalRoot = realpathSync(root);
+  const highWatermarks = new Map<
+    string,
+    Readonly<{ fingerprint: string; version: number }>
+  >();
   const writer: SynchronousLocalArtifactWriter = {
     root: canonicalRoot,
-    write(attemptId, path, content) {
+    write(command) {
+      const { attemptId, content, path } = command;
+      assertArtifactFinalizeFence(command, highWatermarks, nowMs, false);
       if (path.startsWith("/") || path.split("/").includes("..")) {
         throw new UnsafeArtifactPathError();
       }
@@ -115,6 +192,7 @@ export function createDisposableSynchronousArtifactWriter(): SynchronousLocalArt
       if (existing?.isSymbolicLink() === true || existing?.isFile() === false) {
         throw new UnsafeArtifactPathError();
       }
+      assertArtifactFinalizeFence(command, highWatermarks, nowMs, true);
       writeFileSync(target, content, { encoding: "utf8", flag: "wx" });
       return target;
     },

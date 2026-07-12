@@ -19,7 +19,12 @@ export {
 } from "./application/result-process-manager.js";
 export type { ResultStore } from "./application/contracts/result-store.js";
 export {
+  createSyntheticArtifactFinalizeCommand,
+  createSyntheticResultFinalizeCommand,
   createResultManagementService,
+  type ArtifactFinalizeCommand,
+  type ArtifactFinalizeAuthority,
+  type ResultFinalizeCommand,
   type ResultManagementService,
 } from "./application/result-service.js";
 export { createResultManagementTransactionParticipant } from "./application/transaction-participant.js";

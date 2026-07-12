@@ -1,3 +1,5 @@
+import type { MutationFence } from "@workload-funnel/kernel";
+
 export interface Dispatch {
   readonly dispatchId: string;
   readonly allocationId: string;
@@ -17,6 +19,7 @@ export interface Dispatch {
     | "reconciliation_required"
     | "suppressed";
   readonly lastEvidence?: DispatchEvidence;
+  readonly mutationFence: MutationFence;
   readonly version: number;
 }
 

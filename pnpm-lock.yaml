@@ -65,21 +65,44 @@ importers:
       '@workload-funnel/executor-systemd':
         specifier: workspace:*
         version: link:../../packages/executor-systemd
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
       '@workload-funnel/node-execution':
         specifier: workspace:*
         version: link:../../packages/node-execution
 
-  packages/artifact-store-filesystem: {}
-
-  packages/dispatcher-local:
+  packages/artifact-store-filesystem:
     dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       '@workload-funnel/workload-control':
         specifier: workspace:*
         version: link:../workload-control
 
-  packages/executor-systemd: {}
+  packages/dispatcher-local:
+    dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
 
-  packages/node-execution: {}
+  packages/executor-systemd:
+    dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+
+  packages/kernel: {}
+
+  packages/node-execution:
+    dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../kernel
 
   packages/store-postgres:
     dependencies:
@@ -93,7 +116,11 @@ importers:
         specifier: workspace:*
         version: link:../workload-control
 
-  packages/workload-control: {}
+  packages/workload-control:
+    dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../kernel
 
 packages:
 

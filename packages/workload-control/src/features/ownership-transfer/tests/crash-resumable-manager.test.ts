@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  fingerprintMutationFence,
+  type MutationFence,
+} from "@workload-funnel/kernel";
 
 import {
   createNamespaceOwnershipService,
@@ -80,12 +84,17 @@ describe("Phase 2 ownership transfer manager integration", () => {
       drainOldEffects: () => "effects-drained",
       fenceOldAuthorities: () => "old-authorities-fenced",
       getGateSet: () => gates,
-      installAuthority: (_coordinator, authorityId, targetEpoch) =>
+      installAuthority: (
+        _coordinator,
+        authorityId,
+        targetEpoch,
+        mutationFence,
+      ) =>
         Object.freeze({
           authorityId,
           registrySequence: targetEpoch,
           targetEpoch,
-          tupleFingerprint: `tuple:${authorityId}:${String(targetEpoch)}`,
+          tupleFingerprint: fingerprintMutationFence(mutationFence),
         }),
       reconcileAtNewEpoch: () => "reconciled-new-epoch",
       reopenApprovedGates: (_coordinator, current) =>
@@ -112,10 +121,28 @@ describe("Phase 2 ownership transfer manager integration", () => {
       coordinatorStore(),
       environment,
     );
+    const mutationFence: MutationFence = Object.freeze({
+      attemptId: "attempt-transfer-1",
+      clusterIncarnation: "synthetic-phase1-cluster",
+      clusterIncarnationVersion: 1,
+      desiredEffect: "process_start",
+      effectScopeKey: "process:attempt-transfer-1",
+      executionGeneration: "generation-transfer-1",
+      expectedDesiredVersion: 1,
+      issuedStartRevocationRevision: 0,
+      namespaceId: "namespace-1",
+      namespaceWriterEpoch: 1,
+      operationGateRevision: 1,
+      requiredGate: "process_start",
+      schemaVersion: 1,
+      startFence: "start-transfer-1",
+      supersessionKey: "process:attempt-transfer-1",
+    });
     let operation = manager.begin({
       authorityIds: ["gateway-1", "launcher-1"],
       namespaceId: "namespace-1",
       operationId: "transfer-1",
+      mutationFence,
       targetWriterId: "writer-b",
       targetWriterRelease: "release-b",
     });

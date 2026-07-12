@@ -2,7 +2,7 @@ import {
   fingerprintMutationFence,
   type FenceComparisonResult,
   type MutationFence,
-} from "./mutation-fence.js";
+} from "@workload-funnel/kernel";
 
 export type EffectOutcome =
   | "applied"

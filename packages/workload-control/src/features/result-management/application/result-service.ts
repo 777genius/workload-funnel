@@ -1,8 +1,12 @@
 import {
-  assertGateOpen,
+  assertMutationFenceGateOpen,
   type OperationGateSet,
 } from "@workload-funnel/workload-control/operation-gating";
 import type { SyntheticResultFile } from "@workload-funnel/workload-control/workload-lifecycle";
+import {
+  type MutationFence,
+  validateMutationFence,
+} from "@workload-funnel/kernel";
 
 import type { ResultStore } from "./contracts/result-store.js";
 import type { ResultEntry, ResultManifest } from "../domain/result-manifest.js";
@@ -15,12 +19,145 @@ function checksum(content: string): string {
 }
 
 export interface ResultManagementService {
-  finalize(
-    attemptId: string,
-    executionId: string | undefined,
-    files: readonly (SyntheticResultFile & { readonly location?: string })[],
-  ): ResultManifest;
+  finalize(command: ResultFinalizeCommand): ResultManifest;
   get(attemptId: string): ResultManifest | undefined;
+}
+
+export interface ArtifactFinalizeCommand {
+  readonly authority: ArtifactFinalizeAuthority;
+  readonly attemptId: string;
+  readonly content: string;
+  readonly mutationFence: MutationFence;
+  readonly path: string;
+}
+
+export interface ArtifactFinalizeAuthority {
+  readonly allocationId?: string;
+  readonly attemptId: string;
+  readonly clusterIncarnation: string;
+  readonly clusterIncarnationVersion: number;
+  readonly desiredEffect: "artifact_finalize";
+  readonly effectScopeKey: string;
+  readonly executionGeneration: string;
+  readonly expectedDesiredVersion: number;
+  readonly namespaceId: string;
+  readonly namespaceWriterEpoch: number;
+  readonly openGates: ReadonlySet<string>;
+  readonly operationGateRevision: number;
+  readonly ownerFence?: number;
+  readonly requiredGate: "result_finalize";
+  readonly supersessionKey: string;
+}
+
+export interface ResultFinalizeCommand {
+  readonly attemptId: string;
+  readonly executionId?: string;
+  readonly files: readonly (SyntheticResultFile & {
+    readonly location?: string;
+  })[];
+  readonly mutationFence: MutationFence;
+}
+
+interface SyntheticFinalizeAuthority {
+  readonly allocationId?: string;
+  readonly attemptId: string;
+  readonly executionGeneration: string;
+  readonly gateRevision: number;
+  readonly namespaceId: string;
+  readonly openGates: ReadonlySet<string>;
+  readonly ownerFence?: number;
+}
+
+function createSyntheticFinalizeFence(
+  authority: SyntheticFinalizeAuthority,
+  effectScopeKey: string,
+): MutationFence {
+  if (
+    (authority.allocationId === undefined) !==
+    (authority.ownerFence === undefined)
+  ) {
+    throw new Error("synthetic_result_allocation_authority_incomplete");
+  }
+  const mutationFence: MutationFence = Object.freeze({
+    ...(authority.allocationId === undefined
+      ? {}
+      : {
+          allocationId: authority.allocationId,
+          ownerFence: authority.ownerFence,
+        }),
+    attemptId: authority.attemptId,
+    clusterIncarnation: "synthetic-phase1-cluster",
+    clusterIncarnationVersion: 1,
+    desiredEffect: "artifact_finalize",
+    effectScopeKey,
+    executionGeneration: authority.executionGeneration,
+    expectedDesiredVersion: 1,
+    namespaceId: authority.namespaceId,
+    namespaceWriterEpoch: 1,
+    operationGateRevision: authority.gateRevision,
+    requiredGate: "result_finalize",
+    schemaVersion: 1,
+    supersessionKey: effectScopeKey,
+  });
+  validateMutationFence(mutationFence);
+  return mutationFence;
+}
+
+export function createSyntheticArtifactFinalizeCommand(
+  input: SyntheticFinalizeAuthority &
+    Readonly<{ content: string; path: string }>,
+): ArtifactFinalizeCommand {
+  const pathScope = Buffer.from(input.path, "utf8").toString("base64url");
+  return Object.freeze({
+    authority: Object.freeze({
+      ...(input.allocationId === undefined
+        ? {}
+        : {
+            allocationId: input.allocationId,
+            ownerFence: input.ownerFence,
+          }),
+      attemptId: input.attemptId,
+      clusterIncarnation: "synthetic-phase1-cluster",
+      clusterIncarnationVersion: 1,
+      desiredEffect: "artifact_finalize",
+      effectScopeKey: `artifact-finalize:${input.attemptId}:${pathScope}`,
+      executionGeneration: input.executionGeneration,
+      expectedDesiredVersion: 1,
+      namespaceId: input.namespaceId,
+      namespaceWriterEpoch: 1,
+      openGates: input.openGates,
+      operationGateRevision: input.gateRevision,
+      requiredGate: "result_finalize",
+      supersessionKey: `artifact-finalize:${input.attemptId}:${pathScope}`,
+    }),
+    attemptId: input.attemptId,
+    content: input.content,
+    mutationFence: createSyntheticFinalizeFence(
+      input,
+      `artifact-finalize:${input.attemptId}:${pathScope}`,
+    ),
+    path: input.path,
+  });
+}
+
+export function createSyntheticResultFinalizeCommand(
+  input: SyntheticFinalizeAuthority &
+    Readonly<{
+      executionId?: string;
+      files: readonly (SyntheticResultFile & { readonly location?: string })[];
+    }>,
+): ResultFinalizeCommand {
+  return Object.freeze({
+    attemptId: input.attemptId,
+    ...(input.executionId === undefined
+      ? {}
+      : { executionId: input.executionId }),
+    files: input.files,
+    mutationFence: createSyntheticFinalizeFence(
+      input,
+      `result-finalize:${input.attemptId}`,
+    ),
+  });
 }
 
 export function createResultManagementService(
@@ -28,10 +165,24 @@ export function createResultManagementService(
   gates: () => OperationGateSet,
 ): ResultManagementService {
   const service: ResultManagementService = {
-    finalize(attemptId, executionId, files) {
+    finalize(command) {
+      const { attemptId, executionId, files, mutationFence } = command;
       const prior = store.getByAttempt(attemptId);
-      if (prior !== undefined) return prior;
-      assertGateOpen(gates(), "result_finalize");
+      if (prior !== undefined) {
+        if (prior.attemptId !== mutationFence.attemptId) {
+          throw new Error("result_finalize_operation_conflict");
+        }
+        return prior;
+      }
+      assertMutationFenceGateOpen(gates(), mutationFence, "result_finalize");
+      if (
+        mutationFence.desiredEffect !== "artifact_finalize" ||
+        mutationFence.attemptId !== attemptId ||
+        mutationFence.effectScopeKey !== `result-finalize:${attemptId}` ||
+        mutationFence.supersessionKey !== mutationFence.effectScopeKey
+      ) {
+        throw new Error("result_finalize_fence_mismatch");
+      }
       const entries: readonly ResultEntry[] = Object.freeze(
         [...files]
           .sort((left, right) => left.path.localeCompare(right.path))

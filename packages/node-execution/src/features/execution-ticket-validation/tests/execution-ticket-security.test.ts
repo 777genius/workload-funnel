@@ -11,8 +11,32 @@ import {
   TicketValidationError,
   verifyExecutionTicket,
 } from "../index.js";
+import { fingerprintMutationFence } from "@workload-funnel/kernel";
 
 function claims(): ExecutionTicketClaims {
+  const mutationFence = {
+    allocationId: "allocation-1",
+    attemptId: "attempt-1",
+    clusterIncarnation: "cluster-blue",
+    clusterIncarnationVersion: 7,
+    desiredEffect: "process_start" as const,
+    effectScopeKey: "namespace-1.process-start.attempt-1.generation-1",
+    executionGeneration: "generation-1",
+    expectedDesiredVersion: 1,
+    issuedStartRevocationRevision: 0,
+    namespaceId: "namespace-1",
+    namespaceWriterEpoch: 5,
+    nodeBootEpoch: 1,
+    nodeId: "node-1",
+    notAfter: 2_000,
+    notBefore: 1_000,
+    operationGateRevision: 3,
+    ownerFence: 4,
+    requiredGate: "process_start",
+    schemaVersion: 1 as const,
+    startFence: "start-fence-1",
+    supersessionKey: "desired-start-1",
+  };
   return {
     allocation: {
       allocationId: "allocation-1",
@@ -32,12 +56,17 @@ function claims(): ExecutionTicketClaims {
     gate: { effect: "process_start", open: true, revision: 3 },
     issuedAtMs: 1_000,
     issuerKeyId: "issuer-1",
+    mutationFence,
+    mutationFenceFingerprint: fingerprintMutationFence(mutationFence),
     namespace: {
       namespaceId: "namespace-1",
       writerEpoch: 5,
       writerId: "writer-1",
     },
-    node: { bootId: "boot-1", nodeId: "node-1" },
+    node: { bootEpoch: 1, bootId: "boot-1", nodeId: "node-1" },
+    nonce: "nonce-1",
+    operationId: "start-operation-1",
+    partitionPolicy: "terminate_after_grace",
     profileId: SYNTHETIC_EXECUTION_PROFILE,
     schemaVersion: EXECUTION_TICKET_SCHEMA,
     ticketId: "ticket-1",

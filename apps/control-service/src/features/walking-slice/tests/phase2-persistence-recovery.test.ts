@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { MutationFence } from "@workload-funnel/kernel";
 
 import { createSyntheticExternalWitness } from "@workload-funnel/control-service/phase1-synthetic-runtime";
 
@@ -41,6 +42,24 @@ function capacityState() {
     terminalReleases: new Map<string, TerminalReleaseReceipt>(),
   };
 }
+
+const transferMutationFence: MutationFence = Object.freeze({
+  attemptId: "attempt-transfer-1",
+  clusterIncarnation: "synthetic-phase1-cluster",
+  clusterIncarnationVersion: 1,
+  desiredEffect: "process_start",
+  effectScopeKey: "process:attempt-transfer-1",
+  executionGeneration: "generation-transfer-1",
+  expectedDesiredVersion: 1,
+  issuedStartRevocationRevision: 0,
+  namespaceId: "namespace-1",
+  namespaceWriterEpoch: 1,
+  operationGateRevision: 1,
+  requiredGate: "process_start",
+  schemaVersion: 1,
+  startFence: "start-transfer-1",
+  supersessionKey: "process:attempt-transfer-1",
+});
 
 describe("Phase 2 disposable Postgres/SQLite persistence contracts", () => {
   it("recovers an ambiguous external witness append by exact lookup", () => {
@@ -228,6 +247,7 @@ describe("Phase 2 disposable Postgres/SQLite persistence contracts", () => {
         createOwnershipTransferCoordinator({
           authorityIds: ["launcher-1"],
           gateRevision: 1,
+          mutationFence: transferMutationFence,
           namespaceId: "namespace-1",
           operationId: "transfer-1",
           ownershipVersion: 1,

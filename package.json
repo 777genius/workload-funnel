@@ -9,7 +9,7 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/generate-composition.mjs --check",
+    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check",
     "build": "pnpm --filter './packages/*' build",
     "changeset": "changeset",
     "changeset:status": "changeset status --since=main",

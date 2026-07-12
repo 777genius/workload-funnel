@@ -5,10 +5,17 @@
   "description": "Node-local execution contracts and trusted ticket validation",
   "license": "MIT",
   "type": "module",
+  "dependencies": {
+    "@workload-funnel/kernel": "workspace:*"
+  },
   "exports": {
     "./execution-ticket-validation": {
       "types": "./dist/features/execution-ticket-validation/index.d.ts",
       "import": "./dist/features/execution-ticket-validation/index.js"
+    },
+    "./observation-spooling": {
+      "types": "./dist/features/observation-spooling/index.d.ts",
+      "import": "./dist/features/observation-spooling/index.js"
     },
     "./process-lifecycle": {
       "types": "./dist/features/process-lifecycle/index.d.ts",

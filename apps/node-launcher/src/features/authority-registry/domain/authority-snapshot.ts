@@ -1,3 +1,8 @@
+import {
+  fingerprintMutationFence,
+  type MutationFence,
+  validateMutationFence,
+} from "@workload-funnel/kernel";
 import type {
   AllocationAuthority,
   AttemptStartAuthority,
@@ -16,27 +21,40 @@ export interface LauncherAuthoritySnapshot {
   readonly attempt: AttemptStartAuthority;
   readonly cluster: ClusterAuthority;
   readonly gate: LauncherGateAuthority;
+  readonly mutationFence: MutationFence;
+  readonly mutationFenceFingerprint: string;
   readonly namespace: NamespaceAuthority;
 }
 
 export interface AuthorityInstallAcknowledgement {
   readonly allocationId: string;
   readonly allocationOwnerFence: number;
+  readonly allocationOwnerId: string;
   readonly attemptId: string;
+  readonly clusterIncarnation: string;
   readonly clusterIncarnationVersion: number;
   readonly gateOpen: boolean;
   readonly gateRevision: number;
   readonly namespaceId: string;
   readonly namespaceWriterEpoch: number;
+  readonly namespaceWriterId: string;
+  readonly effectScopeKey: string;
+  readonly expectedDesiredVersion: number;
+  readonly mutationFenceFingerprint: string;
+  readonly mutationFence: MutationFence;
   readonly result: "idempotent" | "installed";
   readonly startRevocationRevision: number;
+  readonly supersessionKey: string;
+  readonly walSequence: number;
 }
 
 export type AuthorityRegistryErrorCode =
   | "authority_mismatch"
   | "authority_missing"
   | "invalid_authority"
+  | "launcher_cordoned"
   | "mutation_in_progress"
+  | "nonce_replay"
   | "stale_authority";
 
 export class AuthorityRegistryError extends Error {
@@ -95,11 +113,40 @@ export function sameAttempt(
 }
 
 export function validateSnapshot(snapshot: LauncherAuthoritySnapshot): void {
+  try {
+    validateMutationFence(snapshot.mutationFence);
+  } catch {
+    throw new AuthorityRegistryError(
+      "invalid_authority",
+      "authority snapshot has an invalid complete MutationFence",
+    );
+  }
   if (
     snapshot.allocation.attemptId !== snapshot.attempt.attemptId ||
     snapshot.allocation.executionGeneration !==
       snapshot.attempt.executionGeneration ||
-    snapshot.gate.effect !== "process_start"
+    snapshot.gate.effect !== snapshot.mutationFence.desiredEffect ||
+    !["process_start", "process_stop"].includes(snapshot.gate.effect) ||
+    snapshot.mutationFenceFingerprint !==
+      fingerprintMutationFence(snapshot.mutationFence) ||
+    snapshot.mutationFence.clusterIncarnation !==
+      snapshot.cluster.incarnationId ||
+    snapshot.mutationFence.clusterIncarnationVersion !==
+      snapshot.cluster.version ||
+    snapshot.mutationFence.namespaceId !== snapshot.namespace.namespaceId ||
+    snapshot.mutationFence.namespaceWriterEpoch !==
+      snapshot.namespace.writerEpoch ||
+    snapshot.mutationFence.operationGateRevision !== snapshot.gate.revision ||
+    snapshot.mutationFence.requiredGate !== snapshot.gate.effect ||
+    snapshot.mutationFence.allocationId !== snapshot.allocation.allocationId ||
+    snapshot.mutationFence.ownerFence !== snapshot.allocation.ownerFence ||
+    snapshot.mutationFence.attemptId !== snapshot.attempt.attemptId ||
+    snapshot.mutationFence.executionGeneration !==
+      snapshot.attempt.executionGeneration ||
+    (snapshot.mutationFence.desiredEffect === "process_start" &&
+      (snapshot.mutationFence.startFence !== snapshot.attempt.startFence ||
+        snapshot.mutationFence.issuedStartRevocationRevision !==
+          snapshot.attempt.startRevocationRevision))
   ) {
     throw new AuthorityRegistryError(
       "invalid_authority",
@@ -112,6 +159,7 @@ export function validateSnapshot(snapshot: LauncherAuthoritySnapshot): void {
     snapshot.allocation.ownerFence,
     snapshot.attempt.startRevocationRevision,
     snapshot.gate.revision,
+    snapshot.mutationFence.expectedDesiredVersion,
   ]) {
     if (!Number.isSafeInteger(value) || value < 0) {
       throw new AuthorityRegistryError(

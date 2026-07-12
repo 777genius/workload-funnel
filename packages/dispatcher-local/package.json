@@ -6,6 +6,7 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
+    "@workload-funnel/kernel": "workspace:*",
     "@workload-funnel/workload-control": "workspace:*"
   },
   "exports": {

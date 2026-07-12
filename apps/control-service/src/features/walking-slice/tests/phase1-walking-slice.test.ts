@@ -8,6 +8,7 @@ import {
   createDisposableSynchronousArtifactWriter,
   createLocalFilesystemArtifactWriter,
 } from "@workload-funnel/artifact-store-filesystem/verify-finalize";
+import { createSyntheticArtifactFinalizeCommand } from "@workload-funnel/workload-control/result-management";
 import { AuthenticationError } from "@workload-funnel/control-service/authentication";
 import { createSyntheticHttpApi } from "@workload-funnel/control-service/transport-http";
 import { createWorkloadApi } from "@workload-funnel/control-service/workload-controller";
@@ -22,6 +23,7 @@ import type {
   TerminalOutcome,
   WorkloadSpec,
 } from "@workload-funnel/workload-control/workload-lifecycle";
+import { prepareSyntheticMutationFence } from "@workload-funnel/workload-control/workload-lifecycle";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -526,9 +528,24 @@ describe.each(profiles)("Phase 1 %s synthetic profile", (profile) => {
     });
     service.step();
     service.step();
-    database.state.gateSet = closeOperationGates(database.state.gateSet, 1, [
-      "dispatch",
-    ]);
+    const status = service.status(accepted.runId);
+    if (status === undefined) throw new Error("Workload status is missing");
+    database.state.gateSet = closeOperationGates({
+      authorizationGate: "dispatch",
+      current: database.state.gateSet,
+      expectedRevision: 1,
+      gates: ["dispatch"],
+      mutationFence: prepareSyntheticMutationFence({
+        attempt: status.attempt,
+        desiredEffect: "dispatch_submit",
+        effectScopeKey: `dispatch:${status.attempt.attemptId}`,
+        expectedDesiredVersion: 1,
+        gateRevision: 1,
+        namespaceId: database.state.gateSet.namespaceId,
+        requiredGate: "dispatch",
+        supersessionKey: `dispatch:${status.attempt.attemptId}`,
+      }),
+    });
 
     expect(() => service.step()).toThrow("Operation gate is closed: dispatch");
     expect(database.state.dispatches).toHaveLength(0);
@@ -586,19 +603,35 @@ describe("safe local filesystem artifact adapter", () => {
     const root = await mkdtemp(join(tmpdir(), "workload-funnel-phase1-"));
     try {
       const writer = createLocalFilesystemArtifactWriter(root);
+      const command = (
+        attemptId: string,
+        path: string,
+        content: string,
+        openGates: ReadonlySet<string> = new Set(["result_finalize"]),
+      ) =>
+        createSyntheticArtifactFinalizeCommand({
+          attemptId,
+          content,
+          executionGeneration: "generation-1",
+          gateRevision: 1,
+          namespaceId: "test://phase1/walking-slice",
+          openGates,
+          path,
+        });
       const path = await writer.write(
-        "attempt-1",
-        "nested/result.txt",
-        "synthetic\n",
+        command("attempt-1", "nested/result.txt", "synthetic\n"),
       );
       expect(await readFile(path, "utf8")).toBe("synthetic\n");
       await expect(
-        writer.write("attempt-1", "../escape", "no"),
+        writer.write(command("attempt-closed", "blocked.txt", "no", new Set())),
+      ).rejects.toThrow("superseded_by_gate");
+      await expect(
+        writer.write(command("attempt-1", "../escape", "no")),
       ).rejects.toThrow(UnsafeArtifactPathError);
 
       await symlink("/tmp", join(root, "attempt-link"));
       await expect(
-        writer.write("attempt-link", "escaped.txt", "no"),
+        writer.write(command("attempt-link", "escaped.txt", "no")),
       ).rejects.toThrow();
     } finally {
       await rm(root, { force: true, recursive: true });

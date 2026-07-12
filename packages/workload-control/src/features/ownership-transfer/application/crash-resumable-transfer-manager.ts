@@ -3,6 +3,10 @@ import type {
   NamespaceOwnershipService,
 } from "@workload-funnel/workload-control/namespace-ownership";
 import {
+  type MutationFence,
+  validateMutationFence,
+} from "@workload-funnel/kernel";
+import {
   closeOperationGates,
   type OperationGateSet,
 } from "@workload-funnel/workload-control/operation-gating";
@@ -35,6 +39,7 @@ export interface OwnershipTransferEnvironment {
     coordinator: OwnershipTransferCoordinator,
     authorityId: string,
     targetEpoch: number,
+    mutationFence: MutationFence,
   ): AuthorityInstallAcknowledgement;
   disableOldCredentials(coordinator: OwnershipTransferCoordinator): string;
   reconcileAtNewEpoch(coordinator: OwnershipTransferCoordinator): string;
@@ -52,6 +57,7 @@ export interface CrashResumableOwnershipTransferManager {
       targetWriterId: string;
       targetWriterRelease: string;
       authorityIds: readonly string[];
+      mutationFence: MutationFence;
     }>,
   ): OwnershipTransferCoordinator;
   resume(operationId: string): OwnershipTransferCoordinator;
@@ -89,8 +95,10 @@ export function createCrashResumableOwnershipTransferManager(
         targetWriterId: string;
         targetWriterRelease: string;
         authorityIds: readonly string[];
+        mutationFence: MutationFence;
       }>,
     ) {
+      validateMutationFence(input.mutationFence);
       const aggregate = ownership.get(input.namespaceId);
       if (aggregate === undefined)
         throw new Error("namespace_ownership_not_found");
@@ -99,6 +107,7 @@ export function createCrashResumableOwnershipTransferManager(
         input.operationId,
         input.targetWriterId,
         input.authorityIds,
+        input.mutationFence,
       );
       return coordinators.create(
         createOwnershipTransferCoordinator({
@@ -107,6 +116,7 @@ export function createCrashResumableOwnershipTransferManager(
           namespaceId: input.namespaceId,
           operationId: input.operationId,
           ownershipVersion: pending.version,
+          mutationFence: input.mutationFence,
           targetWriterId: input.targetWriterId,
           targetWriterRelease: input.targetWriterRelease,
         }),
@@ -119,6 +129,7 @@ export function createCrashResumableOwnershipTransferManager(
       let evidenceDigest: string;
       let ownershipVersion = before.ownershipVersion;
       let gateRevision = before.gateRevision;
+      let mutationFence = before.mutationFence;
       switch (next) {
         case "gates_closed": {
           const gates = environment.getGateSet(before.namespaceId);
@@ -127,13 +138,20 @@ export function createCrashResumableOwnershipTransferManager(
           );
           const closed = alreadyClosed
             ? gates
-            : closeOperationGates(
-                gates,
-                gates.revision,
-                ownershipTransferGates,
-              );
+            : closeOperationGates({
+                authorizationGate: "process_start",
+                current: gates,
+                expectedRevision: gates.revision,
+                gates: ownershipTransferGates,
+                mutationFence: before.mutationFence,
+              });
           if (!alreadyClosed) environment.saveGateSet(closed);
           gateRevision = closed.revision;
+          mutationFence = Object.freeze({
+            ...before.mutationFence,
+            operationGateRevision: closed.revision,
+          });
+          validateMutationFence(mutationFence);
           evidenceDigest = `gate-revision:${String(closed.revision)}`;
           break;
         }
@@ -148,8 +166,14 @@ export function createCrashResumableOwnershipTransferManager(
             before.namespaceId,
             before.operationId,
             before.targetWriterRelease,
+            before.mutationFence,
           );
           ownershipVersion = advanced.version;
+          mutationFence = Object.freeze({
+            ...before.mutationFence,
+            namespaceWriterEpoch: advanced.writerEpoch,
+          });
+          validateMutationFence(mutationFence);
           evidenceDigest = `writer-epoch:${String(advanced.writerEpoch)}`;
           break;
         }
@@ -163,11 +187,13 @@ export function createCrashResumableOwnershipTransferManager(
               before,
               authorityId,
               aggregate.writerEpoch,
+              before.mutationFence,
             );
             aggregate = ownership.acknowledge(
               before.namespaceId,
               before.operationId,
               acknowledgement,
+              before.mutationFence,
             );
             digests.push(acknowledgement.tupleFingerprint);
           }
@@ -182,6 +208,7 @@ export function createCrashResumableOwnershipTransferManager(
           const completed = ownership.complete(
             before.namespaceId,
             before.operationId,
+            before.mutationFence,
           );
           ownershipVersion = completed.version;
           evidenceDigest = environment.reconcileAtNewEpoch(before);
@@ -197,6 +224,11 @@ export function createCrashResumableOwnershipTransferManager(
             : environment.reopenApprovedGates(before, currentGates);
           if (!alreadyReopened) environment.saveGateSet(reopened);
           gateRevision = reopened.revision;
+          mutationFence = Object.freeze({
+            ...before.mutationFence,
+            operationGateRevision: reopened.revision,
+          });
+          validateMutationFence(mutationFence);
           evidenceDigest = `gate-revision:${String(reopened.revision)}`;
           break;
         }
@@ -212,12 +244,17 @@ export function createCrashResumableOwnershipTransferManager(
           evidenceDigest,
           ownershipVersion,
           gateRevision,
+          mutationFence,
         ),
       );
     },
     abortBeforeEpochCas(operationId: string, evidenceDigest: string) {
       const before = current(operationId);
-      const aggregate = ownership.abort(before.namespaceId, before.operationId);
+      const aggregate = ownership.abort(
+        before.namespaceId,
+        before.operationId,
+        before.mutationFence,
+      );
       return persist(
         before,
         advanceOwnershipTransferCoordinator(
@@ -226,6 +263,7 @@ export function createCrashResumableOwnershipTransferManager(
           evidenceDigest,
           aggregate.version,
           before.gateRevision,
+          before.mutationFence,
         ),
       );
     },
