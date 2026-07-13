@@ -1,0 +1,28 @@
+{
+  "name": "@workload-funnel/observability",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Structured telemetry, audit export, and redaction adapters for WorkloadFunnel",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/workload-control": "workspace:*"
+  },
+  "exports": {
+    "./audit-export": {
+      "types": "./dist/features/audit-export/index.d.ts",
+      "import": "./dist/features/audit-export/index.js"
+    },
+    "./redaction-policy": {
+      "types": "./dist/features/redaction-policy/index.d.ts",
+      "import": "./dist/features/redaction-policy/index.js"
+    },
+    "./telemetry-export": {
+      "types": "./dist/features/telemetry-export/index.d.ts",
+      "import": "./dist/features/telemetry-export/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

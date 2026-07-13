@@ -11,6 +11,11 @@ import type {
   OutboxMessage,
   StatusProjection,
 } from "@workload-funnel/workload-control/control-event-delivery";
+import {
+  createInMemoryPublicEventFeed,
+  type PublicEventFeed,
+  type PublicConsumerRegistration,
+} from "@workload-funnel/workload-control/control-event-delivery";
 import type {
   Dispatch,
   DispatchMapping,
@@ -34,12 +39,35 @@ import type {
   Workload,
 } from "@workload-funnel/workload-control/workload-lifecycle";
 
+import {
+  createSyntheticErasureLedger,
+  type SyntheticErasureLedger,
+} from "./synthetic-erasure-ledger.js";
+
 export interface SyntheticArtifactWriter {
   readonly root: string;
   write(command: ArtifactFinalizeCommand): string;
 }
 
 export type SyntheticDatabaseProfile = "postgres" | "sqlite";
+
+export interface SyntheticPhase5Operation {
+  readonly operationId: string;
+  readonly idempotencyKey: string;
+  readonly state:
+    | "accepted"
+    | "completed"
+    | "pending_legal_hold"
+    | "reconciliation_required";
+  readonly auditId: string;
+  readonly duplicate: boolean;
+}
+
+export interface SyntheticConsumerAcknowledgement {
+  readonly consumerId: string;
+  readonly through: Readonly<{ streamPosition: number; eventId: string }>;
+  readonly registration: PublicConsumerRegistration;
+}
 
 export interface DurableState {
   readonly schemaTables: readonly string[];
@@ -53,6 +81,7 @@ export interface DurableState {
   operationById: Map<string, OperationStatus>;
   cancelOperationByRun: Map<string, string>;
   cancellationReceiptByOperation: Map<string, CancellationReceipt>;
+  lifecycleErasureByOperation: Map<string, number>;
   allocations: Map<string, Allocation>;
   allocationByAttempt: Map<string, string>;
   releaseReceipts: Map<string, AllocationReleaseReceipt>;
@@ -84,12 +113,26 @@ export interface DurableState {
   rejectNextAttachment: boolean;
   failAttachmentRejection: "none" | "before-commit" | "after-commit";
   lockTrace: string[];
+  publicEventFeed: PublicEventFeed;
+  publicEventIds: Set<string>;
+  phase5OperationByKey: Map<string, SyntheticPhase5Operation>;
+  phase5OperationDigestByKey: Map<string, string>;
+  phase5MutationDigestByKey: Map<string, string>;
+  phase5CanonicalOperationByPublicId: Map<string, string>;
+  phase5PublicOperationByCanonicalId: Map<string, string>;
+  legalHoldSubjects: Set<string>;
+  erasureLedgerSequence: number;
+  erasedSubjectPseudonyms: Map<string, string>;
+  phase5ConsumerByOperation: Map<string, PublicConsumerRegistration>;
+  phase5ConsumerRegistrationDigestByOperation: Map<string, string>;
+  phase5ConsumerAckByOperation: Map<string, SyntheticConsumerAcknowledgement>;
 }
 
 export interface SyntheticDatabase {
   readonly profile: SyntheticDatabaseProfile;
   readonly state: DurableState;
   readonly artifacts: SyntheticArtifactWriter;
+  readonly erasureLedger: SyntheticErasureLedger;
 }
 
 function createState(): DurableState {
@@ -110,19 +153,31 @@ function createState(): DurableState {
     dispatches: new Map(),
     executionByDispatch: new Map(),
     executions: new Map(),
+    erasedSubjectPseudonyms: new Map(),
     failAttachmentRejection: "none",
     gateSet: openSyntheticTestGates(createClosedGateSet(namespaceId), 0),
     inbox: new Map(),
     lockTrace: [],
     localDispatchEffects: new Map(),
     localDispatchHighWatermarks: new Map(),
+    lifecycleErasureByOperation: new Map(),
     manifestByAttempt: new Map(),
     manifests: new Map(),
     mappings: new Map(),
     operationById: new Map(),
     outbox: new Map(),
     ownershipTransfers: new Map(),
+    phase5OperationByKey: new Map(),
+    phase5OperationDigestByKey: new Map(),
+    phase5MutationDigestByKey: new Map(),
+    phase5CanonicalOperationByPublicId: new Map(),
+    phase5PublicOperationByCanonicalId: new Map(),
+    phase5ConsumerByOperation: new Map(),
+    phase5ConsumerRegistrationDigestByOperation: new Map(),
+    phase5ConsumerAckByOperation: new Map(),
     projections: new Map(),
+    publicEventFeed: createInMemoryPublicEventFeed(),
+    publicEventIds: new Set(),
     queuedCount: 0,
     rejectNextAttachment: false,
     releaseReceipts: new Map(),
@@ -160,6 +215,8 @@ function createState(): DurableState {
     sequence: 0,
     terminalIntentAttempts: new Set(),
     terminalReleaseAttempts: new Set(),
+    legalHoldSubjects: new Set(),
+    erasureLedgerSequence: 0,
     workloadById: new Map(),
   };
 }
@@ -172,9 +229,11 @@ export function createSyntheticDatabase(
       throw new Error("No filesystem artifact provider is configured");
     },
   }),
+  erasureLedger: SyntheticErasureLedger = createSyntheticErasureLedger(),
 ): SyntheticDatabase {
   return Object.freeze({
     artifacts,
+    erasureLedger,
     profile,
     state: createState(),
   });

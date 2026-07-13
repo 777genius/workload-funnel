@@ -4,6 +4,9 @@
     "baseUrl": ".",
     "noEmit": true,
     "paths": {
+      "@workload-funnel/client-sdk/*": [
+        "packages/client-sdk/src/features/*/index.ts"
+      ],
       "@workload-funnel/artifact-store-filesystem/*": [
         "packages/artifact-store-filesystem/src/features/*/index.ts"
       ],
@@ -28,6 +31,9 @@
       ],
       "@workload-funnel/node-launcher/*": [
         "apps/node-launcher/src/features/*/index.ts"
+      ],
+      "@workload-funnel/observability/*": [
+        "packages/observability/src/features/*/index.ts"
       ],
       "@workload-funnel/result-sealer/*": [
         "apps/result-sealer/src/features/*/index.ts"

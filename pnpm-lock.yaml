@@ -44,6 +44,9 @@ importers:
       '@workload-funnel/dispatcher-local':
         specifier: workspace:*
         version: link:../../packages/dispatcher-local
+      '@workload-funnel/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@workload-funnel/store-postgres':
         specifier: workspace:*
         version: link:../../packages/store-postgres
@@ -71,6 +74,12 @@ importers:
       '@workload-funnel/node-execution':
         specifier: workspace:*
         version: link:../../packages/node-execution
+
+  apps/operator-cli:
+    dependencies:
+      '@workload-funnel/client-sdk':
+        specifier: workspace:*
+        version: link:../../packages/client-sdk
 
   apps/result-sealer:
     dependencies:
@@ -105,6 +114,12 @@ importers:
         specifier: workspace:*
         version: link:../workload-control
 
+  packages/client-sdk:
+    dependencies:
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
+
   packages/dispatcher-local:
     dependencies:
       '@workload-funnel/kernel':
@@ -130,6 +145,12 @@ importers:
       '@workload-funnel/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
+
+  packages/observability:
+    dependencies:
       '@workload-funnel/workload-control':
         specifier: workspace:*
         version: link:../workload-control

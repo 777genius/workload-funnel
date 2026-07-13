@@ -88,7 +88,10 @@ export function createSqliteLifecycleRepository(
       const run = state.runById.get(runId);
       if (run === undefined) throw new Error("Run does not exist");
       const prior = state.cancellationReceiptByOperation.get(operationId);
-      if (prior !== undefined) return prior;
+      if (prior !== undefined) {
+        if (prior.runId !== runId) throw new Error("idempotency_key_conflict");
+        return prior;
+      }
       const terminal = run.terminalOutcome !== undefined;
       if (!terminal) {
         state.runById.set(
@@ -133,6 +136,33 @@ export function createSqliteLifecycleRepository(
       });
       state.cancellationReceiptByOperation.set(operationId, receipt);
       return receipt;
+    },
+    erasePrincipalReferences(command) {
+      const prior = state.lifecycleErasureByOperation.get(command.operationId);
+      if (prior !== undefined) return prior;
+      let changed = 0;
+      for (const [workloadId, workload] of state.workloadById) {
+        if (
+          workload.tenantId !== command.tenantId ||
+          workload.principalId !== command.subjectPrincipalId
+        )
+          continue;
+        state.workloadById.set(
+          workloadId,
+          Object.freeze({
+            ...workload,
+            principalId: command.pseudonym,
+            spec: Object.freeze({
+              ...workload.spec,
+              command: Object.freeze(["[erased]"]),
+              resultFiles: Object.freeze([]),
+            }),
+          }),
+        );
+        changed += 1;
+      }
+      state.lifecycleErasureByOperation.set(command.operationId, changed);
+      return changed;
     },
     findOperation: (callerScope, idempotencyKey) =>
       state.operationById.get(`submit:${callerScope}:${idempotencyKey}`),

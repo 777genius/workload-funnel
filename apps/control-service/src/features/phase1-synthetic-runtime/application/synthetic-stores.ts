@@ -190,5 +190,13 @@ export function resultStore(state: DurableState): ResultStore {
       const id = state.manifestByAttempt.get(attemptId);
       return id === undefined ? undefined : state.manifests.get(id);
     },
+    get: (resultManifestId) => state.manifests.get(resultManifestId),
+    save(manifest, expectedVersion) {
+      const prior = state.manifests.get(manifest.resultManifestId);
+      if (prior?.version !== expectedVersion)
+        throw new Error("result_version_conflict");
+      state.manifests.set(manifest.resultManifestId, manifest);
+      return manifest;
+    },
   };
 }

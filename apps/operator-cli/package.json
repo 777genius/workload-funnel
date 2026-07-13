@@ -1,0 +1,17 @@
+{
+  "name": "@workload-funnel/operator-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bounded operator CLI for WorkloadFunnel public APIs",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "workload-funnel": "./dist/features/composition/bin.js"
+  },
+  "dependencies": {
+    "@workload-funnel/client-sdk": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

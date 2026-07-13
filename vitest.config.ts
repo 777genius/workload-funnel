@@ -6,6 +6,15 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: /^@workload-funnel\/client-sdk\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/client-sdk/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
         find: /^@workload-funnel\/artifact-store-filesystem\/(.+)$/,
         replacement: fileURLToPath(
           new URL(
@@ -75,6 +84,15 @@ export default defineConfig({
         ),
       },
       {
+        find: /^@workload-funnel\/observability\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/observability/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
         find: /^@workload-funnel\/node-launcher\/(.+)$/,
         replacement: fileURLToPath(
           new URL(
@@ -126,6 +144,7 @@ export default defineConfig({
       "packages/**/src/features/**/tests/**/*.test.ts",
       "apps/**/*.test.ts",
       "tooling/architecture/**/*.test.mjs",
+      "tooling/compatibility/**/*.test.mjs",
       "tooling/phase-0-5/**/*.test.mjs",
     ],
     passWithNoTests: false,

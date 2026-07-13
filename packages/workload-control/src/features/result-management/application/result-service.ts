@@ -1,4 +1,5 @@
 import {
+  assertGateOpen,
   assertMutationFenceGateOpen,
   type OperationGateSet,
 } from "@workload-funnel/workload-control/operation-gating";
@@ -10,6 +11,10 @@ import {
 
 import type { ResultStore } from "./contracts/result-store.js";
 import type { ResultEntry, ResultManifest } from "../domain/result-manifest.js";
+import {
+  markRetentionDue,
+  prepareArtifactOperation,
+} from "../domain/result-manifest.js";
 
 function checksum(content: string): string {
   let hash = 0;
@@ -21,6 +26,13 @@ function checksum(content: string): string {
 export interface ResultManagementService {
   finalize(command: ResultFinalizeCommand): ResultManifest;
   get(attemptId: string): ResultManifest | undefined;
+  getById(resultManifestId: string): ResultManifest | undefined;
+  requestRetention(input: {
+    readonly resultManifestId: string;
+    readonly operationId: string;
+    readonly action: "archive" | "delete";
+    readonly expectedVersion?: number;
+  }): ResultManifest;
 }
 
 export interface ArtifactFinalizeCommand {
@@ -211,6 +223,32 @@ export function createResultManagementService(
       );
     },
     get: (attemptId) => store.getByAttempt(attemptId),
+    getById: (resultManifestId) => store.get(resultManifestId),
+    requestRetention(input) {
+      const manifest = store.get(input.resultManifestId);
+      if (manifest === undefined) throw new Error("not_found");
+      const prior = manifest.artifactOperation;
+      if (prior?.operationId === input.operationId) return manifest;
+      if (
+        input.expectedVersion !== undefined &&
+        manifest.version !== input.expectedVersion
+      )
+        throw new Error("result_version_conflict");
+      assertGateOpen(
+        gates(),
+        input.action === "archive" ? "result_archive" : "result_delete",
+      );
+      const due =
+        manifest.retentionState === "active"
+          ? markRetentionDue(manifest)
+          : manifest;
+      const next = prepareArtifactOperation(
+        due,
+        input.operationId,
+        input.action,
+      );
+      return store.save(next, manifest.version);
+    },
   };
   return Object.freeze(service);
 }

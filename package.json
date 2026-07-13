@@ -10,7 +10,7 @@
   },
   "scripts": {
     "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check",
-    "build": "pnpm --filter './packages/*' build",
+    "build": "pnpm --filter './packages/*' --filter './apps/operator-cli' build",
     "changeset": "changeset",
     "changeset:status": "changeset status --since=main",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm architecture:check && pnpm exports:check",

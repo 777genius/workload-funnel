@@ -1,0 +1,12 @@
+{
+  "keysetVersion": 1,
+  "keys": [
+    {
+      "keyId": "phase5-release-key-2026",
+      "algorithm": "ed25519",
+      "publicKeySpki": "MCowBQYDK2VwAyEAG2/tymT6bsVgqGsMJ7+fycrnNs1kDlqJuZR5a3Pjx7s=",
+      "notBefore": 1783900800000,
+      "notAfter": 1815436800000
+    }
+  ]
+}

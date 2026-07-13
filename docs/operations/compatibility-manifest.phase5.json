@@ -1,0 +1,78 @@
+{
+  "manifestVersion": 1,
+  "releaseId": "workload-funnel-phase5-v1",
+  "issuedAt": 1783900800000,
+  "expiresAt": 1815436800000,
+  "productionStartsEnabled": false,
+  "privilegedStartsEnabled": false,
+  "components": {
+    "databaseSchema": {
+      "readable": { "minimum": 1, "maximum": 2 },
+      "writable": { "minimum": 1, "maximum": 2 }
+    },
+    "apiSchema": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "eventSchema": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "executionTicket": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "nodeLauncherLedger": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "mutationFenceSerializer": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "mutationFenceFingerprint": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "schedulerGatewayRegistry": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "schedulerGatewayWal": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "schedulerGatewayInstallRpc": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "resultSealerRegistry": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "resultSealerWal": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "resultSealerRpc": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "systemdPropertyProfile": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    },
+    "artifactAdapterContract": {
+      "readable": { "minimum": 1, "maximum": 1 },
+      "writable": { "minimum": 1, "maximum": 1 }
+    }
+  },
+  "executionTicketKeyIds": ["phase4-synthetic-key-v1"],
+  "systemdPropertyProfiles": ["phase4c-host-survival-v1"],
+  "hyperqueue": { "enabled": false, "exactVersion": null },
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "phase5-release-key-2026",
+    "value": "TaB6zDJjxNHiyGF16ZxvA9AfeRYmXctwuBRluH+xfi7Mn6awzMHdB4mWsW4t6N5qqUj90GtBQHCUkTcZQK/YAg=="
+  }
+}

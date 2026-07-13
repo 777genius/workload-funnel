@@ -52,6 +52,7 @@ import {
 import {
   createResultManagementService,
   createResultManagementTransactionParticipant,
+  type ResultManagementService,
 } from "@workload-funnel/workload-control/result-management";
 import { createTenantAdmissionTransactionParticipant } from "@workload-funnel/workload-control/tenant-admission";
 import {
@@ -112,6 +113,17 @@ export interface Phase1SyntheticService {
   claimStore: ReconciliationClaimStore;
   ownershipTransfer: OwnershipTransferService;
   dispatchObservation(dispatchId: string): "accepted" | "canceled" | "absent";
+  result(
+    resultManifestId: string,
+  ): ReturnType<ResultManagementService["getById"]>;
+  requestRetention(
+    input: Parameters<ResultManagementService["requestRetention"]>[0],
+  ): ReturnType<ResultManagementService["requestRetention"]>;
+  erasePrincipalReferences(input: {
+    readonly operationId: string;
+    readonly subjectPrincipalId: string;
+    readonly pseudonym: string;
+  }): number;
 }
 
 export function createPhase1SyntheticService(
@@ -376,6 +388,8 @@ export function createPhase1SyntheticService(
       return true;
     }
     if (attempt.state === "queued") {
+      if (attempt.attachmentRejections > 0)
+        assertGateOpen(state.gateSet, "automatic_retry");
       const currentAllocationId = state.allocationByAttempt.get(
         attempt.attemptId,
       );
@@ -657,6 +671,8 @@ export function createPhase1SyntheticService(
     },
     claimStore: reconciliationClaims,
     dispatchObservation: (dispatchId) => dispatchObserver.observe(dispatchId),
+    erasePrincipalReferences: (input) =>
+      lifecycle.erasePrincipalReferences(principal, input),
     operationStatus: (operationId) =>
       lifecycle.operationStatus(principal, operationId),
     ownershipTransfer,
@@ -672,6 +688,8 @@ export function createPhase1SyntheticService(
     redeliver(messageId) {
       persistence.outbox.redeliver(messageId);
     },
+    requestRetention: (input) => results.requestRetention(input),
+    result: (resultManifestId) => results.getById(resultManifestId),
     reserve(runId) {
       const status = lifecycle.status(principal, runId);
       if (status === undefined) throw new Error("Run does not exist");

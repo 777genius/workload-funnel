@@ -13,8 +13,8 @@ import {
 } from "../domain/workload-records.js";
 
 export interface AuthenticatedPrincipal {
-  readonly principalId: "synthetic-principal";
-  readonly tenantId: "synthetic-tenant";
+  readonly principalId: string;
+  readonly tenantId: string;
   readonly namespaceId: string;
 }
 
@@ -41,11 +41,19 @@ export interface WorkloadLifecycleService {
     principal: AuthenticatedPrincipal,
     operationId: string,
   ): OperationStatus | undefined;
+  erasePrincipalReferences(
+    principal: AuthenticatedPrincipal,
+    input: {
+      readonly operationId: string;
+      readonly subjectPrincipalId: string;
+      readonly pseudonym: string;
+    },
+  ): number;
   applyAttempt(attempt: Attempt): void;
   applyRun(run: Run): void;
 }
 
-function validateSpec(value: unknown): asserts value is WorkloadSpec {
+function validateSpec(value: unknown): WorkloadSpec {
   if (typeof value !== "object" || value === null) {
     throw new InvalidWorkloadError("A structured WorkloadSpec is required");
   }
@@ -58,29 +66,102 @@ function validateSpec(value: unknown): asserts value is WorkloadSpec {
       "Only the trusted synthetic v1 profile is enabled",
     );
   }
-  const spec = value as WorkloadSpec;
+  const command = candidate["command"];
   if (
-    spec.command.length === 0 ||
-    spec.command.some((part) => part.length === 0)
+    !Array.isArray(command) ||
+    command.length === 0 ||
+    command.length > 128 ||
+    command.some(
+      (part) =>
+        typeof part !== "string" ||
+        part.length === 0 ||
+        part.length > 4096 ||
+        part.includes("\0"),
+    )
   ) {
     throw new InvalidWorkloadError(
       "A structured synthetic command is required",
     );
   }
-  if (spec.resources.cpuMillis <= 0 || spec.resources.memoryMiB <= 0) {
+  const commandParts = command as string[];
+  if (commandParts.reduce((total, part) => total + part.length, 0) > 65_536)
+    throw new InvalidWorkloadError(
+      "A structured synthetic command is required",
+    );
+  const resources = candidate["resources"];
+  if (typeof resources !== "object" || resources === null) {
     throw new InvalidWorkloadError("Resource requests must be positive");
   }
-  for (const result of spec.resultFiles) {
+  const resourceRecord = resources as Record<string, unknown>;
+  const cpuMillis = resourceRecord["cpuMillis"];
+  const memoryMiB = resourceRecord["memoryMiB"];
+  if (
+    typeof cpuMillis !== "number" ||
+    typeof memoryMiB !== "number" ||
+    !Number.isSafeInteger(cpuMillis) ||
+    !Number.isSafeInteger(memoryMiB) ||
+    cpuMillis <= 0 ||
+    memoryMiB <= 0 ||
+    cpuMillis > 1_000_000_000 ||
+    memoryMiB > 1_000_000_000
+  )
+    throw new InvalidWorkloadError("Resource requests must be positive");
+  const syntheticOutcome = candidate["syntheticOutcome"];
+  if (
+    typeof syntheticOutcome !== "string" ||
+    !["succeeded", "failed", "canceled"].includes(syntheticOutcome)
+  )
+    throw new InvalidWorkloadError("Synthetic outcome is not supported");
+  const resultFiles = candidate["resultFiles"];
+  if (!Array.isArray(resultFiles) || resultFiles.length > 256)
+    throw new InvalidWorkloadError("Synthetic results exceed the file limit");
+  let resultBytes = 0;
+  for (const result of resultFiles) {
     if (
-      result.path.length === 0 ||
-      result.path.startsWith("/") ||
-      result.path.split("/").includes("..")
+      typeof result !== "object" ||
+      result === null ||
+      Array.isArray(result)
     ) {
       throw new InvalidWorkloadError(
         "Result paths must remain inside the synthetic root",
       );
     }
+    const resultRecord = result as Record<string, unknown>;
+    const path = resultRecord["path"];
+    const content = resultRecord["content"];
+    if (
+      typeof path !== "string" ||
+      typeof content !== "string" ||
+      path.length === 0 ||
+      path.length > 512 ||
+      path.startsWith("/") ||
+      path.split("/").includes("..") ||
+      path.includes("\0") ||
+      content.length > 1_048_576
+    )
+      throw new InvalidWorkloadError(
+        "Result paths must remain inside the synthetic root",
+      );
+    resultBytes += content.length;
+    if (resultBytes > 8_388_608)
+      throw new InvalidWorkloadError("Synthetic result bytes exceed the limit");
   }
+  return Object.freeze({
+    command: Object.freeze([...commandParts]),
+    processProfile: "trusted-synthetic-v1",
+    resources: Object.freeze({ cpuMillis, memoryMiB }),
+    resultFiles: Object.freeze(
+      resultFiles.map((result) => {
+        const record = result as Record<string, unknown>;
+        return Object.freeze({
+          content: record["content"] as string,
+          path: record["path"] as string,
+        });
+      }),
+    ),
+    schemaVersion: 1,
+    syntheticOutcome: syntheticOutcome as WorkloadSpec["syntheticOutcome"],
+  });
 }
 
 function digestSpec(spec: WorkloadSpec): string {
@@ -99,7 +180,7 @@ export function createWorkloadLifecycleService(
 ): WorkloadLifecycleService {
   const service: WorkloadLifecycleService = {
     submit(principal, command) {
-      validateSpec(command.spec);
+      const spec = validateSpec(command.spec);
       const callerScope = `${principal.namespaceId}:${principal.principalId}`;
       const prior = repository.findOperation(
         callerScope,
@@ -111,8 +192,8 @@ export function createWorkloadLifecycleService(
           idempotencyKey: command.idempotencyKey,
           principalId: principal.principalId,
           tenantId: principal.tenantId,
-          spec: command.spec,
-          specDigest: digestSpec(command.spec),
+          spec,
+          specDigest: digestSpec(spec),
         });
         return receipt;
       }
@@ -123,8 +204,8 @@ export function createWorkloadLifecycleService(
           idempotencyKey: command.idempotencyKey,
           principalId: principal.principalId,
           tenantId: principal.tenantId,
-          spec: command.spec,
-          specDigest: digestSpec(command.spec),
+          spec,
+          specDigest: digestSpec(spec),
         }),
       );
     },
@@ -137,6 +218,12 @@ export function createWorkloadLifecycleService(
     status: (_principal, runId) => repository.getStatus(runId),
     operationStatus: (_principal, operationId) =>
       repository.getOperation(operationId),
+    erasePrincipalReferences(principal, input) {
+      return repository.erasePrincipalReferences({
+        ...input,
+        tenantId: principal.tenantId,
+      });
+    },
     applyAttempt: (attempt) => {
       repository.saveAttempt(attempt);
     },

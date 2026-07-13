@@ -1,0 +1,40 @@
+{
+  "name": "@workload-funnel/client-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stable TypeScript client contracts for WorkloadFunnel",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/workload-control": "workspace:*"
+  },
+  "exports": {
+    "./capacity-observation": {
+      "types": "./dist/features/capacity-observation/index.d.ts",
+      "import": "./dist/features/capacity-observation/index.js"
+    },
+    "./event-subscription": {
+      "types": "./dist/features/event-subscription/index.d.ts",
+      "import": "./dist/features/event-subscription/index.js"
+    },
+    "./result-access": {
+      "types": "./dist/features/result-access/index.d.ts",
+      "import": "./dist/features/result-access/index.js"
+    },
+    "./workload-cancellation": {
+      "types": "./dist/features/workload-cancellation/index.d.ts",
+      "import": "./dist/features/workload-cancellation/index.js"
+    },
+    "./workload-observation": {
+      "types": "./dist/features/workload-observation/index.d.ts",
+      "import": "./dist/features/workload-observation/index.js"
+    },
+    "./workload-submission": {
+      "types": "./dist/features/workload-submission/index.d.ts",
+      "import": "./dist/features/workload-submission/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

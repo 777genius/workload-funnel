@@ -30,6 +30,12 @@ export interface LifecycleRepository {
   saveAttempt(attempt: Attempt): void;
   saveRun(run: Run): void;
   getWorkload(workloadId: string): Workload | undefined;
+  erasePrincipalReferences(input: {
+    readonly operationId: string;
+    readonly tenantId: string;
+    readonly subjectPrincipalId: string;
+    readonly pseudonym: string;
+  }): number;
 }
 
 export interface LifecyclePersistenceState {
@@ -42,6 +48,7 @@ export interface LifecyclePersistenceState {
   readonly operationById: Map<string, OperationStatus>;
   readonly cancelOperationByRun: Map<string, string>;
   readonly cancellationReceiptByOperation: Map<string, CancellationReceipt>;
+  readonly lifecycleErasureByOperation: Map<string, number>;
 }
 
 export interface LifecyclePersistenceHooks {

@@ -7,6 +7,7 @@
   "dependencies": {
     "@workload-funnel/artifact-store-filesystem": "workspace:*",
     "@workload-funnel/dispatcher-local": "workspace:*",
+    "@workload-funnel/observability": "workspace:*",
     "@workload-funnel/store-postgres": "workspace:*",
     "@workload-funnel/store-sqlite": "workspace:*",
     "@workload-funnel/workload-control": "workspace:*"
