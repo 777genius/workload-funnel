@@ -3,7 +3,7 @@ export interface SpooledObservation {
   readonly eventId: string;
   readonly executionGeneration: string;
   readonly executionId: string;
-  readonly kind: "observation" | "terminal_result";
+  readonly kind: "observation" | "result_staged" | "terminal_result";
   readonly nodeId: string;
   readonly observedAtMs: number;
   readonly payloadDigest: string;

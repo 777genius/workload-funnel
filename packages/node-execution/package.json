@@ -6,7 +6,8 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@workload-funnel/kernel": "workspace:*"
+    "@workload-funnel/kernel": "workspace:*",
+    "@workload-funnel/workload-control": "workspace:*"
   },
   "exports": {
     "./execution-ticket-validation": {
@@ -17,6 +18,10 @@
       "types": "./dist/features/observation-spooling/index.d.ts",
       "import": "./dist/features/observation-spooling/index.js"
     },
+    "./local-receipt-recovery": {
+      "types": "./dist/features/local-receipt-recovery/index.d.ts",
+      "import": "./dist/features/local-receipt-recovery/index.js"
+    },
     "./process-lifecycle": {
       "types": "./dist/features/process-lifecycle/index.d.ts",
       "import": "./dist/features/process-lifecycle/index.js"
@@ -24,6 +29,14 @@
     "./resource-enforcement": {
       "types": "./dist/features/resource-enforcement/index.d.ts",
       "import": "./dist/features/resource-enforcement/index.js"
+    },
+    "./result-sealing-coordination": {
+      "types": "./dist/features/result-sealing-coordination/index.d.ts",
+      "import": "./dist/features/result-sealing-coordination/index.js"
+    },
+    "./result-staging-reporting": {
+      "types": "./dist/features/result-staging-reporting/index.d.ts",
+      "import": "./dist/features/result-staging-reporting/index.js"
     }
   },
   "scripts": {

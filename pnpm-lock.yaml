@@ -72,11 +72,35 @@ importers:
         specifier: workspace:*
         version: link:../../packages/node-execution
 
+  apps/result-sealer:
+    dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+      '@workload-funnel/node-execution':
+        specifier: workspace:*
+        version: link:../../packages/node-execution
+
   packages/artifact-store-filesystem:
     dependencies:
       '@workload-funnel/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@workload-funnel/node-execution':
+        specifier: workspace:*
+        version: link:../node-execution
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
+
+  packages/artifact-store-object:
+    dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@workload-funnel/node-execution':
+        specifier: workspace:*
+        version: link:../node-execution
       '@workload-funnel/workload-control':
         specifier: workspace:*
         version: link:../workload-control
@@ -106,6 +130,9 @@ importers:
       '@workload-funnel/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
 
   packages/store-postgres:
     dependencies:

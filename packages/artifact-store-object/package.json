@@ -1,8 +1,8 @@
 {
-  "name": "@workload-funnel/artifact-store-filesystem",
+  "name": "@workload-funnel/artifact-store-object",
   "version": "0.1.0",
   "private": true,
-  "description": "Safe local filesystem artifact adapters for WorkloadFunnel",
+  "description": "Production object-store artifact contracts without provider coupling",
   "license": "MIT",
   "type": "module",
   "dependencies": {
@@ -15,9 +15,9 @@
       "types": "./dist/features/retention-delete/index.d.ts",
       "import": "./dist/features/retention-delete/index.js"
     },
-    "./stage-write": {
-      "types": "./dist/features/stage-write/index.d.ts",
-      "import": "./dist/features/stage-write/index.js"
+    "./stage-upload": {
+      "types": "./dist/features/stage-upload/index.d.ts",
+      "import": "./dist/features/stage-upload/index.js"
     },
     "./verify-finalize": {
       "types": "./dist/features/verify-finalize/index.d.ts",

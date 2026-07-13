@@ -1,10 +1,13 @@
 // Pure filesystem adapter; it owns no result policy or lifecycle transition.
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { lstat, mkdir, realpath, writeFile } from "node:fs/promises";
 import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +19,12 @@ import {
   type MutationFence,
   validateMutationFence,
 } from "@workload-funnel/kernel";
-import type { ArtifactFinalizeCommand } from "@workload-funnel/workload-control/result-management";
+import type {
+  ArtifactFinalizeCommand,
+  ArtifactProvider,
+  ArtifactVerificationCommand,
+  ArtifactVerificationReceipt,
+} from "@workload-funnel/workload-control/result-management";
 
 export type { ArtifactFinalizeCommand } from "@workload-funnel/workload-control/result-management";
 
@@ -198,4 +206,93 @@ export function createDisposableSynchronousArtifactWriter(
     },
   };
   return Object.freeze(writer);
+}
+
+export interface FilesystemVerifyFinalizeConfig {
+  readonly nativeHelperPath: string;
+  readonly root: string;
+  readonly nowMs?: () => number;
+}
+
+export function createProvider(
+  config: FilesystemVerifyFinalizeConfig,
+): ArtifactProvider {
+  const root = resolve(config.root);
+  const nowMs = config.nowMs ?? Date.now;
+  const metadata = statSync(root, { bigint: true });
+  const rootPin = [metadata.dev.toString(), metadata.ino.toString()];
+  const invoke = (args: readonly string[]): string => {
+    const result = spawnSync(config.nativeHelperPath, [...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.status !== 0 || result.signal !== null)
+      throw new UnsafeArtifactPathError();
+    return result.stdout;
+  };
+  if (invoke(["probe"]).trim() !== "linux-descriptor-artifact-store-v1")
+    throw new UnsafeArtifactPathError();
+  return Object.freeze({
+    capabilities: Object.freeze(["verify_finalized_bytes"] as const),
+    providerId: "local-filesystem",
+    verify(
+      command: ArtifactVerificationCommand,
+    ): Promise<ArtifactVerificationReceipt> {
+      validateMutationFence(command.mutationFence);
+      validateMutationFence(command.stagingMutationFence);
+      if (
+        command.mutationFence.desiredEffect !== "artifact_finalize" ||
+        command.mutationFence.requiredGate !== "result_finalize" ||
+        command.mutationFence.effectScopeKey !==
+          `result-finalize:${command.resultManifestId}` ||
+        command.stagingMutationFenceFingerprint !==
+          fingerprintMutationFence(command.stagingMutationFence) ||
+        command.stagingMutationFence.desiredEffect !== "artifact_stage" ||
+        command.stagingMutationFence.allocationId !==
+          command.mutationFence.allocationId ||
+        command.stagingMutationFence.attemptId !==
+          command.mutationFence.attemptId ||
+        command.stagingMutationFence.executionGeneration !==
+          command.mutationFence.executionGeneration ||
+        command.immutableStagingIdentity !==
+          `local-v2:${Buffer.from(command.stagingMutationFence.allocationId ?? "").toString("base64url")}:${Buffer.from(command.stagingMutationFence.executionGeneration).toString("base64url")}:${Buffer.from(command.stagingMutationFenceFingerprint).toString("base64url")}:${command.manifestDigest}`
+      )
+        throw new Error("artifact_verification_fence_mismatch");
+      const directoryName = createHash("sha256")
+        .update(command.immutableStagingIdentity)
+        .digest("hex");
+      invoke(["verify-stage", root, ...rootPin, directoryName]);
+      for (const entry of command.expectedEntries) {
+        if (
+          entry.path.startsWith("/") ||
+          entry.path
+            .split("/")
+            .some((segment) => segment === ".." || segment === "")
+        ) {
+          throw new UnsafeArtifactPathError();
+        }
+        invoke([
+          "verify-file",
+          root,
+          ...rootPin,
+          directoryName,
+          entry.path,
+          entry.checksum,
+          String(entry.sizeBytes),
+        ]);
+      }
+      return Promise.resolve(
+        Object.freeze({
+          immutableStagingIdentity: command.immutableStagingIdentity,
+          manifestDigest: command.manifestDigest,
+          operationId: command.operationId,
+          providerId: "local-filesystem",
+          resultManifestId: command.resultManifestId,
+          status: "verified",
+          verifiedAtMs: nowMs(),
+          verifiedEntries: Object.freeze([...command.expectedEntries]),
+        }),
+      );
+    },
+  });
 }

@@ -15,6 +15,15 @@ export default defineConfig({
         ),
       },
       {
+        find: /^@workload-funnel\/artifact-store-object\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/artifact-store-object/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
         find: /^@workload-funnel\/control-service\/(.+)$/,
         replacement: fileURLToPath(
           new URL(
@@ -70,6 +79,15 @@ export default defineConfig({
         replacement: fileURLToPath(
           new URL(
             "./apps/node-launcher/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/result-sealer\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./apps/result-sealer/src/features/$1/index.ts",
             import.meta.url,
           ),
         ),

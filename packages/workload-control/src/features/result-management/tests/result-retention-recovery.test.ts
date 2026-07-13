@@ -78,7 +78,7 @@ describe("Phase 2 result process manager and retention", () => {
     ).toThrow(InvalidRetentionTransitionError);
     const verified = reconcileArtifactOperation(
       markArtifactOperationUnknown(prepared),
-      "applied",
+      "verified_absent",
     );
     const tombstone = tombstoneResult(verified, {
       actorId: "retention-worker",

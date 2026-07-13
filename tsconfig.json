@@ -7,6 +7,9 @@
       "@workload-funnel/artifact-store-filesystem/*": [
         "packages/artifact-store-filesystem/src/features/*/index.ts"
       ],
+      "@workload-funnel/artifact-store-object/*": [
+        "packages/artifact-store-object/src/features/*/index.ts"
+      ],
       "@workload-funnel/control-service/*": [
         "apps/control-service/src/features/*/index.ts"
       ],
@@ -25,6 +28,9 @@
       ],
       "@workload-funnel/node-launcher/*": [
         "apps/node-launcher/src/features/*/index.ts"
+      ],
+      "@workload-funnel/result-sealer/*": [
+        "apps/result-sealer/src/features/*/index.ts"
       ],
       "@workload-funnel/store-postgres/*": [
         "packages/store-postgres/src/features/*/index.ts"

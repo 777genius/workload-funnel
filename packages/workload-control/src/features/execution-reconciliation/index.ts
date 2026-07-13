@@ -38,3 +38,9 @@ export {
   type FenceInstallReceipt,
   type PendingFenceEffect,
 } from "./application/fence-install-issue-coordinator.js";
+export {
+  applySealOutputReceipt,
+  requestSealOutput,
+  type ExecutionWithSealOutput,
+  type SealOutputIntent,
+} from "./application/seal-output-effect.js";

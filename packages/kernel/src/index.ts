@@ -8,3 +8,4 @@ export {
   type MutationFence,
   validateMutationFence,
 } from "./mutation-fence.js";
+export { sha256Hex } from "./canonical-digest.js";

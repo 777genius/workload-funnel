@@ -1,0 +1,11 @@
+{
+  "name": "@workload-funnel/result-sealer",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/kernel": "workspace:*",
+    "@workload-funnel/node-execution": "workspace:*"
+  }
+}
