@@ -6,6 +6,15 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: /^@workload-funnel\/bridge-subscription-runtime\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/bridge-subscription-runtime/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
         find: /^@workload-funnel\/client-sdk\/(.+)$/,
         replacement: fileURLToPath(
           new URL(

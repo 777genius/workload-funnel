@@ -1,0 +1,41 @@
+{
+  "name": "@workload-funnel/bridge-subscription-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Versioned subscription-runtime bridge for node-owned agent execution",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/kernel": "workspace:*",
+    "@workload-funnel/node-execution": "workspace:*"
+  },
+  "exports": {
+    "./execution-ticket-preparation": {
+      "types": "./dist/features/execution-ticket-preparation/index.d.ts",
+      "import": "./dist/features/execution-ticket-preparation/index.js"
+    },
+    "./runtime-capability-discovery": {
+      "types": "./dist/features/runtime-capability-discovery/index.d.ts",
+      "import": "./dist/features/runtime-capability-discovery/index.js"
+    },
+    "./runtime-event-consumption": {
+      "types": "./dist/features/runtime-event-consumption/index.d.ts",
+      "import": "./dist/features/runtime-event-consumption/index.js"
+    },
+    "./runtime-operation-dispatch": {
+      "types": "./dist/features/runtime-operation-dispatch/index.d.ts",
+      "import": "./dist/features/runtime-operation-dispatch/index.js"
+    },
+    "./runtime-operation-reconciliation": {
+      "types": "./dist/features/runtime-operation-reconciliation/index.d.ts",
+      "import": "./dist/features/runtime-operation-reconciliation/index.js"
+    },
+    "./runtime-result-translation": {
+      "types": "./dist/features/runtime-result-translation/index.d.ts",
+      "import": "./dist/features/runtime-result-translation/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

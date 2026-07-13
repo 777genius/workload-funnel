@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "declaration": true,
+    "outDir": "dist",
+    "paths": {
+      "@workload-funnel/kernel": ["packages/kernel/dist/index.d.ts"],
+      "@workload-funnel/node-execution/*": [
+        "packages/node-execution/dist/features/*/index.d.ts"
+      ]
+    },
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/tests/**/*.ts"]
+}
