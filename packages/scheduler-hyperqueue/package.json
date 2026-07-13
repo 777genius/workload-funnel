@@ -1,0 +1,50 @@
+{
+  "name": "@workload-funnel/scheduler-hyperqueue",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional fail-closed HyperQueue scheduler adapter",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/kernel": "workspace:*",
+    "@workload-funnel/node-execution": "workspace:*",
+    "@workload-funnel/workload-control": "workspace:*"
+  },
+  "exports": {
+    "./capability-discovery": {
+      "types": "./dist/features/capability-discovery/index.d.ts",
+      "import": "./dist/features/capability-discovery/index.js"
+    },
+    "./dispatch-cancellation": {
+      "types": "./dist/features/dispatch-cancellation/index.d.ts",
+      "import": "./dist/features/dispatch-cancellation/index.js"
+    },
+    "./dispatch-observation": {
+      "types": "./dist/features/dispatch-observation/index.d.ts",
+      "import": "./dist/features/dispatch-observation/index.js"
+    },
+    "./dispatch-submission": {
+      "types": "./dist/features/dispatch-submission/index.d.ts",
+      "import": "./dist/features/dispatch-submission/index.js"
+    },
+    "./hyperqueue-cli-mutation": {
+      "types": "./dist/features/hyperqueue-cli-mutation/index.d.ts",
+      "import": "./dist/features/hyperqueue-cli-mutation/index.js"
+    },
+    "./hyperqueue-reconciliation": {
+      "types": "./dist/features/hyperqueue-reconciliation/index.d.ts",
+      "import": "./dist/features/hyperqueue-reconciliation/index.js"
+    },
+    "./mutation-gateway-authority": {
+      "types": "./dist/features/mutation-gateway-authority/index.d.ts",
+      "import": "./dist/features/mutation-gateway-authority/index.js"
+    },
+    "./worker-inventory": {
+      "types": "./dist/features/worker-inventory/index.d.ts",
+      "import": "./dist/features/worker-inventory/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

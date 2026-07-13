@@ -1,0 +1,37 @@
+{
+  "name": "@workload-funnel/scheduler-mutation-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sole-credential final HyperQueue mutation authority",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@workload-funnel/kernel": "workspace:*",
+    "@workload-funnel/scheduler-hyperqueue": "workspace:*"
+  },
+  "exports": {
+    "./authority-installation": {
+      "types": "./dist/features/authority-installation/index.d.ts",
+      "import": "./dist/features/authority-installation/index.js"
+    },
+    "./authority-registry": {
+      "types": "./dist/features/authority-registry/index.d.ts",
+      "import": "./dist/features/authority-registry/index.js"
+    },
+    "./composition": {
+      "types": "./dist/features/composition/index.d.ts",
+      "import": "./dist/features/composition/index.js"
+    },
+    "./hyperqueue-mutation-boundary": {
+      "types": "./dist/features/hyperqueue-mutation-boundary/index.d.ts",
+      "import": "./dist/features/hyperqueue-mutation-boundary/index.js"
+    },
+    "./recovery": {
+      "types": "./dist/features/recovery/index.d.ts",
+      "import": "./dist/features/recovery/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

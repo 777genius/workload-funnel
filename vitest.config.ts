@@ -120,6 +120,24 @@ export default defineConfig({
         ),
       },
       {
+        find: /^@workload-funnel\/scheduler-hyperqueue\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./packages/scheduler-hyperqueue/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
+        find: /^@workload-funnel\/scheduler-mutation-gateway\/(.+)$/,
+        replacement: fileURLToPath(
+          new URL(
+            "./apps/scheduler-mutation-gateway/src/features/$1/index.ts",
+            import.meta.url,
+          ),
+        ),
+      },
+      {
         find: /^@workload-funnel\/store-postgres\/(.+)$/,
         replacement: fileURLToPath(
           new URL(

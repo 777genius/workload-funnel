@@ -4,7 +4,8 @@ export interface Dispatch {
   readonly dispatchId: string;
   readonly allocationId: string;
   readonly executionGeneration: string;
-  readonly adapter: "dispatcher-local";
+  readonly adapter: string;
+  readonly adapterContractVersion: number;
   readonly operationId: string;
   readonly desired: "submit" | "cancel" | "suppressed";
   readonly observed:

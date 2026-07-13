@@ -3,14 +3,17 @@ import { describe, expect, it } from "vitest";
 import {
   InvalidDispatchTransitionError,
   reconcileUnknownDispatch,
+  toExternalDispatchMutationReceipt,
   transitionDispatch,
   type Dispatch,
   type DispatchEvidence,
+  type EffectReceiptEvidence,
 } from "../index.js";
 
 function dispatch(observed: Dispatch["observed"]): Dispatch {
   return Object.freeze({
     adapter: "dispatcher-local",
+    adapterContractVersion: 1,
     allocationId: "allocation-1",
     desired: "submit",
     dispatchId: "dispatch-1",
@@ -119,5 +122,35 @@ describe("Phase 2 Dispatch state and ordered unknown reconciliation", () => {
     expect(() => transitionDispatch(dispatch("unknown"), "suppressed")).toThrow(
       InvalidDispatchTransitionError,
     );
+  });
+
+  it("maps every closed external effect outcome to its exact receipt disposition", () => {
+    const outcomes = [
+      ["applied", "accepted"],
+      ["already_applied", "already_applied"],
+      ["rejected", "rejected"],
+      ["superseded", "superseded"],
+      ["unknown", "unknown"],
+    ] as const;
+    for (const [outcome, disposition] of outcomes) {
+      const aggregate = dispatch("accepted");
+      const receipt = toExternalDispatchMutationReceipt({
+        authorityId: "gateway-1",
+        authorityRegistrySequence: 1,
+        comparisonFields: {},
+        comparisonResult: outcome,
+        effectKind: "dispatch_submit",
+        effectScopeKey: aggregate.mutationFence.effectScopeKey,
+        mutationFence: aggregate.mutationFence,
+        mutationFenceFingerprint: "fence-v1-test",
+        operationId: "submit-1",
+        outcome,
+        reason: outcome,
+      } satisfies EffectReceiptEvidence);
+      expect(receipt).toMatchObject({
+        disposition,
+        evidence: { outcome },
+      });
+    }
   });
 });

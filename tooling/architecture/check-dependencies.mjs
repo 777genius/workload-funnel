@@ -275,12 +275,16 @@ for (const path of productionFiles) {
     }
   }
   for (const specifier of importedSpecifiers(source)) {
+    const declaredHyperQueueAdapterImport =
+      specifier.startsWith("@workload-funnel/scheduler-hyperqueue/") ||
+      specifier.startsWith("@workload-funnel/scheduler-mutation-gateway/");
     if (
-      specifier === "pg" ||
-      specifier.startsWith("pg/") ||
-      forbiddenIntegrationImports.some((forbidden) =>
-        specifier.includes(forbidden),
-      )
+      !declaredHyperQueueAdapterImport &&
+      (specifier === "pg" ||
+        specifier.startsWith("pg/") ||
+        forbiddenIntegrationImports.some((forbidden) =>
+          specifier.includes(forbidden),
+        ))
     ) {
       failures.push(
         `${displayPath} imports forbidden Phase 0 integration ${specifier}`,

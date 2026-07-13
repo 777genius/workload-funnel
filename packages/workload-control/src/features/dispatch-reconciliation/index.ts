@@ -20,7 +20,14 @@ export type {
   DispatchSubmissionEvidence,
   DispatchSubmissionInput,
   DispatchSubmitter,
+  EffectReceiptEvidence,
+  EffectReceiptOutcome,
+  ExternalDispatchCapabilities,
+  ExternalDispatchCapability,
+  ExternalDispatchLimitation,
+  ExternalDispatchMutationReceipt,
 } from "./application/contracts/dispatch-adapter.js";
+export { toExternalDispatchMutationReceipt } from "./application/contracts/dispatch-adapter.js";
 export {
   createSyntheticDispatchSubmissionCommand,
   createDispatchSubmissionCommand,

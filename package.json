@@ -9,8 +9,8 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check",
-    "build": "pnpm --filter './packages/*' --filter './apps/operator-cli' build",
+    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check && node tooling/architecture/check-phase7-hyperqueue.mjs",
+    "build": "pnpm --filter './packages/*' --filter './apps/operator-cli' --filter './apps/scheduler-mutation-gateway' build",
     "changeset": "changeset",
     "changeset:status": "changeset status --since=main",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm architecture:check && pnpm exports:check",

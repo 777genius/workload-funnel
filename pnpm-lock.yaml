@@ -90,6 +90,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/node-execution
 
+  apps/scheduler-mutation-gateway:
+    dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+      '@workload-funnel/scheduler-hyperqueue':
+        specifier: workspace:*
+        version: link:../../packages/scheduler-hyperqueue
+
   packages/artifact-store-filesystem:
     dependencies:
       '@workload-funnel/kernel':
@@ -160,6 +169,18 @@ importers:
 
   packages/observability:
     dependencies:
+      '@workload-funnel/workload-control':
+        specifier: workspace:*
+        version: link:../workload-control
+
+  packages/scheduler-hyperqueue:
+    dependencies:
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@workload-funnel/node-execution':
+        specifier: workspace:*
+        version: link:../node-execution
       '@workload-funnel/workload-control':
         specifier: workspace:*
         version: link:../workload-control

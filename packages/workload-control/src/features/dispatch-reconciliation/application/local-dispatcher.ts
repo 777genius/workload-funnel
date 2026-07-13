@@ -205,6 +205,7 @@ export function createLocalDispatcher(
           });
       const dispatch: Dispatch = Object.freeze({
         adapter: "dispatcher-local",
+        adapterContractVersion: 1,
         allocationId: allocation.allocationId,
         desired: suppressed ? "suppressed" : "submit",
         dispatchId,

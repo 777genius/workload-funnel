@@ -37,6 +37,10 @@
     "./result-staging-reporting": {
       "types": "./dist/features/result-staging-reporting/index.d.ts",
       "import": "./dist/features/result-staging-reporting/index.js"
+    },
+    "./scheduler-shim-entrypoint": {
+      "types": "./dist/features/scheduler-shim-entrypoint/index.d.ts",
+      "import": "./dist/features/scheduler-shim-entrypoint/index.js"
     }
   },
   "scripts": {

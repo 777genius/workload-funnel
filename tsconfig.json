@@ -41,6 +41,12 @@
       "@workload-funnel/result-sealer/*": [
         "apps/result-sealer/src/features/*/index.ts"
       ],
+      "@workload-funnel/scheduler-hyperqueue/*": [
+        "packages/scheduler-hyperqueue/src/features/*/index.ts"
+      ],
+      "@workload-funnel/scheduler-mutation-gateway/*": [
+        "apps/scheduler-mutation-gateway/src/features/*/index.ts"
+      ],
       "@workload-funnel/store-postgres/*": [
         "packages/store-postgres/src/features/*/index.ts"
       ],
