@@ -28,6 +28,8 @@ import { createNodeHostedCanaryProcessRunner } from "./node-process-runner.mjs";
 import { createTrustedInvocationProfileResolver } from "./trusted-invocation-profile.mjs";
 
 const LIVE_OPT_IN = "WORKLOAD_FUNNEL_DISPOSABLE_CANARY_LIVE";
+const DEFAULT_CAPABILITY_OUTPUT_BYTES = 256 * 1024;
+const MAX_CAPABILITY_OUTPUT_BYTES = 2 * 1024 * 1024;
 const limitations = Object.freeze([
   "canary_only_not_production_enablement",
   "does_not_prove_real_postgres_readiness",
@@ -337,9 +339,9 @@ async function probe(parsed, project, runner, environment) {
     maxOutputBytes: boundedInteger(
       parsed.values,
       "--max-output-bytes",
-      128 * 1024,
+      DEFAULT_CAPABILITY_OUTPUT_BYTES,
       1_024,
-      2 * 1024 * 1024,
+      MAX_CAPABILITY_OUTPUT_BYTES,
     ),
     timeoutMs: boundedInteger(
       parsed.values,
@@ -448,9 +450,9 @@ async function live(
       maxOutputBytes: boundedInteger(
         parsed.values,
         "--max-output-bytes",
-        128 * 1024,
+        DEFAULT_CAPABILITY_OUTPUT_BYTES,
         1_024,
-        2 * 1024 * 1024,
+        MAX_CAPABILITY_OUTPUT_BYTES,
       ),
       probeTimeoutMs: boundedInteger(
         parsed.values,

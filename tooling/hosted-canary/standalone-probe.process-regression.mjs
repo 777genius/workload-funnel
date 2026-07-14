@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { closeSync, openSync } from "node:fs";
 import {
@@ -34,7 +35,8 @@ const toolsCatalog = JSON.stringify({
   tools: [
     {
       description:
-        "Start a detached tmux Codex goal worker after explicit confirmation.",
+        "Start a detached tmux Codex goal worker after explicit confirmation." +
+        "x".repeat(144 * 1024),
       inputSchema: {
         properties: {
           ...Object.fromEntries(
@@ -162,6 +164,8 @@ if (argv.length === 1 && argv[0] === "--help") {
 }
 
 test("the standalone hosted canary entrypoint resolves packages and probes only", async (t) => {
+  assert.ok(Buffer.byteLength(toolsCatalog) > 128 * 1024);
+  assert.ok(Buffer.byteLength(toolsCatalog) < 256 * 1024);
   const fixture = await createDisposableFixture(t);
   const stdoutPath = join(fixture.sandboxParent, "standalone-stdout.json");
   const stderrPath = join(fixture.sandboxParent, "standalone-stderr.log");
@@ -182,8 +186,6 @@ test("the standalone hosted canary entrypoint resolves packages and probes only"
         fixture.runtimeBinary,
         "--sandbox-parent",
         fixture.sandboxParent,
-        "--max-output-bytes",
-        "65536",
         "--probe-timeout-ms",
         "60000",
       ],
@@ -209,7 +211,7 @@ test("the standalone hosted canary entrypoint resolves packages and probes only"
 
   assert.equal(result.error, undefined);
   assert.equal(result.signal, null);
-  assert.equal(result.status, 0);
+  assert.equal(result.status, 0, await readFile(stderrPath, "utf8"));
   assert.equal(await readFile(stderrPath, "utf8"), "");
   const evidence = JSON.parse(await readFile(stdoutPath, "utf8"));
   assert.equal(evidence.mode, "probe");

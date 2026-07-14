@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import {
   access,
   chmod,
@@ -94,6 +95,7 @@ async function disposableFixture({
   behavior = "natural_success",
   gitConfig,
   remote = false,
+  toolsCatalogOutput = toolsCatalog,
 } = {}) {
   const sandboxParent = await mkdtemp(
     join(tmpdir(), "workload-funnel-canary-parent-"),
@@ -176,7 +178,7 @@ appendFileSync(join(root, "fake-runtime-argv.jsonl"), JSON.stringify(argv) + "\\
 if (argv.length === 1 && argv[0] === "--help") {
   writeFileSync(1, ${JSON.stringify(cliHelp)});
 } else if (argv.length === 1 && argv[0] === "tools") {
-  writeFileSync(1, ${JSON.stringify(toolsCatalog)});
+  writeFileSync(1, ${JSON.stringify(toolsCatalogOutput)});
 } else if (argv[0] === "run" && argv[1] === "--no-tmux") {
   writeFileSync(1, "RUNTIME_CREDENTIAL_SENTINEL");
   if (behavior === "timeout" || behavior === "forced_stop") {
@@ -244,6 +246,12 @@ function commonArguments(fixture) {
     "--probe-timeout-ms",
     "60000",
   ];
+}
+
+function paddedToolsCatalog(paddingBytes) {
+  const catalog = JSON.parse(toolsCatalog);
+  catalog.tools[0].description += "x".repeat(paddingBytes);
+  return JSON.stringify(catalog);
 }
 
 function liveArguments(
@@ -611,5 +619,39 @@ describe("hosted canary command", { timeout: 120_000 }, () => {
       stdout: "",
       timedOut: true,
     });
+  }, 120_000);
+
+  test("fails closed when a valid catalog exceeds the selected output bound", async () => {
+    const oversizedCatalog = paddedToolsCatalog(128 * 1024);
+    expect(Buffer.byteLength(oversizedCatalog)).toBeGreaterThan(128 * 1024);
+    const fixture = await disposableFixture({
+      toolsCatalogOutput: oversizedCatalog,
+    });
+    const arguments_ = commonArguments(fixture);
+    arguments_[arguments_.indexOf("--max-output-bytes") + 1] = String(
+      128 * 1024,
+    );
+
+    await expect(
+      runHostedCanaryCommand(["probe", ...arguments_], {}),
+    ).rejects.toThrow("hosted_canary_capability_probe_failed");
+  }, 120_000);
+
+  test("fails closed when a valid catalog exceeds the hard output cap", async () => {
+    const oversizedCatalog = paddedToolsCatalog(2 * 1024 * 1024);
+    expect(Buffer.byteLength(oversizedCatalog)).toBeGreaterThan(
+      2 * 1024 * 1024,
+    );
+    const fixture = await disposableFixture({
+      toolsCatalogOutput: oversizedCatalog,
+    });
+    const arguments_ = commonArguments(fixture);
+    arguments_[arguments_.indexOf("--max-output-bytes") + 1] = String(
+      2 * 1024 * 1024,
+    );
+
+    await expect(
+      runHostedCanaryCommand(["probe", ...arguments_], {}),
+    ).rejects.toThrow("hosted_canary_capability_probe_failed");
   }, 120_000);
 });

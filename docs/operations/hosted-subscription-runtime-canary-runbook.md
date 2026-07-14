@@ -34,7 +34,9 @@ On 2026-07-14, the read-only `--help` and `tools` interfaces of
 
 - executable wrapper: `00291604d20c7a3afa156ab73a1bef1e6d1410013c6e63dda30e213c8a6a4fa6`
 - root help: `8e25087c6b0d843226c68e194f9a784bda4ec9782b56a6d3eada36501d957f84`
+  (5,169 bytes)
 - tools catalog: `d82ba840705e54f194fe4c49bb17fadb57d6e4f121c8e14f89ac46c698e8a05e`
+  (133,306 bytes)
 
 The tools catalog describes `codex_goal_start` as starting a detached tmux
 worker. Its JSON schema uses camelCase fields including `jobId`, `jobRootDir`,
@@ -44,6 +46,11 @@ worker. Its JSON schema uses camelCase fields including `jobId`, `jobRootDir`,
 
 The canary still probes and pins all three hashes immediately before any live
 disposable run. Any difference fails closed and requires a new review.
+Capability-probe output remains bounded: the default and documented value is
+262,144 bytes of combined stdout and stderr per child, leaving 128,838 bytes of
+headroom above the reviewed tools catalog. The hard configuration cap remains
+2,097,152 bytes. Exceeding the selected bound terminates the probe process group
+and fails closed.
 
 ## Prepare the disposable project
 
@@ -132,7 +139,8 @@ pnpm canary:hosted -- probe \
   --sandbox-parent /var/tmp/workload-funnel-canaries \
   --project-root /var/tmp/workload-funnel-canaries/workload-funnel-disposable-canary-001 \
   --request /var/tmp/workload-funnel-canaries/workload-funnel-disposable-canary-001/hosted-canary-request.json \
-  --runtime-binary /usr/local/bin/subscription-runtime-codex-goal
+  --runtime-binary /usr/local/bin/subscription-runtime-codex-goal \
+  --max-output-bytes 262144
 ```
 
 Review `binarySha256`, `cliHelpSha256`, and `toolsCatalogSha256` from the JSON
@@ -156,6 +164,7 @@ WORKLOAD_FUNNEL_HOSTED_CANARY_LIVE=1 pnpm canary:hosted -- live \
   --expected-tools-catalog-sha256 REPLACE_WITH_PROBED_TOOLS_CATALOG_SHA256 \
   --evidence /var/tmp/workload-funnel-canaries/workload-funnel-disposable-canary-001/.workload-funnel-canary/state/hosted-canary-evidence.json \
   --live-opt-in WORKLOAD_FUNNEL_DISPOSABLE_CANARY_LIVE \
+  --max-output-bytes 262144 \
   --scenario natural_completion
 ```
 
