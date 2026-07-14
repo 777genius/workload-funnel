@@ -78,6 +78,8 @@ function deployedToolsCatalogFixture(useSnakeCase = false): string {
 }
 
 const binarySha = sha256Hex("fake-hosted-canary-runtime-v1");
+const brokeredStartEnvironmentKey =
+  "SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START";
 const nowMs = 10_000_000;
 const roots: string[] = [];
 
@@ -358,7 +360,10 @@ describe("hosted subscription-runtime foreground boundary", () => {
   test("launches one complete argv-only foreground child and never invokes a tool", async () => {
     const root = await temporaryRoot();
     const runner = new FakeRunner();
-    const { adapter, authorityStore } = fixture(root, runner);
+    const runtimeEnvironment = environment(root);
+    const { adapter, authorityStore } = fixture(root, runner, {
+      runtimeEnvironment,
+    });
     const fence = startFence();
     authorityStore.install(fence, fingerprintMutationFence(fence));
     await adapter.discoverCapabilities();
@@ -433,7 +438,19 @@ describe("hosted subscription-runtime foreground boundary", () => {
         processRequest.argv.includes("codex_goal_start"),
       ),
     ).toBe(false);
-    expect(call?.request.environment).toEqual(environment(root));
+    const probeCalls = runner.processCalls.filter(({ kind }) => kind === "run");
+    expect(probeCalls).toHaveLength(2);
+    for (const probeCall of probeCalls) {
+      expect(probeCall.request.environment).toEqual(runtimeEnvironment);
+      expect(
+        probeCall.request.environment[brokeredStartEnvironmentKey],
+      ).toBeUndefined();
+    }
+    expect(call?.request.environment).toEqual({
+      ...runtimeEnvironment,
+      [brokeredStartEnvironmentKey]: "1",
+    });
+    expect(runtimeEnvironment[brokeredStartEnvironmentKey]).toBeUndefined();
     expect(Object.keys(call?.request.environment ?? {})).not.toContain(
       "SUBSCRIPTION_RUNTIME_CODEX_AUTH_ROOT",
     );
@@ -630,15 +647,30 @@ describe("hosted subscription-runtime foreground boundary", () => {
     ).rejects.toThrow("hosted_canary_runtime_build_mismatch");
     expect(wrongBuild.processCalls).toEqual([]);
 
-    const environmentRoot = await temporaryRoot();
-    const escapedEnvironment = Object.freeze({
-      ...environment(environmentRoot),
-      AUTH_TOKEN: "must-not-be-inherited",
+    const broadenedRoot = await temporaryRoot();
+    const broadenedRunner = new FakeRunner();
+    const broadenedEnvironment = Object.freeze({
+      ...environment(broadenedRoot),
+      [brokeredStartEnvironmentKey]: "caller-controlled",
     });
     expect(() =>
-      fixture(environmentRoot, new FakeRunner(), {
-        runtimeEnvironment: escapedEnvironment,
+      fixture(broadenedRoot, broadenedRunner, {
+        runtimeEnvironment: broadenedEnvironment,
       }),
     ).toThrow("hosted_canary_adapter_configuration_invalid");
+    expect(broadenedRunner.processCalls).toEqual([]);
+
+    const malformedRoot = await temporaryRoot();
+    const malformedRunner = new FakeRunner();
+    const malformedEnvironment = Object.freeze({
+      ...environment(malformedRoot),
+      PATH: "/caller-controlled/bin",
+    });
+    expect(() =>
+      fixture(malformedRoot, malformedRunner, {
+        runtimeEnvironment: malformedEnvironment,
+      }),
+    ).toThrow("hosted_canary_adapter_configuration_invalid");
+    expect(malformedRunner.processCalls).toEqual([]);
   });
 });

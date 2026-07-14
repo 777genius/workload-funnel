@@ -53,6 +53,8 @@ export interface HostedCanaryRuntimeAdapterDependencies {
 }
 
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const brokeredStartEnvironmentKey =
+  "SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START";
 const environmentKeys = new Set([
   "GIT_CONFIG_GLOBAL",
   "GIT_CONFIG_NOSYSTEM",
@@ -251,7 +253,7 @@ export class HostedCanaryRuntimeAdapter {
       fence,
       async () => {
         const handle = await this.#dependencies.runner.startForeground(
-          this.processRequest(
+          this.foregroundProcessRequest(
             argv,
             this.#dependencies.release.limits.foregroundTimeoutMs,
           ),
@@ -448,6 +450,22 @@ export class HostedCanaryRuntimeAdapter {
         })(),
       maxOutputBytes: this.#dependencies.release.limits.maxOutputBytes,
       timeoutMs,
+    });
+  }
+
+  private foregroundProcessRequest(
+    argv: readonly string[],
+    timeoutMs: number,
+  ): HostedCanaryProcessRequest {
+    if (argv[0] !== "run" || argv[1] !== "--no-tmux")
+      throw new Error("hosted_canary_foreground_argv_invalid");
+    const request = this.processRequest(argv, timeoutMs);
+    return Object.freeze({
+      ...request,
+      environment: Object.freeze({
+        ...request.environment,
+        [brokeredStartEnvironmentKey]: "1",
+      }),
     });
   }
 

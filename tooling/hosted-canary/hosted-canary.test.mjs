@@ -26,6 +26,8 @@ import { createNodeHostedCanaryProcessRunner } from "./node-process-runner.mjs";
 import { runHostedCanaryCommand } from "./run.mjs";
 
 const roots = [];
+const brokeredStartEnvironmentKey =
+  "SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START";
 const cliHelp = `usage:
   subscription-runtime-codex-goal run --job-root <dir> --workspace <dir> --prompt <file> --task-id <id> --accounts account-a,account-b [--tmux-session <name>] [--registry-root <dir>]
   subscription-runtime-codex-goal tools
@@ -175,6 +177,12 @@ const argv = process.argv.slice(2);
 const behavior = ${JSON.stringify(behavior)};
 const option = (name) => argv[argv.indexOf(name) + 1];
 appendFileSync(join(root, "fake-runtime-argv.jsonl"), JSON.stringify(argv) + "\\n", { mode: 0o600 });
+appendFileSync(join(root, "fake-runtime-environment.jsonl"), JSON.stringify({
+  argv,
+  brokeredStart: Object.hasOwn(process.env, ${JSON.stringify("SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START")})
+    ? process.env[${JSON.stringify("SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START")}]
+    : null,
+}) + "\\n", { mode: 0o600 });
 if (argv.length === 1 && argv[0] === "--help") {
   writeFileSync(1, ${JSON.stringify(cliHelp)});
 } else if (argv.length === 1 && argv[0] === "tools") {
@@ -320,12 +328,15 @@ describe("hosted canary command", { timeout: 120_000 }, () => {
 
     const probe = await runHostedCanaryCommand(
       ["probe", ...commonArguments(fixture)],
-      {},
+      { [brokeredStartEnvironmentKey]: "caller-probe-value" },
     );
     expect(probe.outcome).toBe("probe_only");
     const evidence = await runHostedCanaryCommand(
       liveArguments(fixture, probe),
-      { WORKLOAD_FUNNEL_HOSTED_CANARY_LIVE: "1" },
+      {
+        [brokeredStartEnvironmentKey]: "caller-foreground-value",
+        WORKLOAD_FUNNEL_HOSTED_CANARY_LIVE: "1",
+      },
     );
 
     expect(evidence).toMatchObject({
@@ -394,6 +405,34 @@ describe("hosted canary command", { timeout: 120_000 }, () => {
       false,
     );
     expect(invocations.some((argv) => argv.includes("tmux"))).toBe(false);
+    const childEnvironments = (
+      await readFile(
+        join(fixture.stateRoot, "fake-runtime-environment.jsonl"),
+        "utf8",
+      )
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const foregroundEnvironments = childEnvironments.filter(
+      ({ argv }) => argv[0] === "run" && argv[1] === "--no-tmux",
+    );
+    const probeEnvironments = childEnvironments.filter(
+      ({ argv }) =>
+        argv.length === 1 && (argv[0] === "--help" || argv[0] === "tools"),
+    );
+    expect(foregroundEnvironments).toHaveLength(1);
+    expect(foregroundEnvironments[0].brokeredStart).toBe("1");
+    expect(probeEnvironments.length).toBeGreaterThan(0);
+    expect(
+      probeEnvironments.every(({ brokeredStart }) => brokeredStart === null),
+    ).toBe(true);
+    expect(JSON.stringify(childEnvironments)).not.toContain(
+      "caller-probe-value",
+    );
+    expect(JSON.stringify(childEnvironments)).not.toContain(
+      "caller-foreground-value",
+    );
 
     const operationWal = await readFile(
       join(fixture.stateRoot, "bridge-operations/runtime-operations.wal"),

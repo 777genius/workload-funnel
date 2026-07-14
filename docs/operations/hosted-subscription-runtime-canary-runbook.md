@@ -15,6 +15,16 @@ complete argv. It uses no shell, tmux command, daemon, systemd, D-Bus, Docker
 socket, network service, or HyperQueue. The outer node process owns termination
 and foreground completion evidence.
 
+The validated sandbox environment never contains
+`SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START`, even when the canary
+command inherits an arbitrary caller value. Read-only executable inspection,
+hashing, `--help`, `tools`, and contract-pin probes therefore never receive the
+marker. Only after durable operation reservation, release revalidation, and the
+final current authority/fence check does the adapter add the exact value
+`SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START=1` to the authorized
+`run --no-tmux` foreground child. The value is not copied from the caller and
+is not retained in the base environment.
+
 The adapter captures no foreground stdout or stderr because provider output can
 contain secrets. It does not open, copy, hash, enumerate, or serialize any file
 below the runtime auth root. Evidence and WorkloadFunnel WALs contain neither
@@ -172,7 +182,9 @@ The direct foreground argv contains `run --no-tmux`, job root, auth root,
 workspace, prompt, task ID, accounts, registry root, output, progress, model,
 effort, service tier, execution engine, isolated-workspace access boundary,
 project access scope JSON, and restricted network policy. It contains no shell
-command or runtime mutation tool.
+command or runtime mutation tool. Its child environment alone contains the
+exact brokered-start marker described above; the immediately preceding binary,
+help, tools, capability, and output-pin checks do not.
 
 `natural_completion` is the primary acceptance scenario. It waits up to the
 bounded foreground timeout for the direct child to exit on its own. Passing
