@@ -33,6 +33,10 @@
       "types": "./dist/features/namespace-ownership-persistence/index.d.ts",
       "import": "./dist/features/namespace-ownership-persistence/index.js"
     },
+    "./node-persistence": {
+      "types": "./dist/features/node-persistence/index.d.ts",
+      "import": "./dist/features/node-persistence/index.js"
+    },
     "./ownership-transfer-coordinator-persistence": {
       "types": "./dist/features/ownership-transfer-coordinator-persistence/index.d.ts",
       "import": "./dist/features/ownership-transfer-coordinator-persistence/index.js"

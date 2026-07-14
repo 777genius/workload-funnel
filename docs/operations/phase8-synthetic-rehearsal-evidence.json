@@ -1,0 +1,118 @@
+{
+  "deployment": {
+    "contractVersion": "workload-funnel.hosted-ops/v1",
+    "externalRepositoryMutationAllowed": false,
+    "immutableReleaseDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "privilegedStartsEnabled": false,
+    "productionStartsEnabled": false,
+    "releaseId": "phase8-synthetic-rehearsal",
+    "rollback": {
+      "destructiveDatabaseDowngrade": false,
+      "observationAndCancellationRemainEnabled": true,
+      "requiresFreshWriterEpoch": true
+    },
+    "secretReferences": ["secret-ref:phase8/test/node-ca"],
+    "serviceUsers": [
+      "workload-funnel-control",
+      "workload-funnel-node",
+      "workload-funnel-launcher",
+      "workload-funnel-result-sealer",
+      "workload-funnel-runtime-broker",
+      "workload-funnel-scheduler-gateway",
+      "workload-funnel-artifact-retention"
+    ],
+    "syntheticFixturesOnly": true
+  },
+  "disasterRecovery": {
+    "acceptedHistoryAfter": 12,
+    "acceptedHistoryBefore": 12,
+    "canonicalHistoryDigestAfter": "synthetic-history-digest",
+    "canonicalHistoryDigestBefore": "synthetic-history-digest",
+    "erasureLedgerReplayed": true,
+    "externalAcceptanceHighWatermark": 12,
+    "externalAuditHighWatermark": 20,
+    "recoveredAcceptanceHighWatermark": 12,
+    "recoveredAuditHighWatermark": 20,
+    "restoreStep": "admission_approved",
+    "terminalHistoryAfter": 12,
+    "terminalHistoryBefore": 12,
+    "unknownExecutionCount": 0
+  },
+  "identity": {
+    "authenticatedWrites": true,
+    "durableAuthority": true,
+    "enrolledNodeCount": 3,
+    "multiWriterCas": true,
+    "publicationAuthorizationTestsPassed": true,
+    "replayTestsPassed": true,
+    "revocationTestsPassed": true
+  },
+  "nodeMaintenance": {
+    "incompleteOperations": 0,
+    "rebootUnknownExecutions": 0,
+    "staleTakeoverMutations": 0
+  },
+  "rollbackFreeze": {
+    "closedGates": [
+      "acceptance",
+      "admission_reservation",
+      "automatic_retry",
+      "dispatch_submit",
+      "process_start",
+      "result_archive",
+      "result_delete",
+      "result_finalize"
+    ],
+    "finalAuthorityAcknowledgements": [
+      {
+        "authorityId": "synthetic-artifact-store",
+        "authorityKind": "artifact-store",
+        "completeHighWatermarks": true,
+        "durable": true,
+        "gateRevision": 12,
+        "mutationFenceFingerprint": "fence-v1-0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "authorityId": "synthetic-node-launcher",
+        "authorityKind": "node-launcher",
+        "completeHighWatermarks": true,
+        "durable": true,
+        "gateRevision": 12,
+        "mutationFenceFingerprint": "fence-v1-1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "authorityId": "synthetic-result-sealer",
+        "authorityKind": "result-sealer",
+        "completeHighWatermarks": true,
+        "durable": true,
+        "gateRevision": 12,
+        "mutationFenceFingerprint": "fence-v1-2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      {
+        "authorityId": "synthetic-runtime-broker",
+        "authorityKind": "runtime-broker",
+        "completeHighWatermarks": true,
+        "durable": true,
+        "gateRevision": 12,
+        "mutationFenceFingerprint": "fence-v1-3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "authorityId": "synthetic-scheduler-gateway",
+        "authorityKind": "scheduler-gateway",
+        "completeHighWatermarks": true,
+        "durable": true,
+        "gateRevision": 12,
+        "mutationFenceFingerprint": "fence-v1-4444444444444444444444444444444444444444444444444444444444444444"
+      }
+    ],
+    "gateRevision": 12
+  },
+  "syntheticLoad": {
+    "backlogLimit": 64,
+    "completedWorkloads": 12,
+    "hostControlP99Ms": 1,
+    "maximumBacklog": 1,
+    "staleExternalEffects": 0,
+    "syntheticOnly": true
+  }
+}

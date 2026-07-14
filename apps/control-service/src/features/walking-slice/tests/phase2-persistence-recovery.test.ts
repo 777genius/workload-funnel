@@ -5,10 +5,10 @@ import { createSyntheticExternalWitness } from "@workload-funnel/control-service
 
 import { createPostgresCapacityReservationLedgerStore } from "@workload-funnel/store-postgres/capacity-reservation-ledger-persistence";
 import { createPostgresNamespaceOwnershipStore } from "@workload-funnel/store-postgres/namespace-ownership-persistence";
-import { createPostgresOwnershipTransferCoordinatorStore } from "@workload-funnel/store-postgres/ownership-transfer-coordinator-persistence";
+import { createInMemoryPostgresOwnershipTransferCoordinatorStoreTestFake } from "@workload-funnel/store-postgres/ownership-transfer-coordinator-persistence";
 import { createSqliteCapacityReservationLedgerStore } from "@workload-funnel/store-sqlite/capacity-reservation-ledger-persistence";
 import { createSqliteNamespaceOwnershipStore } from "@workload-funnel/store-sqlite/namespace-ownership-persistence";
-import { createSqliteOwnershipTransferCoordinatorStore } from "@workload-funnel/store-sqlite/ownership-transfer-coordinator-persistence";
+import { createInMemorySqliteOwnershipTransferCoordinatorStoreTestFake } from "@workload-funnel/store-sqlite/ownership-transfer-coordinator-persistence";
 import type {
   Allocation,
   AllocationReleaseReceipt,
@@ -236,8 +236,11 @@ describe("Phase 2 disposable Postgres/SQLite persistence contracts", () => {
   );
 
   it.each([
-    ["postgres", createPostgresOwnershipTransferCoordinatorStore],
-    ["sqlite", createSqliteOwnershipTransferCoordinatorStore],
+    [
+      "postgres",
+      createInMemoryPostgresOwnershipTransferCoordinatorStoreTestFake,
+    ],
+    ["sqlite", createInMemorySqliteOwnershipTransferCoordinatorStoreTestFake],
   ] as const)(
     "%s discovers and resumes post-CAS transfer forward",
     (_profile, create) => {

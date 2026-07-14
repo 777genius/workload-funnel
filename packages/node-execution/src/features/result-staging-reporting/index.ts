@@ -1,4 +1,9 @@
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  sign as createSignature,
+  verify as verifySignature,
+  type KeyObject,
+} from "node:crypto";
 
 import {
   fingerprintMutationFence,
@@ -24,6 +29,28 @@ export interface ArtifactStageEntry {
   readonly sizeBytes: number;
 }
 
+export interface PrivilegedSealReceipt {
+  readonly contractVersion: number;
+  readonly providerId: string;
+  readonly sealOperationId: string;
+  readonly sealId: string;
+  readonly treeDigest: string;
+  readonly allocationId: string;
+  readonly attemptId: string;
+  readonly executionId: string;
+  readonly executionGeneration: string;
+  readonly sealMutationFenceFingerprint: string;
+  readonly sealTupleFingerprint: string;
+  readonly authorityRegistrySequence: number;
+  readonly totalBytes: number;
+  readonly entries: readonly ArtifactStageEntry[];
+  readonly uploadAuthorityDigest: string;
+  readonly issuedAt: number;
+  readonly notAfter: number;
+  readonly signerKeyId: string;
+  readonly signatureBase64Url: string;
+}
+
 export interface ArtifactStageCommand {
   readonly operationId: string;
   readonly allocationId: string;
@@ -32,15 +59,137 @@ export interface ArtifactStageCommand {
   readonly executionGeneration: string;
   readonly sealId: string;
   readonly treeDigest: string;
+  readonly privilegedSealReceipt?: PrivilegedSealReceipt;
   readonly manifestDigest: string;
   readonly entries: readonly ArtifactStageEntry[];
   readonly uploadIdentity: ScopedUploadIdentity;
   readonly mutationFence: MutationFence;
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object")
+    return `{${Object.entries(value)
+      .filter(([key]) => key !== "signatureBase64Url")
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
+
+export function scopedUploadAuthorityDigest(
+  identity: ScopedUploadIdentity,
+): string {
+  return createHash("sha256").update(canonical(identity)).digest("hex");
+}
+
+function privilegedSealTuple(
+  receipt: Omit<
+    PrivilegedSealReceipt,
+    "sealTupleFingerprint" | "signatureBase64Url"
+  >,
+): unknown {
+  return Object.freeze({
+    allocationId: receipt.allocationId,
+    attemptId: receipt.attemptId,
+    authorityRegistrySequence: receipt.authorityRegistrySequence,
+    contractVersion: receipt.contractVersion,
+    entries: receipt.entries,
+    executionGeneration: receipt.executionGeneration,
+    executionId: receipt.executionId,
+    providerId: receipt.providerId,
+    sealId: receipt.sealId,
+    sealMutationFenceFingerprint: receipt.sealMutationFenceFingerprint,
+    sealOperationId: receipt.sealOperationId,
+    totalBytes: receipt.totalBytes,
+    treeDigest: receipt.treeDigest,
+    uploadAuthorityDigest: receipt.uploadAuthorityDigest,
+  });
+}
+
+export function privilegedSealTupleFingerprint(
+  receipt: Omit<
+    PrivilegedSealReceipt,
+    "sealTupleFingerprint" | "signatureBase64Url"
+  >,
+): string {
+  return createHash("sha256")
+    .update(canonical(privilegedSealTuple(receipt)))
+    .digest("hex");
+}
+
+export function signPrivilegedSealReceipt(
+  receipt: Omit<
+    PrivilegedSealReceipt,
+    "sealTupleFingerprint" | "signatureBase64Url"
+  >,
+  privateKey: KeyObject,
+): PrivilegedSealReceipt {
+  const unsigned = Object.freeze({
+    ...receipt,
+    sealTupleFingerprint: privilegedSealTupleFingerprint(receipt),
+  });
+  return Object.freeze({
+    ...unsigned,
+    entries: Object.freeze(
+      receipt.entries.map((entry) => Object.freeze({ ...entry })),
+    ),
+    signatureBase64Url: createSignature(
+      null,
+      Buffer.from(canonical(unsigned), "utf8"),
+      privateKey,
+    ).toString("base64url"),
+  });
+}
+
+export function verifyPrivilegedSealReceipt(
+  receipt: PrivilegedSealReceipt,
+  command: Omit<ArtifactStageCommand, "privilegedSealReceipt">,
+  trustedKeys: ReadonlyMap<string, KeyObject>,
+  now: number,
+): void {
+  const publicKey = trustedKeys.get(receipt.signerKeyId);
+  const expectedEntries = [...command.entries].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  );
+  const actualEntries = [...receipt.entries].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  );
+  if (
+    receipt.contractVersion !== 1 ||
+    receipt.providerId !== "result-sealer" ||
+    receipt.sealId !== command.sealId ||
+    receipt.treeDigest !== command.treeDigest ||
+    receipt.allocationId !== command.allocationId ||
+    receipt.attemptId !== command.attemptId ||
+    receipt.executionId !== command.executionId ||
+    receipt.executionGeneration !== command.executionGeneration ||
+    receipt.authorityRegistrySequence < 1 ||
+    receipt.totalBytes !==
+      command.entries.reduce((total, entry) => total + entry.sizeBytes, 0) ||
+    JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries) ||
+    receipt.uploadAuthorityDigest !==
+      scopedUploadAuthorityDigest(command.uploadIdentity) ||
+    !/^fence-v1-[a-f0-9]{64}$/u.test(receipt.sealMutationFenceFingerprint) ||
+    receipt.sealTupleFingerprint !== privilegedSealTupleFingerprint(receipt) ||
+    now < receipt.issuedAt ||
+    now >= receipt.notAfter ||
+    receipt.notAfter <= receipt.issuedAt ||
+    publicKey === undefined ||
+    !verifySignature(
+      null,
+      Buffer.from(canonical(receipt), "utf8"),
+      publicKey,
+      Buffer.from(receipt.signatureBase64Url, "base64url"),
+    )
+  )
+    throw new Error("privileged_seal_receipt_invalid");
+}
+
 export interface ArtifactStageReceipt {
   readonly bindingDigest: string;
   readonly operationId: string;
+  readonly providerId: string;
   readonly immutableStagingIdentity: string;
   readonly manifestDigest: string;
   readonly entries: readonly Readonly<{
@@ -56,6 +205,7 @@ export interface ArtifactStageReceipt {
 
 export interface ArtifactStageWriter {
   readonly capability: "create_only_scoped_stage";
+  readonly providerId: string;
   stage(command: ArtifactStageCommand): Promise<ArtifactStageReceipt>;
 }
 
@@ -64,6 +214,7 @@ export interface ResultStagedObservation {
   readonly kind: "ResultStaged";
   readonly eventId: string;
   readonly operationId: string;
+  readonly providerId: string;
   readonly allocationId: string;
   readonly attemptId: string;
   readonly executionId: string;
@@ -84,9 +235,11 @@ export function artifactStageReceiptBinding(
     | "manifestDigest"
     | "mutationFenceFingerprint"
     | "operationId"
+    | "providerId"
   >,
 ): string {
   return resultStagingReceiptBinding({
+    artifactProviderId: receipt.providerId,
     entries: receipt.entries,
     immutableStagingIdentity: receipt.immutableStagingIdentity,
     manifestDigest: receipt.manifestDigest,
@@ -126,7 +279,12 @@ function assertStageCommand(command: ArtifactStageCommand): void {
     uploadIdentity.canOverwrite !== false ||
     uploadIdentity.canDelete !== false ||
     !/^[a-f0-9]{64}$/u.test(command.treeDigest) ||
-    !/^[a-f0-9]{64}$/u.test(command.manifestDigest)
+    !/^[a-f0-9]{64}$/u.test(command.manifestDigest) ||
+    (command.privilegedSealReceipt !== undefined &&
+      (command.privilegedSealReceipt.sealId !== command.sealId ||
+        command.privilegedSealReceipt.treeDigest !== command.treeDigest ||
+        command.privilegedSealReceipt.uploadAuthorityDigest !==
+          scopedUploadAuthorityDigest(command.uploadIdentity)))
   )
     throw new Error("artifact_stage_authority_mismatch");
 }
@@ -153,6 +311,7 @@ export function createProvider(
       const receipt = await input.artifactStageWriter.stage(command);
       if (
         receipt.operationId !== command.operationId ||
+        receipt.providerId !== input.artifactStageWriter.providerId ||
         receipt.manifestDigest !== command.manifestDigest ||
         receipt.mutationFenceFingerprint !==
           fingerprintMutationFence(command.mutationFence) ||
@@ -197,6 +356,7 @@ export function createProvider(
         mutationFenceFingerprint: receipt.mutationFenceFingerprint,
         observedAtMs,
         operationId: command.operationId,
+        providerId: receipt.providerId,
       });
       const payloadDigest = createHash("sha256")
         .update(JSON.stringify(observation), "utf8")

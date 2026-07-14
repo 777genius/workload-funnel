@@ -173,6 +173,7 @@ export default defineConfig({
       "tooling/architecture/**/*.test.mjs",
       "tooling/compatibility/**/*.test.mjs",
       "tooling/phase-0-5/**/*.test.mjs",
+      "tooling/phase8/**/*.test.ts",
     ],
     passWithNoTests: false,
   },

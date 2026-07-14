@@ -44,13 +44,17 @@ export async function verifyAndFinalizeStagedResult(
   validatePersistedStagingEvidence(manifest);
   if (
     manifest.immutableStagingIdentity === undefined ||
+    manifest.artifactProviderId === undefined ||
     manifest.manifestDigest === undefined ||
     manifest.stagingMutationFence === undefined ||
     manifest.stagingMutationFenceFingerprint === undefined
   ) {
     throw new Error("result_manifest_not_staged");
   }
-  const provider = providers.select("verify_finalized_bytes");
+  const provider = providers.select(
+    manifest.artifactProviderId,
+    "verify_finalized_bytes",
+  );
   const verification = await provider.verify?.({
     expectedEntries: manifest.entries,
     immutableStagingIdentity: manifest.immutableStagingIdentity,
@@ -82,12 +86,16 @@ export async function deleteAndTombstoneResult(
     operation?.kind !== "delete" ||
     manifest.retentionState !== "deleting" ||
     manifest.immutableStagingIdentity === undefined ||
+    manifest.artifactProviderId === undefined ||
     manifest.stagingMutationFence === undefined ||
     manifest.stagingMutationFenceFingerprint === undefined ||
     !["prepared", "retryable"].includes(operation.state)
   )
     throw new Error("result_delete_not_prepared");
-  const provider = providers.select("retention_delete");
+  const provider = providers.select(
+    manifest.artifactProviderId,
+    "retention_delete",
+  );
   const deletion = await provider.delete?.({
     entryDigests: manifest.entries.map((entry) => entry.checksum),
     immutableStagingIdentity: manifest.immutableStagingIdentity,
@@ -129,11 +137,15 @@ export async function reconcileDeletionAndTombstoneResult(
     !["unknown", "applied"].includes(operation.state) ||
     manifest.retentionState !== "deleting" ||
     manifest.immutableStagingIdentity === undefined ||
+    manifest.artifactProviderId === undefined ||
     manifest.stagingMutationFence === undefined ||
     manifest.stagingMutationFenceFingerprint === undefined
   )
     throw new Error("result_delete_reconciliation_not_prepared");
-  const provider = providers.select("retention_delete");
+  const provider = providers.select(
+    manifest.artifactProviderId,
+    "retention_delete",
+  );
   const reconciliation = await provider.reconcileDelete?.({
     entryDigests: manifest.entries.map((entry) => entry.checksum),
     immutableStagingIdentity: manifest.immutableStagingIdentity,

@@ -79,6 +79,7 @@ describe("Phase 4D fenced ResultStaged reporting", () => {
     let calls = 0;
     const writer: ArtifactStageWriter = Object.freeze({
       capability: "create_only_scoped_stage",
+      providerId: "synthetic-artifact",
       stage(input: ArtifactStageCommand) {
         calls += 1;
         const receiptFields = Object.freeze({
@@ -98,6 +99,7 @@ describe("Phase 4D fenced ResultStaged reporting", () => {
             input.mutationFence,
           ),
           operationId: input.operationId,
+          providerId: "synthetic-artifact",
         });
         return Promise.resolve(
           Object.freeze({
@@ -138,6 +140,7 @@ describe("Phase 4D fenced ResultStaged reporting", () => {
     let called = false;
     const writer: ArtifactStageWriter = {
       capability: "create_only_scoped_stage",
+      providerId: "synthetic-artifact",
       stage() {
         called = true;
         return Promise.reject(new Error("must not run"));
@@ -180,6 +183,7 @@ describe("Phase 4D fenced ResultStaged reporting", () => {
       manifestDigest: original.manifestDigest,
       mutationFenceFingerprint,
       operationId: original.operationId,
+      providerId: "synthetic-artifact",
     };
     const approvedEntry = receiptFields.entries[0];
     if (approvedEntry === undefined) throw new Error("missing_test_entry");
@@ -187,6 +191,7 @@ describe("Phase 4D fenced ResultStaged reporting", () => {
     const reporter = createProvider({
       artifactStageWriter: {
         capability: "create_only_scoped_stage",
+        providerId: "synthetic-artifact",
         stage() {
           return Promise.resolve({
             ...receiptFields,

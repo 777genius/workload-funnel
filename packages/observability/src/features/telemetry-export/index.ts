@@ -21,6 +21,14 @@ export {
   type DashboardDefinitionV1,
 } from "./application/dashboard-definitions.js";
 export {
+  evaluateProductionSlos,
+  WORKLOAD_FUNNEL_PRODUCTION_SLOS,
+  type ProductionSloDefinition,
+  type ProductionSloEvaluation,
+  type ProductionSloKind,
+  type ProductionSloMeasurement,
+} from "./application/production-slos.js";
+export {
   createServiceOperationsAdapter,
   type ServiceOperationsAdapter,
 } from "./application/service-operations-adapter.js";

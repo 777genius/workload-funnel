@@ -1,3 +1,5 @@
+import { DatabaseSync } from "node:sqlite";
+
 import type {
   AcceptanceInput,
   AcceptanceReceipt,
@@ -7,6 +9,8 @@ import type {
   LifecycleRepository,
   Run,
   Workload,
+  DisasterRecoveryOperation,
+  DisasterRecoveryStore,
 } from "@workload-funnel/workload-control/workload-lifecycle";
 
 export function createSqliteLifecycleRepository(
@@ -183,4 +187,104 @@ export function createSqliteLifecycleRepository(
       hooks.projectRun(run);
     },
   };
+}
+
+export interface OpenSqliteDisasterRecoveryStore {
+  readonly store: DisasterRecoveryStore;
+  close(): void;
+}
+
+interface DisasterRecoveryPayloadRow {
+  readonly payload: string;
+}
+
+function migrateDisasterRecovery(database: DatabaseSync): void {
+  database.exec("PRAGMA journal_mode=WAL");
+  database.exec("PRAGMA synchronous=FULL");
+  database.exec("PRAGMA busy_timeout=5000");
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS disaster_recovery_operation (
+      operation_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL CHECK (version > 0),
+      step TEXT NOT NULL,
+      payload TEXT NOT NULL
+    ) STRICT;
+  `);
+}
+
+function getDisasterRecoveryOperation(
+  database: DatabaseSync,
+  operationId: string,
+): DisasterRecoveryOperation | undefined {
+  const row = database
+    .prepare(
+      "SELECT payload FROM disaster_recovery_operation WHERE operation_id = ?",
+    )
+    .get(operationId) as DisasterRecoveryPayloadRow | undefined;
+  return row === undefined
+    ? undefined
+    : (JSON.parse(row.payload) as DisasterRecoveryOperation);
+}
+
+export function createSqliteDisasterRecoveryStore(
+  database: DatabaseSync,
+): DisasterRecoveryStore {
+  migrateDisasterRecovery(database);
+  const store: DisasterRecoveryStore = {
+    compareAndSet(expectedVersion, operation) {
+      if (
+        operation.version !== expectedVersion + 1 ||
+        database
+          .prepare(
+            "UPDATE disaster_recovery_operation SET version = ?, step = ?, payload = ? WHERE operation_id = ? AND version = ?",
+          )
+          .run(
+            operation.version,
+            operation.step,
+            JSON.stringify(operation),
+            operation.operationId,
+            expectedVersion,
+          ).changes !== 1
+      )
+        throw new Error("sqlite_disaster_recovery_version_conflict");
+      return operation;
+    },
+    create(operation) {
+      const inserted = database
+        .prepare(
+          "INSERT INTO disaster_recovery_operation (operation_id, version, step, payload) VALUES (?, ?, ?, ?) ON CONFLICT(operation_id) DO NOTHING",
+        )
+        .run(
+          operation.operationId,
+          operation.version,
+          operation.step,
+          JSON.stringify(operation),
+        ).changes;
+      if (inserted === 1) return operation;
+      const prior = getDisasterRecoveryOperation(
+        database,
+        operation.operationId,
+      );
+      if (
+        prior === undefined ||
+        JSON.stringify(prior) !== JSON.stringify(operation)
+      )
+        throw new Error("sqlite_disaster_recovery_create_conflict");
+      return prior;
+    },
+    get: (operationId) => getDisasterRecoveryOperation(database, operationId),
+  };
+  return Object.freeze(store);
+}
+
+export function openSqliteDisasterRecoveryStore(
+  path: string,
+): OpenSqliteDisasterRecoveryStore {
+  const database = new DatabaseSync(path);
+  return Object.freeze({
+    close: () => {
+      database.close();
+    },
+    store: createSqliteDisasterRecoveryStore(database),
+  });
 }

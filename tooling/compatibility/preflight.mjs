@@ -1,5 +1,6 @@
-import { createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { DatabaseSync } from "node:sqlite";
 
 export const REQUIRED_COMPATIBILITY_COMPONENTS = Object.freeze([
   "databaseSchema",
@@ -305,5 +306,306 @@ export function rollingMigrationPreflight(input) {
     systemdPropertyProfiles: Object.freeze(systemdPropertyProfiles),
     releaseIds: Object.freeze(manifests.map((manifest) => manifest.releaseId)),
     status: "compatible",
+  });
+}
+
+const PHASE8_CLOSED_EFFECT_GATES = Object.freeze([
+  "acceptance",
+  "admission_reservation",
+  "automatic_retry",
+  "dispatch_submit",
+  "process_start",
+  "result_archive",
+  "result_delete",
+  "result_finalize",
+]);
+
+const PHASE8_FINAL_AUTHORITY_KINDS = Object.freeze([
+  "artifact-store",
+  "node-launcher",
+  "result-sealer",
+  "runtime-broker",
+  "scheduler-gateway",
+]);
+
+function requireExactStrings(actual, expected, code) {
+  if (
+    !Array.isArray(actual) ||
+    actual.length !== expected.length ||
+    new Set(actual).size !== actual.length ||
+    JSON.stringify([...new Set(actual)].sort()) !==
+      JSON.stringify([...expected].sort())
+  )
+    throw new Error(code);
+}
+
+export function openSqlitePhase8AcknowledgementReplayStore(path) {
+  const database = new DatabaseSync(path);
+  database.exec("PRAGMA journal_mode=WAL");
+  database.exec("PRAGMA synchronous=FULL");
+  database.exec("PRAGMA busy_timeout=5000");
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS phase8_authority_acknowledgement_nonce (
+      nonce TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
+    ) STRICT;
+  `);
+  return Object.freeze({
+    capabilities: Object.freeze({ atomicConsume: true, durable: true }),
+    close: () => database.close(),
+    consume(nonce, expiresAt) {
+      if (
+        typeof nonce !== "string" ||
+        nonce.length < 16 ||
+        !Number.isSafeInteger(expiresAt)
+      )
+        return false;
+      return (
+        database
+          .prepare(
+            "INSERT INTO phase8_authority_acknowledgement_nonce (nonce, expires_at) VALUES (?, ?) ON CONFLICT(nonce) DO NOTHING",
+          )
+          .run(nonce, expiresAt).changes === 1
+      );
+    },
+  });
+}
+
+function verifyPhase8AuthorityAcknowledgement(
+  acknowledgement,
+  trust,
+  deployment,
+  expectedWriterEpoch,
+  now,
+) {
+  const key = trust?.keys?.find(
+    (candidate) => candidate.keyId === acknowledgement?.signature?.keyId,
+  );
+  const deploymentContractDigest = createHash("sha256")
+    .update(canonicalJson(deployment))
+    .digest("hex");
+  if (
+    acknowledgement?.contractVersion !== 1 ||
+    typeof acknowledgement.acknowledgementId !== "string" ||
+    typeof acknowledgement.nonce !== "string" ||
+    acknowledgement.nonce.length < 16 ||
+    acknowledgement.releaseId !== deployment.releaseId ||
+    acknowledgement.immutableReleaseDigest !==
+      deployment.immutableReleaseDigest ||
+    acknowledgement.deploymentContractDigest !== deploymentContractDigest ||
+    acknowledgement.writerEpoch !== expectedWriterEpoch ||
+    acknowledgement.destructiveDatabaseDowngrade !== false ||
+    acknowledgement.observationEnabled !== true ||
+    acknowledgement.cancellationEnabled !== true ||
+    acknowledgement.durable !== true ||
+    acknowledgement.completeHighWatermarks !== true ||
+    !Number.isSafeInteger(acknowledgement.issuedAt) ||
+    !Number.isSafeInteger(acknowledgement.expiresAt) ||
+    now < acknowledgement.issuedAt ||
+    now >= acknowledgement.expiresAt ||
+    acknowledgement.expiresAt - acknowledgement.issuedAt > 5 * 60_000 ||
+    acknowledgement.signature?.algorithm !== "ed25519" ||
+    key?.algorithm !== "ed25519" ||
+    now < key.notBefore ||
+    now >= key.notAfter
+  )
+    throw new Error("phase8_authority_acknowledgement_invalid");
+  const publicKey = createPublicKey({
+    format: "der",
+    key: Buffer.from(key.publicKeySpki, "base64"),
+    type: "spki",
+  });
+  if (
+    !verify(
+      null,
+      Buffer.from(canonicalJson(acknowledgement), "utf8"),
+      publicKey,
+      Buffer.from(acknowledgement.signature.value, "base64"),
+    )
+  )
+    throw new Error("phase8_authority_acknowledgement_signature_invalid");
+  return acknowledgement.nonce;
+}
+
+export function phase8ProductionRehearsalPreflight(input) {
+  const migration = rollingMigrationPreflight(input.migration);
+  const deployment = input.deployment;
+  if (
+    deployment?.contractVersion !== "workload-funnel.hosted-ops/v1" ||
+    typeof deployment.releaseId !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(deployment.immutableReleaseDigest) ||
+    deployment.productionStartsEnabled !== false ||
+    deployment.privilegedStartsEnabled !== false ||
+    deployment.syntheticFixturesOnly !== true ||
+    deployment.externalRepositoryMutationAllowed !== false
+  )
+    throw new Error("unsafe_phase8_deployment_contract");
+  if (
+    deployment.rollback?.destructiveDatabaseDowngrade !== false ||
+    deployment.rollback?.requiresFreshWriterEpoch !== true ||
+    deployment.rollback?.observationAndCancellationRemainEnabled !== true
+  )
+    throw new Error("phase8_rollback_guarantees_incomplete");
+  requireExactStrings(
+    Object.keys(deployment.rollback),
+    [
+      "destructiveDatabaseDowngrade",
+      "observationAndCancellationRemainEnabled",
+      "requiresFreshWriterEpoch",
+    ],
+    "phase8_rollback_guarantees_incomplete",
+  );
+  requireExactStrings(
+    deployment.serviceUsers,
+    [
+      "workload-funnel-control",
+      "workload-funnel-node",
+      "workload-funnel-launcher",
+      "workload-funnel-result-sealer",
+      "workload-funnel-runtime-broker",
+      "workload-funnel-scheduler-gateway",
+      "workload-funnel-artifact-retention",
+    ],
+    "phase8_service_identity_separation_incomplete",
+  );
+  if (
+    !Array.isArray(deployment.secretReferences) ||
+    deployment.secretReferences.length < 1 ||
+    deployment.secretReferences.some(
+      (reference) =>
+        typeof reference !== "string" ||
+        !reference.startsWith("secret-ref:") ||
+        reference.includes("="),
+    )
+  )
+    throw new Error("phase8_secret_reference_invalid");
+
+  const identity = input.identity;
+  if (
+    identity?.durableAuthority !== true ||
+    identity.authenticatedWrites !== true ||
+    identity.multiWriterCas !== true ||
+    identity.replayTestsPassed !== true ||
+    identity.publicationAuthorizationTestsPassed !== true ||
+    identity.revocationTestsPassed !== true ||
+    !Number.isSafeInteger(identity.enrolledNodeCount) ||
+    identity.enrolledNodeCount < 1
+  )
+    throw new Error("phase8_identity_authority_incomplete");
+
+  const freeze = input.rollbackFreeze;
+  requireExactStrings(
+    freeze?.closedGates,
+    PHASE8_CLOSED_EFFECT_GATES,
+    "phase8_effect_freeze_incomplete",
+  );
+  requireExactStrings(
+    freeze?.finalAuthorityAcknowledgements?.map(
+      (acknowledgement) => acknowledgement.authorityKind,
+    ),
+    PHASE8_FINAL_AUTHORITY_KINDS,
+    "phase8_authority_inventory_incomplete",
+  );
+  if (
+    !Number.isSafeInteger(freeze.gateRevision) ||
+    freeze.gateRevision < 1 ||
+    freeze.finalAuthorityAcknowledgements.some(
+      (acknowledgement) =>
+        acknowledgement.durable !== true ||
+        acknowledgement.gateRevision !== freeze.gateRevision ||
+        !/^fence-v1-[a-f0-9]{64}$/u.test(
+          acknowledgement.mutationFenceFingerprint,
+        ) ||
+        acknowledgement.completeHighWatermarks !== true,
+    )
+  )
+    throw new Error("phase8_authority_acknowledgement_incomplete");
+
+  const currentWriterEpoch = input.writerEpoch?.current;
+  const targetWriterEpoch = input.writerEpoch?.target;
+  if (
+    !Number.isSafeInteger(currentWriterEpoch) ||
+    !Number.isSafeInteger(targetWriterEpoch) ||
+    targetWriterEpoch !== currentWriterEpoch + 1
+  )
+    throw new Error("phase8_writer_epoch_not_fresh");
+  if (
+    input.authorityAcknowledgementReplayStore?.capabilities?.durable !== true ||
+    input.authorityAcknowledgementReplayStore.capabilities.atomicConsume !==
+      true
+  )
+    throw new Error("phase8_acknowledgement_replay_store_incapable");
+  const acknowledgementNonces = freeze.finalAuthorityAcknowledgements.map(
+    (acknowledgement) =>
+      verifyPhase8AuthorityAcknowledgement(
+        acknowledgement,
+        input.authorityTrust,
+        deployment,
+        targetWriterEpoch,
+        input.migration.now,
+      ),
+  );
+  if (new Set(acknowledgementNonces).size !== acknowledgementNonces.length)
+    throw new Error("phase8_authority_acknowledgement_replayed");
+  if (
+    new Set(
+      freeze.finalAuthorityAcknowledgements.map(
+        (acknowledgement) => acknowledgement.acknowledgementId,
+      ),
+    ).size !== freeze.finalAuthorityAcknowledgements.length
+  )
+    throw new Error("phase8_authority_acknowledgement_replayed");
+
+  const recovery = input.disasterRecovery;
+  if (
+    recovery?.restoreStep !== "admission_approved" ||
+    recovery.acceptedHistoryBefore !== recovery.acceptedHistoryAfter ||
+    recovery.terminalHistoryBefore !== recovery.terminalHistoryAfter ||
+    recovery.canonicalHistoryDigestBefore !==
+      recovery.canonicalHistoryDigestAfter ||
+    recovery.externalAcceptanceHighWatermark !==
+      recovery.recoveredAcceptanceHighWatermark ||
+    recovery.externalAuditHighWatermark !==
+      recovery.recoveredAuditHighWatermark ||
+    recovery.erasureLedgerReplayed !== true ||
+    recovery.unknownExecutionCount !== 0
+  )
+    throw new Error("phase8_disaster_recovery_incomplete");
+
+  const load = input.syntheticLoad;
+  if (
+    load?.syntheticOnly !== true ||
+    !Number.isFinite(load.hostControlP99Ms) ||
+    load.hostControlP99Ms > 100 ||
+    load.staleExternalEffects !== 0 ||
+    load.completedWorkloads < 8 ||
+    load.completedWorkloads > 12 ||
+    load.maximumBacklog > load.backlogLimit
+  )
+    throw new Error("phase8_load_slo_not_met");
+
+  if (
+    input.nodeMaintenance?.incompleteOperations !== 0 ||
+    input.nodeMaintenance.staleTakeoverMutations !== 0 ||
+    input.nodeMaintenance.rebootUnknownExecutions !== 0
+  )
+    throw new Error("phase8_node_maintenance_incomplete");
+
+  for (const acknowledgement of freeze.finalAuthorityAcknowledgements)
+    if (
+      !input.authorityAcknowledgementReplayStore.consume(
+        acknowledgement.nonce,
+        acknowledgement.expiresAt,
+      )
+    )
+      throw new Error("phase8_authority_acknowledgement_replayed");
+
+  return Object.freeze({
+    contractVersion: "workload-funnel.phase8-rehearsal/v1",
+    migration,
+    productionStartsEnabled: false,
+    privilegedStartsEnabled: false,
+    releaseId: deployment.releaseId,
+    status: "rehearsal_passed",
   });
 }

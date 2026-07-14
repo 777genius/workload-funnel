@@ -17,6 +17,7 @@ export interface ResultManifest {
   readonly attemptId: string;
   readonly executionId?: string;
   readonly entries: readonly ResultEntry[];
+  readonly artifactProviderId?: string;
   readonly complete: boolean;
   readonly publicationState?: "staged" | "complete" | "failed";
   readonly immutableStagingIdentity?: string;
@@ -59,6 +60,7 @@ export interface ResultStagingEvidence {
   readonly stagingOperationId: string;
   readonly stagingReceiptBindingDigest: string;
   readonly entries: readonly ResultEntry[];
+  readonly artifactProviderId: string;
   readonly retentionClass: ResultManifest["retentionClass"];
   readonly retentionExpiresAt: number;
 }
@@ -71,6 +73,7 @@ export function resultStagingReceiptBinding(
     | "manifestDigest"
     | "mutationFenceFingerprint"
     | "stagingOperationId"
+    | "artifactProviderId"
   >,
 ): string {
   const entries = [...evidence.entries].sort((left, right) =>
@@ -78,6 +81,7 @@ export function resultStagingReceiptBinding(
   );
   return `artifact-stage-v1-${sha256Hex(
     JSON.stringify({
+      artifactProviderId: evidence.artifactProviderId,
       entries,
       immutableStagingIdentity: evidence.immutableStagingIdentity,
       manifestDigest: evidence.manifestDigest,
@@ -94,6 +98,7 @@ export interface ResultVerificationEvidence {
   readonly manifestDigest: string;
   readonly verifiedEntries: readonly ResultEntry[];
   readonly status: "verified";
+  readonly providerId: string;
 }
 
 export interface ArtifactOperation {
@@ -137,6 +142,7 @@ export function stageResultManifest(
   validateMutationFence(evidence.mutationFence);
   if (
     !/^[a-f0-9]{64}$/u.test(evidence.manifestDigest) ||
+    evidence.artifactProviderId.length === 0 ||
     evidence.immutableStagingIdentity.length === 0 ||
     !Number.isSafeInteger(evidence.retentionExpiresAt) ||
     evidence.retentionExpiresAt < 0 ||
@@ -159,6 +165,7 @@ export function stageResultManifest(
   )
     throw new Error("invalid_result_staging_evidence");
   return Object.freeze({
+    artifactProviderId: evidence.artifactProviderId,
     attemptId: evidence.attemptId,
     complete: false,
     entries: Object.freeze([...evidence.entries]),
@@ -187,13 +194,15 @@ export function validatePersistedStagingEvidence(
   const binding = manifest.stagingReceiptBindingDigest;
   const identity = manifest.immutableStagingIdentity;
   const manifestDigest = manifest.manifestDigest;
+  const artifactProviderId = manifest.artifactProviderId;
   if (
     fence === undefined ||
     fingerprint === undefined ||
     operationId === undefined ||
     binding === undefined ||
     identity === undefined ||
-    manifestDigest === undefined
+    manifestDigest === undefined ||
+    artifactProviderId === undefined
   )
     throw new Error("result_staging_evidence_missing");
   validateMutationFence(fence);
@@ -205,6 +214,7 @@ export function validatePersistedStagingEvidence(
     !identity.includes(Buffer.from(fingerprint).toString("base64url")) ||
     binding !==
       resultStagingReceiptBinding({
+        artifactProviderId,
         entries: manifest.entries,
         immutableStagingIdentity: identity,
         manifestDigest,
@@ -226,6 +236,7 @@ export function finalizeResultManifest(
     verification.immutableStagingIdentity !==
       manifest.immutableStagingIdentity ||
     verification.manifestDigest !== manifest.manifestDigest ||
+    verification.providerId !== manifest.artifactProviderId ||
     !sameEntries(verification.verifiedEntries, manifest.entries)
   )
     throw new Error("result_verification_receipt_mismatch");

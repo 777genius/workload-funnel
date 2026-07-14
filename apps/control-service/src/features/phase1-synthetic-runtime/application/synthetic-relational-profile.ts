@@ -16,14 +16,14 @@ import { createPostgresCanonicalTransaction } from "@workload-funnel/store-postg
 import { createPostgresAuditLedgerStore } from "@workload-funnel/store-postgres/audit-ledger-persistence";
 import { createPostgresInboxStore } from "@workload-funnel/store-postgres/command-inbox";
 import { createPostgresProjectionStore } from "@workload-funnel/store-postgres/projection-checkpoints";
-import { createPostgresReconciliationClaimStore } from "@workload-funnel/store-postgres/reconciliation-claims";
+import { createInMemoryPostgresReconciliationClaimStoreTestFake } from "@workload-funnel/store-postgres/reconciliation-claims";
 import { createPostgresOutboxStore } from "@workload-funnel/store-postgres/transactional-outbox";
 import { createPostgresLifecycleRepository } from "@workload-funnel/store-postgres/workload-persistence";
 import { createSqliteCanonicalTransaction } from "@workload-funnel/store-sqlite/canonical-transaction";
 import { createSqliteAuditLedgerStore } from "@workload-funnel/store-sqlite/audit-ledger-persistence";
 import { createSqliteInboxStore } from "@workload-funnel/store-sqlite/command-inbox";
 import { createSqliteProjectionStore } from "@workload-funnel/store-sqlite/projection-checkpoints";
-import { createSqliteReconciliationClaimStore } from "@workload-funnel/store-sqlite/reconciliation-claims";
+import { createInMemorySqliteReconciliationClaimStoreTestFake } from "@workload-funnel/store-sqlite/reconciliation-claims";
 import { createSqliteOutboxStore } from "@workload-funnel/store-sqlite/transactional-outbox";
 import { createSqliteLifecycleRepository } from "@workload-funnel/store-sqlite/workload-persistence";
 import { createLocalDispatchCapabilityProvider } from "@workload-funnel/dispatcher-local/capability-discovery";
@@ -286,8 +286,8 @@ export function createPhase1SyntheticService(
   };
   const reconciliationClaims =
     database.profile === "postgres"
-      ? createPostgresReconciliationClaimStore(claimState)
-      : createSqliteReconciliationClaimStore(claimState);
+      ? createInMemoryPostgresReconciliationClaimStoreTestFake(claimState)
+      : createInMemorySqliteReconciliationClaimStoreTestFake(claimState);
   const ownershipTransfer = createOwnershipTransferService(
     ownershipTransferCoordinatorStore(state, reconciliationClaims),
     reconciliationClaims,

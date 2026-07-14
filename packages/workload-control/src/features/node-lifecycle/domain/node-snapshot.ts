@@ -293,6 +293,48 @@ export function recordNodeObservation(
   });
 }
 
+export function recordNodeRebootObservation(
+  node: NodeSnapshot,
+  expectedVersion: number,
+  observation: NodeObservation,
+  policy: PressureHysteresisPolicy,
+): NodeSnapshot {
+  if (node.version !== expectedVersion) throw new StaleNodeRevisionError();
+  if (!new Set<NodeSchedulingState>(["cordoned", "draining"]).has(node.state))
+    throw new InvalidNodeObservationError("reboot_requires_cordoned_node");
+  if (observation.bootEpoch === node.bootEpoch)
+    throw new InvalidNodeObservationError("reboot_boot_epoch_not_advanced");
+  if (observation.sourceSequence !== 1)
+    throw new InvalidNodeObservationError(
+      "reboot_observation_sequence_invalid",
+    );
+  if (observation.observedAt < node.heartbeatObservedAt)
+    throw new InvalidNodeObservationError("non_monotonic_observation_time");
+  validateObservationIdentity(observation);
+  const pressureState = nextPressureState(
+    Object.freeze({
+      ...node,
+      consecutiveHealthyPressure: 0,
+      consecutiveHighPressure: 0,
+      pressureMode: "critical",
+    }),
+    observation.pressure,
+    policy,
+  );
+  return Object.freeze({
+    ...node,
+    ...pressureState,
+    bootEpoch: observation.bootEpoch,
+    heartbeatObservedAt: observation.observedAt,
+    lastSourceSequence: observation.sourceSequence,
+    nodeObservationRevision: node.nodeObservationRevision + 1,
+    pressure: Object.freeze({ ...observation.pressure }),
+    reportedCapacity: freezeCapacity(observation.capacity),
+    state: "cordoned",
+    version: node.version + 1,
+  });
+}
+
 export function transitionNodeScheduling(
   node: NodeSnapshot,
   expectedVersion: number,

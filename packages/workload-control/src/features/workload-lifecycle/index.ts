@@ -65,3 +65,32 @@ export type {
   WitnessRecord,
 } from "./application/contracts/external-witness.js";
 export { reconcileAcceptanceWitness } from "./application/witness-process.js";
+export {
+  advanceDisasterRecovery,
+  advancePersistedDisasterRecovery,
+  assertDisasterRecoveryAdmissionOpen,
+  beginDisasterRecovery,
+  beginPersistedDisasterRecovery,
+  canonicalHistoryDigest,
+  disasterRecoveryEffectEvidenceDigest,
+  createWorkloadBackupManifest,
+  DisasterRecoveryError,
+  signDisasterRecoveryEffectReceipt,
+  type CanonicalHistoryKind,
+  type CanonicalHistoryRecord,
+  type DisasterRecoveryOperation,
+  type DisasterRecoveryEffectReceipt,
+  type DisasterRecoveryEffectPayload,
+  type DisasterRecoveryEffectTrust,
+  type DisasterRecoveryStore,
+  type DisasterRecoveryStep,
+  type WorkloadBackupManifest,
+} from "./application/disaster-recovery.js";
+export {
+  disasterRecoveryCompletedEffectEvidenceDigest,
+  signDisasterRecoveryCompletedEffectReceipt,
+  verifyDisasterRecoveryCompletedEffectReceipt,
+  type DisasterRecoveryCompletedEffectKind,
+  type DisasterRecoveryCompletedEffectReceipt,
+  type DisasterRecoveryCompletedEffectTrust,
+} from "./application/disaster-recovery-effect-evidence.js";

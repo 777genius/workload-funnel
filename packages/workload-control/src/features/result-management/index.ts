@@ -52,3 +52,16 @@ export {
   type DeleteRetainedResultCommand,
   type FinalizeStagedResultCommand,
 } from "./application/artifact-lifecycle-service.js";
+export {
+  createDurableArtifactMutationAuthority,
+  createInMemoryArtifactMutationAuthorityStoreTestFake,
+  createInMemoryArtifactMutationAuthorityTestFake,
+  createInMemoryArtifactMutationAuthorityTestState,
+  ArtifactMutationAuthorityError,
+  type ArtifactAuthorityWatermark,
+  type ArtifactMutationAuthority,
+  type ArtifactMutationAuthorityReceipt,
+  type ArtifactMutationAuthorityStore,
+  type ArtifactMutationAuthorityTransaction,
+  type InMemoryArtifactMutationAuthorityTestState,
+} from "./application/artifact-mutation-authority.js";

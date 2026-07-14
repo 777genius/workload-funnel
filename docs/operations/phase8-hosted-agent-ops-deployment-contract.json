@@ -1,0 +1,47 @@
+{
+  "contractVersion": "workload-funnel.hosted-ops/v1",
+  "releaseId": "workload-funnel-phase8-synthetic-rehearsal",
+  "immutableReleaseDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "productionStartsEnabled": false,
+  "privilegedStartsEnabled": false,
+  "syntheticFixturesOnly": true,
+  "externalRepositoryMutationAllowed": false,
+  "serviceUsers": [
+    "workload-funnel-control",
+    "workload-funnel-node",
+    "workload-funnel-launcher",
+    "workload-funnel-result-sealer",
+    "workload-funnel-runtime-broker",
+    "workload-funnel-scheduler-gateway",
+    "workload-funnel-artifact-retention"
+  ],
+  "secretReferences": [
+    "secret-ref:workload-funnel/node-ca",
+    "secret-ref:workload-funnel/ticket-signing",
+    "secret-ref:workload-funnel/recovery-watermark"
+  ],
+  "requiredPreflight": [
+    "signed mixed-version compatibility intersection",
+    "complete final-authority effect freeze",
+    "durable service and node identity authority",
+    "node drain and reboot reconciliation",
+    "backup history and external watermark comparison",
+    "bounded synthetic host-control SLO",
+    "deterministic stale-authority chaos"
+  ],
+  "migrationStages": [
+    "expand",
+    "dual_write",
+    "backfill",
+    "validate",
+    "switch_reads",
+    "stop_old_writes",
+    "rollback_wait",
+    "contract"
+  ],
+  "rollback": {
+    "destructiveDatabaseDowngrade": false,
+    "requiresFreshWriterEpoch": true,
+    "observationAndCancellationRemainEnabled": true
+  }
+}

@@ -167,6 +167,70 @@ const metricDefinitions: readonly MetricDefinition[] = [
     description: "HTTP request duration",
     labelKeys: ["method", "route"],
   },
+  {
+    name: "accepted_api_success_ratio",
+    kind: "gauge",
+    unit: "1",
+    description: "Durably confirmed acceptance success ratio",
+    labelKeys: ["durability_profile"],
+  },
+  {
+    name: "control_operation_latency",
+    kind: "histogram",
+    unit: "ms",
+    description: "Observation, cancellation, and host-control latency",
+    labelKeys: ["operation", "outcome"],
+  },
+  {
+    name: "host_control_latency_under_load",
+    kind: "histogram",
+    unit: "ms",
+    description: "Protected host-control latency during bounded load",
+    labelKeys: ["operation"],
+  },
+  {
+    name: "stale_mutation_external_effects",
+    kind: "counter",
+    unit: "{effect}",
+    description: "External effects incorrectly executed by stale authorities",
+    labelKeys: ["authority"],
+  },
+  {
+    name: "service_identity_events",
+    kind: "counter",
+    unit: "{event}",
+    description:
+      "Enrollment, rotation, revocation, quarantine, and replay results",
+    labelKeys: ["event", "outcome"],
+  },
+  {
+    name: "node_maintenance",
+    kind: "gauge",
+    unit: "{operation}",
+    description: "Cordon, drain, reboot, and reconciliation operations",
+    labelKeys: ["kind", "state"],
+  },
+  {
+    name: "backup_history_loss",
+    kind: "gauge",
+    unit: "{record}",
+    description: "Accepted or terminal history records missing after restore",
+    labelKeys: ["history_kind"],
+  },
+  {
+    name: "disaster_recovery",
+    kind: "gauge",
+    unit: "{operation}",
+    description: "Restore quarantine and disaster recovery phase",
+    labelKeys: ["phase", "outcome"],
+  },
+  {
+    name: "slo_burn_rate",
+    kind: "gauge",
+    unit: "1",
+    description: "Bounded SLO error-budget burn rate",
+    labelKeys: ["slo", "window"],
+  },
 ];
 
 export const WORKLOAD_FUNNEL_METRICS: readonly MetricDefinition[] =

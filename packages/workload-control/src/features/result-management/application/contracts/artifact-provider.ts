@@ -71,7 +71,7 @@ export interface ArtifactProvider {
 }
 
 export interface ArtifactProviderSet {
-  select(capability: ArtifactCapability): ArtifactProvider;
+  select(providerId: string, capability: ArtifactCapability): ArtifactProvider;
   readonly providers: readonly ArtifactProvider[];
 }
 
@@ -81,10 +81,11 @@ export function createArtifactProviderSet(
   }>,
 ): ArtifactProviderSet {
   const providers = Object.freeze([...input.providers]);
-  const byCapability = new Map<ArtifactCapability, ArtifactProvider>();
+  const byCapability = new Map<string, ArtifactProvider>();
   for (const provider of providers) {
     for (const capability of provider.capabilities) {
-      if (byCapability.has(capability))
+      const key = `${provider.providerId}\u0000${capability}`;
+      if (!provider.providerId || byCapability.has(key))
         throw new Error("ambiguous_artifact_capability");
       if (
         capability === "verify_finalized_bytes" &&
@@ -98,13 +99,13 @@ export function createArtifactProviderSet(
         provider.reconcileDelete === undefined
       )
         throw new Error("artifact_delete_reconciliation_missing_operation");
-      byCapability.set(capability, provider);
+      byCapability.set(key, provider);
     }
   }
   return Object.freeze({
     providers,
-    select(capability: ArtifactCapability) {
-      const provider = byCapability.get(capability);
+    select(providerId: string, capability: ArtifactCapability) {
+      const provider = byCapability.get(`${providerId}\u0000${capability}`);
       if (provider === undefined)
         throw new Error("unschedulable_missing_capability");
       return provider;

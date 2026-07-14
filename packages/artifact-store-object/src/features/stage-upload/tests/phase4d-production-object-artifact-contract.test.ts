@@ -1,16 +1,25 @@
-import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   fingerprintMutationFence,
   type MutationFence,
 } from "@workload-funnel/kernel";
-import type {
-  ArtifactStageCommand,
-  ScopedUploadIdentity,
+import {
+  scopedUploadAuthorityDigest,
+  signPrivilegedSealReceipt,
+  type ArtifactStageEntry,
+  type ArtifactStageCommand,
+  type ScopedUploadIdentity,
 } from "@workload-funnel/node-execution/result-staging-reporting";
 import {
   createArtifactProviderSet,
+  createDurableArtifactMutationAuthority,
+  createInMemoryArtifactMutationAuthorityTestFake,
+  createInMemoryArtifactMutationAuthorityTestState,
   deleteAndTombstoneResult,
   markRetentionDue,
   prepareArtifactOperation,
@@ -25,9 +34,16 @@ import {
 import { createProvider as createVerifyProvider } from "../../verify-finalize/index.js";
 import {
   createProvider as createStageProvider,
+  openSqliteArtifactMutationAuthorityStore,
   type ObjectStagePutReceipt,
   type ScopedCreateOnlyObjectClient,
 } from "../index.js";
+
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0))
+    rmSync(root, { force: true, recursive: true });
+});
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -49,6 +65,8 @@ function fence(
     expectedDesiredVersion: 1,
     namespaceId: "namespace-1",
     namespaceWriterEpoch: 1,
+    notAfter: 1000,
+    notBefore: 0,
     operationGateRevision: 1,
     ownerFence: 2,
     requiredGate: gate,
@@ -57,33 +75,82 @@ function fence(
   });
 }
 
+const sealKeys = generateKeyPairSync("ed25519");
+const trustedSealReceiptKeys = new Map([
+  ["synthetic-seal-receipt-key", sealKeys.publicKey],
+]);
+
 function command(): ArtifactStageCommand {
+  const entries: readonly ArtifactStageEntry[] = Object.freeze([
+    { digest: digest("payload"), path: "nested/result.bin", sizeBytes: 7 },
+  ]);
+  const uploadIdentity = Object.freeze({
+    allocationId: "allocation-1",
+    canDelete: false as const,
+    canList: false as const,
+    canOverwrite: false as const,
+    canRead: false as const,
+    permissions: Object.freeze(["create"] as const),
+    prefix: "allocation-1/generation-1/",
+  });
   return Object.freeze({
     allocationId: "allocation-1",
     attemptId: "attempt-1",
-    entries: Object.freeze([
-      { digest: digest("payload"), path: "nested/result.bin", sizeBytes: 7 },
-    ]),
+    entries,
     executionGeneration: "generation-1",
     executionId: "execution-1",
     manifestDigest: digest("manifest"),
     mutationFence: fence("artifact_stage", "artifact-stage:execution-1"),
     operationId: "stage-object-1",
+    privilegedSealReceipt: signPrivilegedSealReceipt(
+      {
+        allocationId: "allocation-1",
+        attemptId: "attempt-1",
+        authorityRegistrySequence: 7,
+        contractVersion: 1,
+        entries,
+        executionGeneration: "generation-1",
+        executionId: "execution-1",
+        issuedAt: 0,
+        notAfter: 1000,
+        providerId: "result-sealer",
+        sealId: "seal-1",
+        sealMutationFenceFingerprint: `fence-v1-${digest("seal-fence")}`,
+        sealOperationId: "seal-operation-1",
+        signerKeyId: "synthetic-seal-receipt-key",
+        totalBytes: 7,
+        treeDigest: digest("tree"),
+        uploadAuthorityDigest: scopedUploadAuthorityDigest(uploadIdentity),
+      },
+      sealKeys.privateKey,
+    ),
     sealId: "seal-1",
     treeDigest: digest("tree"),
-    uploadIdentity: Object.freeze({
-      allocationId: "allocation-1",
-      canDelete: false,
-      canList: false,
-      canOverwrite: false,
-      canRead: false,
-      permissions: Object.freeze(["create"] as const),
-      prefix: "allocation-1/generation-1/",
-    }),
+    uploadIdentity,
   });
 }
 
+function artifactAuthority(...fences: readonly MutationFence[]) {
+  const authority = createInMemoryArtifactMutationAuthorityTestFake(
+    createInMemoryArtifactMutationAuthorityTestState(),
+  );
+  for (const [index, mutationFence] of fences.entries())
+    authority.install({
+      mutationFence,
+      now: 100,
+      operationId: `install-object-authority-${String(index)}`,
+      writerIdentity: "synthetic-control-writer",
+    });
+  return authority;
+}
+
 class FakeCreateOnlyClient implements ScopedCreateOnlyObjectClient {
+  public readonly capabilities = Object.freeze({
+    createOnly: true as const,
+    finalMutationFencing: true as const,
+    scopedCredentials: true as const,
+    serverChecksum: true as const,
+  });
   public constructor(
     public readonly scope: ScopedUploadIdentity,
     private readonly objects: Map<
@@ -92,7 +159,12 @@ class FakeCreateOnlyClient implements ScopedCreateOnlyObjectClient {
     >,
   ) {}
   public putIfAbsent(
-    input: Readonly<{ key: string; bytes: Uint8Array; checksum: string }>,
+    input: Readonly<{
+      key: string;
+      bytes: Uint8Array;
+      checksum: string;
+      authority: unknown;
+    }>,
   ): Promise<ObjectStagePutReceipt> {
     if (!input.key.startsWith(this.scope.prefix))
       throw new Error("fake_scope_escape");
@@ -129,22 +201,37 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
       string,
       Readonly<{ bytes: Buffer; checksum: string }>
     >();
+    const stageFence = command().mutationFence;
+    const deleteFence = fence(
+      "artifact_delete",
+      "artifact-delete:manifest-1",
+      "result_retention",
+    );
+    const authority = artifactAuthority(stageFence, deleteFence);
     const stage = createStageProvider({
+      authority,
       clientFor(identity) {
         return new FakeCreateOnlyClient(identity, objects);
       },
       providerId: "production-object",
+      nowMs: () => 100,
       sealedReader: {
         read() {
           return Promise.resolve(Buffer.from("payload"));
         },
       },
+      trustedSealReceiptKeys,
     });
     const staged = await stage.stage(command());
     expect(await stage.stage(command())).toEqual(staged);
     expect(objects.size).toBe(1);
 
     const retention: ObjectRetentionClient = {
+      capabilities: Object.freeze({
+        finalMutationFencing: true,
+        prefixDeleteOnly: true,
+        retentionCredential: true,
+      }),
       deletePrefixOnce(input) {
         for (const key of [...objects.keys()])
           if (key.startsWith(input.identity)) objects.delete(key);
@@ -199,6 +286,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
           providerId: "production-object",
         }),
         createDeleteProvider({
+          authority,
           client: retention,
           nowMs: () => 200,
           providerId: "production-object",
@@ -206,6 +294,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
       ],
     });
     const stagedManifest = stageResultManifest({
+      artifactProviderId: staged.providerId,
       attemptId: "attempt-1",
       entries: staged.entries,
       executionId: "execution-1",
@@ -232,11 +321,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
     );
     const deleted = await deleteAndTombstoneResult(providers, {
       manifest: deleting,
-      mutationFence: fence(
-        "artifact_delete",
-        "artifact-delete:manifest-1",
-        "result_retention",
-      ),
+      mutationFence: deleteFence,
       tombstone: {
         actorId: "retention-worker",
         deletedAt: 200,
@@ -251,11 +336,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
     });
     const tombstoned = await reconcileDeletionAndTombstoneResult(providers, {
       manifest: deleted.manifest,
-      mutationFence: fence(
-        "artifact_delete",
-        "artifact-delete:manifest-1",
-        "result_retention",
-      ),
+      mutationFence: deleteFence,
       tombstone: {
         actorId: "retention-worker",
         deletedAt: 200,
@@ -273,16 +354,26 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
       string,
       Readonly<{ bytes: Buffer; checksum: string }>
     >();
+    const stageFence = command().mutationFence;
+    const deleteFence = fence(
+      "artifact_delete",
+      "artifact-delete:manifest-1",
+      "result_retention",
+    );
+    const authority = artifactAuthority(stageFence, deleteFence);
     const stage = createStageProvider({
+      authority,
       clientFor(identity) {
         return new FakeCreateOnlyClient(identity, objects);
       },
       providerId: "production-object",
+      nowMs: () => 100,
       sealedReader: {
         read() {
           return Promise.resolve(Buffer.from("payload"));
         },
       },
+      trustedSealReceiptKeys,
     });
     const original = command();
     await expect(
@@ -299,6 +390,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
     const manifest = prepareArtifactOperation(
       markRetentionDue({
         ...stageResultManifest({
+          artifactProviderId: staged.providerId,
           attemptId: "attempt-1",
           entries: staged.entries,
           executionId: "execution-1",
@@ -322,7 +414,13 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
     const providers = createArtifactProviderSet({
       providers: [
         createDeleteProvider({
+          authority,
           client: {
+            capabilities: Object.freeze({
+              finalMutationFencing: true,
+              prefixDeleteOnly: true,
+              retentionCredential: true,
+            }),
             deletePrefixOnce(input) {
               deleteCalls += 1;
               return Promise.resolve({
@@ -351,17 +449,14 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
               });
             },
           },
+          nowMs: () => 100,
           providerId: "production-object",
         }),
       ],
     });
     const result = await deleteAndTombstoneResult(providers, {
       manifest,
-      mutationFence: fence(
-        "artifact_delete",
-        "artifact-delete:manifest-1",
-        "result_retention",
-      ),
+      mutationFence: deleteFence,
       tombstone: {
         actorId: "retention-worker",
         deletedAt: 200,
@@ -378,11 +473,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
     await expect(
       deleteAndTombstoneResult(providers, {
         manifest: result.manifest,
-        mutationFence: fence(
-          "artifact_delete",
-          "artifact-delete:manifest-1",
-          "result_retention",
-        ),
+        mutationFence: deleteFence,
         tombstone: {
           actorId: "retention-worker",
           deletedAt: 200,
@@ -395,11 +486,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
     expect(deleteCalls).toBe(1);
     const reconciled = await reconcileDeletionAndTombstoneResult(providers, {
       manifest: result.manifest,
-      mutationFence: fence(
-        "artifact_delete",
-        "artifact-delete:manifest-1",
-        "result_retention",
-      ),
+      mutationFence: deleteFence,
       tombstone: {
         actorId: "retention-worker",
         deletedAt: 200,
@@ -412,5 +499,115 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
       artifactOperation: { state: "retryable" },
       retentionState: "deleting",
     });
+  });
+
+  it("persists cross-scope authority across restart and makes zero external calls for stale, expired, or substituted seals", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wf-artifact-authority-"));
+    roots.push(root);
+    const path = join(root, "authority.sqlite");
+    const stageFence = command().mutationFence;
+    let opened = openSqliteArtifactMutationAuthorityStore(path);
+    let durableAuthority = createDurableArtifactMutationAuthority(opened.store);
+    durableAuthority.install({
+      mutationFence: stageFence,
+      now: 100,
+      operationId: "install-restart-authority",
+      writerIdentity: "writer-1",
+    });
+    durableAuthority.install({
+      mutationFence: {
+        ...stageFence,
+        effectScopeKey: "artifact-stage:execution-newer",
+        expectedDesiredVersion: 2,
+        namespaceWriterEpoch: 2,
+        supersessionKey: "artifact-stage:execution-newer",
+      },
+      now: 100,
+      operationId: "install-newer-cross-scope-authority",
+      writerIdentity: "writer-2",
+    });
+    opened.close();
+
+    opened = openSqliteArtifactMutationAuthorityStore(path);
+    durableAuthority = createDurableArtifactMutationAuthority(opened.store);
+    let clientCalls = 0;
+    let readCalls = 0;
+    let putCalls = 0;
+    let now = 100;
+    const stage = createStageProvider({
+      authority: durableAuthority,
+      clientFor(identity) {
+        clientCalls += 1;
+        const client = new FakeCreateOnlyClient(identity, new Map());
+        return Object.freeze({
+          capabilities: client.capabilities,
+          putIfAbsent(input: Parameters<typeof client.putIfAbsent>[0]) {
+            putCalls += 1;
+            return client.putIfAbsent(input);
+          },
+          scope: client.scope,
+        });
+      },
+      nowMs: () => now,
+      providerId: "production-object",
+      sealedReader: {
+        read() {
+          readCalls += 1;
+          return Promise.resolve(Buffer.from("payload"));
+        },
+      },
+      trustedSealReceiptKeys,
+    });
+    await expect(stage.stage(command())).rejects.toThrow(
+      "artifact_cross_scope_high_watermark_rejected",
+    );
+    expect({ clientCalls, putCalls, readCalls }).toEqual({
+      clientCalls: 0,
+      putCalls: 0,
+      readCalls: 0,
+    });
+    await expect(
+      stage.stage({
+        ...command(),
+        mutationFence: { ...stageFence, ownerFence: 1 },
+      }),
+    ).rejects.toThrow("artifact_authority_not_installed");
+    expect({ clientCalls, putCalls, readCalls }).toEqual({
+      clientCalls: 0,
+      putCalls: 0,
+      readCalls: 0,
+    });
+
+    now = 1000;
+    await expect(stage.stage(command())).rejects.toThrow();
+    expect({ clientCalls, putCalls, readCalls }).toEqual({
+      clientCalls: 0,
+      putCalls: 0,
+      readCalls: 0,
+    });
+
+    now = 100;
+    const substitutedUpload = Object.freeze({
+      ...command().uploadIdentity,
+      allocationId: "allocation-2",
+      prefix: "allocation-2/generation-1/",
+    });
+    await expect(
+      stage.stage({
+        ...command(),
+        allocationId: "allocation-2",
+        mutationFence: {
+          ...stageFence,
+          allocationId: "allocation-2",
+        },
+        uploadIdentity: substitutedUpload,
+      }),
+    ).rejects.toThrow("privileged_seal_receipt_invalid");
+    expect({ clientCalls, putCalls, readCalls }).toEqual({
+      clientCalls: 0,
+      putCalls: 0,
+      readCalls: 0,
+    });
+    opened.close();
   });
 });

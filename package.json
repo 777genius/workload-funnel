@@ -9,7 +9,7 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check && node tooling/architecture/check-phase7-hyperqueue.mjs",
+    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check && node tooling/architecture/check-phase7-hyperqueue.mjs && node tooling/architecture/check-phase8-production.mjs",
     "build": "pnpm --filter './packages/*' --filter './apps/operator-cli' --filter './apps/scheduler-mutation-gateway' build",
     "changeset": "changeset",
     "changeset:status": "changeset status --since=main",
@@ -23,6 +23,7 @@
     "lint:code": "eslint . --max-warnings=0",
     "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.pnpm-store\"",
     "test": "vitest run",
+    "test:phase8": "vitest run --testNamePattern=\"Phase 8|Phase 4D\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

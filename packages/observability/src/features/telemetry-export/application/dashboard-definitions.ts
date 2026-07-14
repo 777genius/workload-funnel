@@ -90,4 +90,52 @@ export const WORKLOAD_FUNNEL_DASHBOARDS: readonly DashboardDefinitionV1[] =
       ]),
       title: "WorkloadFunnel resources and results",
     }),
+    Object.freeze({
+      contractVersion: "workload-funnel.dashboard/v1",
+      dashboardId: "phase8-production-safety",
+      panels: Object.freeze([
+        Object.freeze({
+          metricNames: Object.freeze([
+            "accepted_api_success_ratio",
+            "control_operation_latency",
+            "host_control_latency_under_load",
+            "reconciliation_lag",
+          ]),
+          panelId: "slo-latency",
+          title: "Production SLO signals",
+          visualization: "timeseries",
+        }),
+        Object.freeze({
+          metricNames: Object.freeze([
+            "stale_mutation_external_effects",
+            "service_identity_events",
+          ]),
+          panelId: "identity-fencing",
+          title: "Identity and fencing safety",
+          visualization: "stat",
+        }),
+        Object.freeze({
+          metricNames: Object.freeze(["node_maintenance"]),
+          panelId: "node-maintenance",
+          title: "Cordon, drain, and reboot",
+          visualization: "stat",
+        }),
+        Object.freeze({
+          metricNames: Object.freeze([
+            "backup_history_loss",
+            "disaster_recovery",
+          ]),
+          panelId: "disaster-recovery",
+          title: "Backup and restore quarantine",
+          visualization: "stat",
+        }),
+        Object.freeze({
+          metricNames: Object.freeze(["slo_burn_rate"]),
+          panelId: "slo-burn",
+          title: "SLO error-budget burn",
+          visualization: "timeseries",
+        }),
+      ]),
+      title: "WorkloadFunnel Phase 8 production safety",
+    }),
   ]);

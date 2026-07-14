@@ -10,10 +10,12 @@ import {
 import type {
   ArtifactDeleteCommand,
   ArtifactDeleteReceipt,
+  ArtifactMutationAuthority,
   ArtifactProvider,
 } from "@workload-funnel/workload-control/result-management";
 
 export interface FilesystemRetentionDeleteConfig {
+  readonly authority: ArtifactMutationAuthority;
   readonly root: string;
   readonly nowMs?: () => number;
 }
@@ -73,6 +75,7 @@ export function createProvider(
       if (metadata !== undefined && !metadata.isDirectory())
         throw new Error("unsafe_artifact_delete_target");
       if (metadata !== undefined) {
+        config.authority.authorize(command.mutationFence, nowMs());
         try {
           await rm(target, { recursive: true, force: false });
         } catch {

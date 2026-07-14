@@ -5,8 +5,10 @@
 WorkloadFunnel is a durable workload admission and execution system for agents,
 jobs, builds, tests, benchmarks, and general processes.
 
-The project is in Phase 0: decisions and skeleton. It has no production launch
-path. Its architecture source of truth is:
+The checked implementation includes the synthetic-verified Phase 0 through
+Phase 8 slices. Production and privileged starts remain disabled until the
+deployment capability, security, migration, and operator gates pass. The
+architecture source of truth is:
 
 - [Architecture and implementation plan](docs/workload-funnel-architecture-plan.md)
 
@@ -43,28 +45,25 @@ The domain and application packages must not import HyperQueue, systemd,
 Postgres, SQLite, Docker, Kubernetes, Codex, Claude, or any project-specific
 orchestrator.
 
-## Phase 0 workspace
+## Workspace verification
 
 The approved foundation is Node.js 24, pnpm 10.33.4, the
 `@workload-funnel/*` package scope, Changesets, and the MIT License. The repository
 and all packages remain private until the explicit transition gates in
 [ADR-0001](docs/adr/0001-phase-0-foundation-decisions.md) pass.
 
-Active product code remains one `workload-control/tenant-admission` vertical
-slice and the two fixed Phase 0 control-profile composition outputs. The slice
-demonstrates an immutable domain value, fail-closed domain policy, application
-use case, feature public API, and focused tests. The profiles advertise only
-their fixed local capabilities and return
-`unschedulable_missing_capability` for absent later-phase capabilities. They do
-not dispatch or launch work. Phase 0.5 also has seven executable, synthetic
-feasibility harnesses documented in
-[ADR-0002](docs/adr/0002-phase-0-5-feasibility-gates.md). Unsupported host
-capabilities remain typed, unschedulable, and closed.
+The generated control profiles still advertise only their fixed local
+capabilities and fail closed for unavailable production capabilities. Phase 8
+adds synthetic multi-node identity, failover, maintenance, artifact,
+disaster-recovery, SLO, load/chaos, and deployment rehearsal evidence without
+enabling a production or privileged execution path. See the
+[Phase 8 runbook](docs/operations/phase8-production-hardening-runbook.md).
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm check
 pnpm build
+pnpm test:phase8
 pnpm feasibility:run
 git diff --check
 ```
@@ -76,6 +75,6 @@ checked composition outputs from
 
 ## Status
 
-No production API or compatibility guarantee exists. Phase 0 does not include
-host launching, scheduler/provider integration, persistence, production
-workloads, or testing against real user projects.
+No production enablement or public compatibility guarantee is implied by the
+synthetic acceptance evidence. Tests must not run against real user projects,
+real schedulers, real network services, or production host-control boundaries.

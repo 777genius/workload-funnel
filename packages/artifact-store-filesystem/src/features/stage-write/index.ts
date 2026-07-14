@@ -25,16 +25,21 @@ import {
   type ArtifactStageReceipt,
   type ArtifactStageWriter,
 } from "@workload-funnel/node-execution/result-staging-reporting";
-import type { ResultEntry } from "@workload-funnel/workload-control/result-management";
+import type {
+  ArtifactMutationAuthority,
+  ResultEntry,
+} from "@workload-funnel/workload-control/result-management";
 
 export interface SealedArtifactReader {
   read(sealId: string, path: string): Promise<Uint8Array>;
 }
 
 export interface FilesystemStageWriterConfig {
+  readonly authority: ArtifactMutationAuthority;
   readonly nativeHelperPath: string;
   readonly root: string;
   readonly sealedReader: SealedArtifactReader;
+  readonly nowMs?: () => number;
 }
 
 function assertFence(
@@ -157,6 +162,7 @@ function requireNative(
 export function createProvider(
   config: FilesystemStageWriterConfig,
 ): ArtifactStageWriter {
+  const nowMs = config.nowMs ?? Date.now;
   const configuredRoot = resolve(config.root);
   if (!isAbsolute(configuredRoot))
     throw new Error("artifact_root_must_be_absolute");
@@ -172,8 +178,10 @@ export function createProvider(
     throw new Error("native_artifact_boundary_profile_mismatch");
   const writer: ArtifactStageWriter = {
     capability: "create_only_scoped_stage",
+    providerId: "local-filesystem",
     async stage(command): Promise<ArtifactStageReceipt> {
       assertFence(command.mutationFence, command);
+      config.authority.authorize(command.mutationFence, nowMs());
       const identity = stagingIdentity(command);
       const finalName = createHash("sha256").update(identity).digest("hex");
       const workName = `pending-${createHash("sha256")
@@ -193,6 +201,7 @@ export function createProvider(
         finalName,
       ]);
       if (existing.status !== 0) {
+        config.authority.authorize(command.mutationFence, nowMs());
         requireNative(config.nativeHelperPath, [
           "prepare-stage",
           root,
@@ -209,6 +218,7 @@ export function createProvider(
             createHash("sha256").update(content).digest("hex") !== entry.digest
           )
             throw new Error("sealed_artifact_digest_mismatch");
+          config.authority.authorize(command.mutationFence, nowMs());
           requireNative(
             config.nativeHelperPath,
             [
@@ -223,6 +233,7 @@ export function createProvider(
             content,
           );
         }
+        config.authority.authorize(command.mutationFence, nowMs());
         const commit = invokeNative(config.nativeHelperPath, [
           "commit-stage",
           root,
@@ -265,6 +276,7 @@ export function createProvider(
         manifestDigest: command.manifestDigest,
         mutationFenceFingerprint,
         operationId: command.operationId,
+        providerId: "local-filesystem",
       };
       return Object.freeze({
         ...receiptFields,

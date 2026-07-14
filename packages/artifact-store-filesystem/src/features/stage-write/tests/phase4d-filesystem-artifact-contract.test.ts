@@ -19,6 +19,8 @@ import {
 import type { ArtifactStageCommand } from "@workload-funnel/node-execution/result-staging-reporting";
 import {
   createArtifactProviderSet,
+  createInMemoryArtifactMutationAuthorityTestFake,
+  createInMemoryArtifactMutationAuthorityTestState,
   deleteAndTombstoneResult,
   markRetentionDue,
   prepareArtifactOperation,
@@ -85,6 +87,8 @@ function fence(
     expectedDesiredVersion: 1,
     namespaceId: "namespace-1",
     namespaceWriterEpoch: 1,
+    notAfter: 1000,
+    notBefore: 0,
     operationGateRevision: 1,
     ownerFence: 1,
     requiredGate: gate,
@@ -117,12 +121,39 @@ function stageCommand(path = "result.txt"): ArtifactStageCommand {
   });
 }
 
+function artifactAuthority(...fences: readonly MutationFence[]) {
+  const authority = createInMemoryArtifactMutationAuthorityTestFake(
+    createInMemoryArtifactMutationAuthorityTestState(),
+  );
+  for (const [index, mutationFence] of fences.entries())
+    authority.install({
+      mutationFence,
+      now: 100,
+      operationId: `install-artifact-${String(index)}`,
+      writerIdentity: "synthetic-control-writer",
+    });
+  return authority;
+}
+
 describe("Phase 4D local-filesystem artifact adapter contract", () => {
   it("stages create-only bytes, verifies checksums, finalizes, and tombstones after verified deletion", async () => {
     const root = await mkdtemp(join(tmpdir(), "wf-phase4d-local-artifacts-"));
     roots.push(root);
+    const stageFence = stageCommand().mutationFence;
+    const finalizeFence = fence(
+      "artifact_finalize",
+      "result-finalize:manifest-1",
+    );
+    const deleteFence = fence(
+      "artifact_delete",
+      "artifact-delete:manifest-1",
+      "result_retention",
+    );
+    const authority = artifactAuthority(stageFence, deleteFence);
     const stage = createStageProvider({
+      authority,
       nativeHelperPath,
+      nowMs: () => 100,
       root,
       sealedReader: {
         read() {
@@ -134,6 +165,7 @@ describe("Phase 4D local-filesystem artifact adapter contract", () => {
     expect(await stage.stage(stageCommand())).toEqual(staged);
 
     const stagedManifest = stageResultManifest({
+      artifactProviderId: staged.providerId,
       attemptId: "attempt-1",
       entries: staged.entries,
       executionId: "execution-1",
@@ -156,12 +188,12 @@ describe("Phase 4D local-filesystem artifact adapter contract", () => {
     const providers = createArtifactProviderSet({
       providers: [
         createVerifyProvider({ nativeHelperPath, nowMs: () => 100, root }),
-        createDeleteProvider({ nowMs: () => 200, root }),
+        createDeleteProvider({ authority, nowMs: () => 200, root }),
       ],
     });
     const finalized = await verifyAndFinalizeStagedResult(providers, {
       manifest: stagedManifest,
-      mutationFence: fence("artifact_finalize", "result-finalize:manifest-1"),
+      mutationFence: finalizeFence,
       operationId: "verify-1",
     });
     expect(finalized.manifest).toMatchObject({
@@ -176,11 +208,7 @@ describe("Phase 4D local-filesystem artifact adapter contract", () => {
     );
     const deleted = await deleteAndTombstoneResult(providers, {
       manifest: deleting,
-      mutationFence: fence(
-        "artifact_delete",
-        "artifact-delete:manifest-1",
-        "result_retention",
-      ),
+      mutationFence: deleteFence,
       tombstone: {
         actorId: "retention-worker",
         deletedAt: 200,
@@ -195,11 +223,7 @@ describe("Phase 4D local-filesystem artifact adapter contract", () => {
     });
     const tombstoned = await reconcileDeletionAndTombstoneResult(providers, {
       manifest: deleted.manifest,
-      mutationFence: fence(
-        "artifact_delete",
-        "artifact-delete:manifest-1",
-        "result_retention",
-      ),
+      mutationFence: deleteFence,
       tombstone: {
         actorId: "retention-worker",
         deletedAt: 200,
@@ -215,7 +239,9 @@ describe("Phase 4D local-filesystem artifact adapter contract", () => {
     const root = await mkdtemp(join(tmpdir(), "wf-phase4d-local-artifacts-"));
     roots.push(root);
     const stage = createStageProvider({
+      authority: artifactAuthority(stageCommand().mutationFence),
       nativeHelperPath,
+      nowMs: () => 100,
       root,
       sealedReader: {
         read() {
@@ -248,7 +274,9 @@ describe("Phase 4D local-filesystem artifact adapter contract", () => {
     roots.push(outside);
     await symlink(outside, join(root, finalName));
     const stage = createStageProvider({
+      authority: artifactAuthority(command.mutationFence),
       nativeHelperPath,
+      nowMs: () => 100,
       root,
       sealedReader: {
         read() {
@@ -266,7 +294,9 @@ describe("Phase 4D local-filesystem artifact adapter contract", () => {
     const root = await mkdtemp(join(tmpdir(), "wf-phase4d-local-artifacts-"));
     roots.push(root);
     const stage = createStageProvider({
+      authority: artifactAuthority(stageCommand().mutationFence),
       nativeHelperPath,
+      nowMs: () => 100,
       root,
       sealedReader: {
         read() {
@@ -282,6 +312,7 @@ describe("Phase 4D local-filesystem artifact adapter contract", () => {
     await chmod(target, 0o600);
     await writeFile(target, "evil!");
     const manifest = stageResultManifest({
+      artifactProviderId: staged.providerId,
       attemptId: "attempt-1",
       entries: staged.entries,
       executionId: "execution-1",

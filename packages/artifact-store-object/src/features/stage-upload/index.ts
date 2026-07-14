@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, type KeyObject } from "node:crypto";
 
 import {
   fingerprintMutationFence,
@@ -7,12 +7,17 @@ import {
 } from "@workload-funnel/kernel";
 import {
   artifactStageReceiptBinding,
+  verifyPrivilegedSealReceipt,
   type ArtifactStageCommand,
   type ArtifactStageReceipt,
   type ArtifactStageWriter,
   type ScopedUploadIdentity,
 } from "@workload-funnel/node-execution/result-staging-reporting";
-import type { ResultEntry } from "@workload-funnel/workload-control/result-management";
+import type {
+  ArtifactMutationAuthority,
+  ArtifactMutationAuthorityReceipt,
+  ResultEntry,
+} from "@workload-funnel/workload-control/result-management";
 
 export interface ObjectStagePutReceipt {
   readonly key: string;
@@ -23,11 +28,18 @@ export interface ObjectStagePutReceipt {
 
 export interface ScopedCreateOnlyObjectClient {
   readonly scope: ScopedUploadIdentity;
+  readonly capabilities: Readonly<{
+    createOnly: boolean;
+    finalMutationFencing: boolean;
+    scopedCredentials: boolean;
+    serverChecksum: boolean;
+  }>;
   putIfAbsent(
     input: Readonly<{
       key: string;
       bytes: Uint8Array;
       checksum: string;
+      authority: ArtifactMutationAuthorityReceipt;
     }>,
   ): Promise<ObjectStagePutReceipt>;
 }
@@ -37,9 +49,12 @@ export interface SealedObjectReader {
 }
 
 export interface ObjectStageUploadConfig {
+  readonly authority: ArtifactMutationAuthority;
   clientFor(identity: ScopedUploadIdentity): ScopedCreateOnlyObjectClient;
   readonly sealedReader: SealedObjectReader;
   readonly providerId: string;
+  readonly nowMs?: () => number;
+  readonly trustedSealReceiptKeys: ReadonlyMap<string, KeyObject>;
 }
 
 function assertFence(
@@ -95,15 +110,33 @@ function safePath(path: string): readonly string[] {
 export function createProvider(
   config: ObjectStageUploadConfig,
 ): ArtifactStageWriter {
+  const nowMs = config.nowMs ?? Date.now;
   return Object.freeze({
     capability: "create_only_scoped_stage",
+    providerId: config.providerId,
     async stage(command: ArtifactStageCommand): Promise<ArtifactStageReceipt> {
       assertFence(command.mutationFence, command);
+      if (command.privilegedSealReceipt === undefined)
+        throw new Error("privileged_seal_receipt_missing");
+      verifyPrivilegedSealReceipt(
+        command.privilegedSealReceipt,
+        command,
+        config.trustedSealReceiptKeys,
+        nowMs(),
+      );
+      config.authority.authorize(command.mutationFence, nowMs());
       const client = config.clientFor(command.uploadIdentity);
       if (
         JSON.stringify(client.scope) !== JSON.stringify(command.uploadIdentity)
       )
         throw new Error("object_upload_scope_mismatch");
+      if (
+        !client.capabilities.createOnly ||
+        !client.capabilities.finalMutationFencing ||
+        !client.capabilities.scopedCredentials ||
+        !client.capabilities.serverChecksum
+      )
+        throw new Error("object_store_production_capability_missing");
       const immutableStagingIdentity = `${command.uploadIdentity.prefix}${Buffer.from(fingerprintMutationFence(command.mutationFence)).toString("base64url")}/${command.manifestDigest}`;
       const entries: ResultEntry[] = [];
       for (const entry of [...command.entries].sort((left, right) =>
@@ -120,7 +153,16 @@ export function createProvider(
         const checksum = createHash("sha256").update(bytes).digest("hex");
         if (checksum !== entry.digest || bytes.byteLength !== entry.sizeBytes)
           throw new Error("sealed_object_digest_mismatch");
-        const put = await client.putIfAbsent({ bytes, checksum, key });
+        const authority = config.authority.authorize(
+          command.mutationFence,
+          nowMs(),
+        );
+        const put = await client.putIfAbsent({
+          authority,
+          bytes,
+          checksum,
+          key,
+        });
         if (
           put.key !== key ||
           put.checksum !== checksum ||
@@ -144,6 +186,7 @@ export function createProvider(
           command.mutationFence,
         ),
         operationId: command.operationId,
+        providerId: config.providerId,
       };
       return Object.freeze({
         ...receiptFields,
@@ -154,3 +197,9 @@ export function createProvider(
     },
   });
 }
+
+export {
+  createSqliteArtifactMutationAuthorityStore,
+  openSqliteArtifactMutationAuthorityStore,
+  type OpenSqliteArtifactMutationAuthorityStore,
+} from "./sqlite-artifact-mutation-authority-store.js";

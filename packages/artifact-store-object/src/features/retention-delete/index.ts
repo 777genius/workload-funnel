@@ -6,10 +6,17 @@ import {
 import type {
   ArtifactDeleteCommand,
   ArtifactDeleteReceipt,
+  ArtifactMutationAuthority,
+  ArtifactMutationAuthorityReceipt,
   ArtifactProvider,
 } from "@workload-funnel/workload-control/result-management";
 
 export interface ObjectRetentionClient {
+  readonly capabilities: Readonly<{
+    finalMutationFencing: boolean;
+    prefixDeleteOnly: boolean;
+    retentionCredential: boolean;
+  }>;
   deletePrefixOnce(
     command: ObjectRetentionMutation,
   ): Promise<ObjectDeleteProviderReceipt>;
@@ -19,6 +26,7 @@ export interface ObjectRetentionClient {
 }
 
 export interface ObjectRetentionMutation {
+  readonly authority: ArtifactMutationAuthorityReceipt;
   readonly identity: string;
   readonly mutationFence: MutationFence;
   readonly operationId: string;
@@ -45,8 +53,12 @@ export interface ObjectDeleteReconciliationProviderReceipt {
   readonly status: "still_present" | "verified_absent";
 }
 
-function mutationFor(command: ArtifactDeleteCommand): ObjectRetentionMutation {
+function mutationFor(
+  command: ArtifactDeleteCommand,
+  authority: ArtifactMutationAuthorityReceipt,
+): ObjectRetentionMutation {
   return Object.freeze({
+    authority,
     identity: command.immutableStagingIdentity,
     mutationFence: command.mutationFence,
     operationId: command.operationId,
@@ -74,6 +86,7 @@ function assertProviderReceipt(
 }
 
 export interface ObjectRetentionDeleteConfig {
+  readonly authority: ArtifactMutationAuthority;
   readonly client: ObjectRetentionClient;
   readonly providerId: string;
   readonly nowMs?: () => number;
@@ -111,6 +124,12 @@ export function createProvider(
   config: ObjectRetentionDeleteConfig,
 ): ArtifactProvider {
   const nowMs = config.nowMs ?? Date.now;
+  if (
+    !config.client.capabilities.finalMutationFencing ||
+    !config.client.capabilities.prefixDeleteOnly ||
+    !config.client.capabilities.retentionCredential
+  )
+    throw new Error("object_store_retention_capability_missing");
   return Object.freeze({
     capabilities: Object.freeze(["retention_delete"] as const),
     async delete(
@@ -118,8 +137,12 @@ export function createProvider(
     ): Promise<ArtifactDeleteReceipt> {
       assertFence(command.mutationFence, command.resultManifestId);
       assertStagingIdentity(command);
+      const authority = config.authority.authorize(
+        command.mutationFence,
+        nowMs(),
+      );
       const receipt = await config.client.deletePrefixOnce(
-        mutationFor(command),
+        mutationFor(command, authority),
       );
       assertProviderReceipt(config, command, receipt);
       return receipt;
@@ -127,7 +150,12 @@ export function createProvider(
     async reconcileDelete(command: ArtifactDeleteCommand) {
       assertFence(command.mutationFence, command.resultManifestId);
       assertStagingIdentity(command);
-      const receipt = await config.client.reconcilePrefix(mutationFor(command));
+      const receipt = await config.client.reconcilePrefix(
+        mutationFor(
+          command,
+          config.authority.authorize(command.mutationFence, nowMs()),
+        ),
+      );
       assertProviderReceipt(config, command, receipt);
       return Object.freeze({ ...receipt, reconciledAtMs: nowMs() });
     },

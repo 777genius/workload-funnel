@@ -6,6 +6,7 @@ export {
   InvalidNodeObservationError,
   StaleNodeRevisionError,
   recordNodeObservation,
+  recordNodeRebootObservation,
   registerNode,
   replaceNodeCapabilities,
   transitionNodeScheduling,
@@ -18,6 +19,27 @@ export {
   type PressureMode,
   type VerifiedHostSurvivalProfileBinding,
 } from "./domain/node-snapshot.js";
+export {
+  advanceNodeMaintenance,
+  createNodeMaintenanceOperation,
+  NodeMaintenanceError,
+  type NodeExecutionDrainObservation,
+  type NodeExecutionDrainProof,
+  type NodeExecutionDrainState,
+  type NodeExecutionIdentity,
+  type NodeExecutionInventoryReceipt,
+  type NodeMaintenanceClaim,
+  type NodeMaintenanceKind,
+  type NodeMaintenanceOperation,
+  type NodeMaintenanceStep,
+} from "./domain/node-maintenance.js";
+export type { NodeStore } from "./application/contracts/node-store.js";
+export type { NodeMaintenanceStore } from "./application/contracts/node-maintenance-store.js";
+export {
+  createNodeMaintenanceService,
+  type NodeMaintenanceEnvironment,
+  type NodeMaintenanceService,
+} from "./application/node-maintenance-service.js";
 export {
   evaluateHostPressure,
   type HostPressureDimension,
