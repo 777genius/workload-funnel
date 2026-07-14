@@ -7,6 +7,13 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@workload-funnel/bridge-subscription-runtime':
+        specifier: workspace:*
+        version: link:packages/bridge-subscription-runtime
+      '@workload-funnel/kernel':
+        specifier: workspace:*
+        version: link:packages/kernel
     devDependencies:
       '@changesets/cli':
         specifier: 2.29.8

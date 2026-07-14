@@ -39,6 +39,8 @@ jobs:
         run: pnpm exports:check
       - name: Build active packages
         run: pnpm build
+      - name: Run standalone hosted canary regression
+        run: pnpm test:hosted-canary
       - name: Check release intent
         if: github.event_name == 'pull_request'
         run: pnpm changeset:status

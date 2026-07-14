@@ -25,9 +25,13 @@
     "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.pnpm-store\"",
     "test": "vitest run",
     "test:e2e": "vitest run tooling/e2e/full-synthetic-lifecycle.test.ts",
-    "test:hosted-canary": "vitest run packages/bridge-subscription-runtime/src/features/runtime-operation-dispatch/tests/hosted-canary-runtime.test.ts tooling/hosted-canary/hosted-canary.test.mjs",
+    "test:hosted-canary": "vitest run packages/bridge-subscription-runtime/src/features/runtime-operation-dispatch/tests/hosted-canary-runtime.test.ts tooling/hosted-canary/hosted-canary.test.mjs && node --test tooling/hosted-canary/standalone-probe.process-regression.mjs",
     "test:phase8": "vitest run --testNamePattern=\"Phase 8|Phase 4D\"",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@workload-funnel/bridge-subscription-runtime": "workspace:*",
+    "@workload-funnel/kernel": "workspace:*"
   },
   "devDependencies": {
     "@changesets/cli": "2.29.8",
