@@ -1,6 +1,8 @@
 import {
   CapacityUnavailableError,
-  type CapacityReservationLedgerStore,
+  createTerminalReleaseReceiptStore,
+  terminalReleaseKey,
+  type OwnerSafeCapacityReservationLedgerStore,
 } from "@workload-funnel/workload-control/allocation-leasing";
 import type { DispatchStore } from "@workload-funnel/workload-control/dispatch-reconciliation";
 import type { ExecutionStore } from "@workload-funnel/workload-control/execution-reconciliation";
@@ -11,9 +13,10 @@ import type { DurableState } from "./synthetic-state.js";
 
 export function capacityLedger(
   state: DurableState,
-): CapacityReservationLedgerStore {
+): OwnerSafeCapacityReservationLedgerStore {
   const totalCpuMillis = createStaticSyntheticNode().capacity.cpuMillis;
   const totalMemoryMiB = createStaticSyntheticNode().capacity.memoryMiB;
+  const terminalReceiptFactory = createTerminalReleaseReceiptStore();
   return {
     activate(allocationId) {
       const allocation = state.allocations.get(allocationId);
@@ -62,6 +65,52 @@ export function capacityLedger(
       return receipt;
     },
     releaseReceipt: (allocationId) => state.releaseReceipts.get(allocationId),
+    releaseTerminal(request) {
+      const key = terminalReleaseKey(request);
+      const prior = state.terminalReleases.get(key);
+      if (prior !== undefined) {
+        const candidate = terminalReceiptFactory.release(request);
+        if (JSON.stringify(candidate) !== JSON.stringify(prior)) {
+          throw new Error("release_key_conflict");
+        }
+        return prior;
+      }
+      if (request.allocationId === undefined) {
+        if (state.allocationByAttempt.has(request.attemptId)) {
+          throw new Error("false_no_allocation_proof");
+        }
+      } else {
+        const allocation = state.allocations.get(request.allocationId);
+        if (
+          state.allocationByAttempt.get(request.attemptId) !==
+            request.allocationId ||
+          allocation?.executionGeneration !== request.executionGeneration
+        ) {
+          throw new Error("allocation_history_mismatch");
+        }
+      }
+      const receipt = terminalReceiptFactory.release(request);
+      if (request.allocationId !== undefined) {
+        const allocation = state.allocations.get(request.allocationId);
+        if (allocation === undefined)
+          throw new Error("Allocation does not exist");
+        if (allocation.state !== "released") {
+          state.reservedCpuMillis -= allocation.resources.cpuMillis;
+          state.reservedMemoryMiB -= allocation.resources.memoryMiB;
+          state.reservationRevision += 1;
+          state.allocations.set(
+            allocation.allocationId,
+            Object.freeze({
+              ...allocation,
+              state: "released",
+              version: allocation.version + 1,
+            }),
+          );
+        }
+      }
+      state.terminalReleases.set(key, receipt);
+      return receipt;
+    },
     reserve(input) {
       const currentId = state.allocationByAttempt.get(input.attemptId);
       const current =
@@ -118,6 +167,14 @@ export function capacityLedger(
       state.rollbackReceipts.set(allocationId, receipt);
       return receipt;
     },
+    terminalReleaseReceipt: (
+      attemptId,
+      executionGeneration,
+      terminalizationIntentId,
+    ) =>
+      state.terminalReleases.get(
+        `${attemptId}/${executionGeneration}/${terminalizationIntentId}`,
+      ),
     snapshot: () =>
       Object.freeze({
         reservedCpuMillis: state.reservedCpuMillis,

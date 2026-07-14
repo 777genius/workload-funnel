@@ -23,6 +23,7 @@
     "lint:code": "eslint . --max-warnings=0",
     "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.pnpm-store\"",
     "test": "vitest run",
+    "test:e2e": "vitest run tooling/e2e/full-synthetic-lifecycle.test.ts",
     "test:phase8": "vitest run --testNamePattern=\"Phase 8|Phase 4D\"",
     "typecheck": "tsc --noEmit"
   },

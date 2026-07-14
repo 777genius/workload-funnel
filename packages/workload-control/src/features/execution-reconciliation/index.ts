@@ -24,6 +24,8 @@ export {
   createDeterministicExecutor,
   createExecutionStartCommand,
   type DeterministicExecutor,
+  type ExecutionTerminalReconciliationCommand,
+  type ExecutionTerminalReconciliationDecision,
   type ExecutionStartCommand,
   type ExecutionStopCommand,
 } from "./application/deterministic-executor.js";

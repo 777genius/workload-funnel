@@ -13,6 +13,7 @@ import {
 } from "../domain/execution-ticket.js";
 
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const namespaceIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
 
 interface UntrustedTicketRecord {
   readonly [key: string]: unknown;
@@ -96,6 +97,17 @@ function exactKeys(
 
 function identifier(value: unknown, location: string): string {
   if (typeof value !== "string" || !identifierPattern.test(value)) {
+    throw new TicketValidationError("invalid_claim", `${location} is invalid`);
+  }
+  return value;
+}
+
+function namespaceIdentifier(value: unknown, location: string): string {
+  if (
+    typeof value !== "string" ||
+    !namespaceIdentifierPattern.test(value) ||
+    value !== value.normalize("NFC")
+  ) {
     throw new TicketValidationError("invalid_claim", `${location} is invalid`);
   }
   return value;
@@ -185,7 +197,7 @@ function parseMutationFence(value: unknown): MutationFence {
       fence.expectedDesiredVersion,
       "fence.expectedDesiredVersion",
     ),
-    namespaceId: identifier(fence.namespaceId, "fence.namespaceId"),
+    namespaceId: namespaceIdentifier(fence.namespaceId, "fence.namespaceId"),
     namespaceWriterEpoch: revision(
       fence.namespaceWriterEpoch,
       "fence.namespaceWriterEpoch",
@@ -368,7 +380,10 @@ export function parseExecutionTicketClaims(
       "mutationFenceFingerprint",
     ),
     namespace: {
-      namespaceId: identifier(namespace.namespaceId, "namespace.namespaceId"),
+      namespaceId: namespaceIdentifier(
+        namespace.namespaceId,
+        "namespace.namespaceId",
+      ),
       writerEpoch: revision(namespace.writerEpoch, "namespace.writerEpoch"),
       writerId: identifier(namespace.writerId, "namespace.writerId"),
     },

@@ -63,6 +63,7 @@
   "include": [
     "apps/**/*.ts",
     "packages/**/*.ts",
+    "tooling/e2e/**/*.ts",
     "tooling/phase8/**/*.ts",
     "vitest.config.ts"
   ]

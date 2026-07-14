@@ -83,6 +83,8 @@ import {
   prepareSyntheticResultFinalizeCommand,
   publishSyntheticResultFiles,
 } from "./synthetic-fence-flow.js";
+import { createSyntheticExternalLifecycle } from "./synthetic-external-lifecycle.js";
+import type { SyntheticExternalLifecycle } from "./synthetic-external-lifecycle-contracts.js";
 
 const principal: AuthenticatedPrincipal = Object.freeze({
   namespaceId: "test://phase1/walking-slice",
@@ -90,7 +92,7 @@ const principal: AuthenticatedPrincipal = Object.freeze({
   tenantId: "synthetic-tenant",
 });
 
-export interface Phase1SyntheticService {
+export interface Phase1SyntheticService extends SyntheticExternalLifecycle {
   readonly profile: SyntheticDatabaseProfile;
   readonly participantCount: 7;
   readonly principal: AuthenticatedPrincipal;
@@ -240,7 +242,8 @@ export function createPhase1SyntheticService(
     lifecycleRepository,
     coordinator,
   );
-  const allocations = createAllocationService(capacityLedger(state));
+  const allocationLedger = capacityLedger(state);
+  const allocations = createAllocationService(allocationLedger);
   const dispatchCapability = createLocalDispatchCapabilityProvider();
   if (!dispatchCapability.capabilities.includes("local_dispatch")) {
     throw new Error("Local dispatcher capability is unavailable");
@@ -300,6 +303,19 @@ export function createPhase1SyntheticService(
     if (status === undefined) throw new Error("Workload status does not exist");
     return status;
   }
+
+  const externalLifecycle = createSyntheticExternalLifecycle({
+    allocationLedger,
+    allocations,
+    appendAudit: (operationId, actor, action, resourceId) =>
+      persistence.audit.append(operationId, actor, action, resourceId),
+    coordinator,
+    executor,
+    lifecycle,
+    principalId: principal.principalId,
+    results,
+    state,
+  });
 
   function stepAttempt(attempt: Attempt): boolean {
     const status = statusForAttempt(attempt);
@@ -660,6 +676,7 @@ export function createPhase1SyntheticService(
   }
 
   const service: Phase1SyntheticService = {
+    ...externalLifecycle,
     capacity: () =>
       Object.freeze({
         reservedCpuMillis: state.reservedCpuMillis,

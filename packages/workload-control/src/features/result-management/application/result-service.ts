@@ -15,6 +15,10 @@ import {
   markRetentionDue,
   prepareArtifactOperation,
 } from "../domain/result-manifest.js";
+import {
+  createResultPublicationService,
+  type ResultPublicationService,
+} from "./result-publication-service.js";
 
 function checksum(content: string): string {
   let hash = 0;
@@ -23,7 +27,7 @@ function checksum(content: string): string {
   return `synthetic-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-export interface ResultManagementService {
+export interface ResultManagementService extends ResultPublicationService {
   finalize(command: ResultFinalizeCommand): ResultManifest;
   get(attemptId: string): ResultManifest | undefined;
   getById(resultManifestId: string): ResultManifest | undefined;
@@ -177,6 +181,7 @@ export function createResultManagementService(
   gates: () => OperationGateSet,
 ): ResultManagementService {
   const service: ResultManagementService = {
+    ...createResultPublicationService(store, gates),
     finalize(command) {
       const { attemptId, executionId, files, mutationFence } = command;
       const prior = store.getByAttempt(attemptId);

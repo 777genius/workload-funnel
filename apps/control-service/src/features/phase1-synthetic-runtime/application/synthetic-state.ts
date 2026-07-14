@@ -2,6 +2,7 @@ import type {
   Allocation,
   AllocationReleaseReceipt,
   ReservationRollbackReceipt,
+  TerminalReleaseReceipt,
 } from "@workload-funnel/workload-control/allocation-leasing";
 import type { AuditRecord } from "@workload-funnel/workload-control/audit-history";
 import type { ReconciliationClaim } from "@workload-funnel/workload-control/canonical-transaction-coordination";
@@ -86,6 +87,7 @@ export interface DurableState {
   allocationByAttempt: Map<string, string>;
   releaseReceipts: Map<string, AllocationReleaseReceipt>;
   rollbackReceipts: Map<string, ReservationRollbackReceipt>;
+  terminalReleases: Map<string, TerminalReleaseReceipt>;
   terminalIntentAttempts: Set<string>;
   terminalReleaseAttempts: Set<string>;
   dispatches: Map<string, Dispatch>;
@@ -214,6 +216,7 @@ function createState(): DurableState {
     ]),
     sequence: 0,
     terminalIntentAttempts: new Set(),
+    terminalReleases: new Map(),
     terminalReleaseAttempts: new Set(),
     legalHoldSubjects: new Set(),
     erasureLedgerSequence: 0,

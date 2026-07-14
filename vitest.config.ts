@@ -170,6 +170,7 @@ export default defineConfig({
     include: [
       "packages/**/src/features/**/tests/**/*.test.ts",
       "apps/**/*.test.ts",
+      "tooling/e2e/**/*.test.ts",
       "tooling/architecture/**/*.test.mjs",
       "tooling/compatibility/**/*.test.mjs",
       "tooling/phase-0-5/**/*.test.mjs",

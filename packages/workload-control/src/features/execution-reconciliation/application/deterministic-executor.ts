@@ -5,7 +5,10 @@ import {
   assertMutationFenceGateOpen,
   type OperationGateSet,
 } from "@workload-funnel/workload-control/operation-gating";
-import type { MutationFence } from "@workload-funnel/kernel";
+import {
+  fingerprintMutationFence,
+  type MutationFence,
+} from "@workload-funnel/kernel";
 import type {
   Attempt,
   TerminalOutcome,
@@ -16,12 +19,33 @@ import type { Execution, ExecutorObservation } from "../domain/execution.js";
 
 export interface DeterministicExecutor {
   start(command: ExecutionStartCommand): Execution;
+  reconcileTerminal(
+    command: ExecutionTerminalReconciliationCommand,
+    mutationFence: MutationFence,
+  ): ExecutionTerminalReconciliationDecision;
   observeTerminal(
     dispatchId: string,
     outcome: TerminalOutcome,
   ): ExecutorObservation;
   stop(command: ExecutionStopCommand): ExecutorObservation | undefined;
   get(dispatchId: string): Execution | undefined;
+}
+
+export interface ExecutionTerminalReconciliationCommand {
+  readonly classification: "unknown" | "quarantined" | "valid";
+  readonly dispatchId: string;
+  readonly expectedOperationId: string;
+  readonly observationOperationId: string;
+  readonly observationRuntimeOperationId: string;
+  readonly outcome?: TerminalOutcome;
+  readonly receiptMutationFenceFingerprint: string;
+  readonly receiptOperationId: string;
+  readonly receiptRuntimeOperationId: string;
+}
+
+export interface ExecutionTerminalReconciliationDecision {
+  readonly disposition: "nonterminal" | "quarantined" | "terminalized";
+  readonly execution: Execution;
 }
 
 export interface ExecutionStartCommand {
@@ -86,6 +110,57 @@ export function createDeterministicExecutor(
         version: 1,
       });
       return store.create(execution);
+    },
+    reconcileTerminal(command, mutationFence) {
+      const execution = store.getByDispatch(command.dispatchId);
+      if (execution === undefined) throw new Error("Execution does not exist");
+      const fence = mutationFence;
+      if (
+        command.expectedOperationId !== command.receiptOperationId ||
+        command.expectedOperationId !== command.observationOperationId ||
+        command.receiptRuntimeOperationId !==
+          command.observationRuntimeOperationId ||
+        command.receiptMutationFenceFingerprint !==
+          fingerprintMutationFence(fence) ||
+        fence.desiredEffect !== "process_start" ||
+        fence.effectScopeKey !== `process:${execution.attemptId}` ||
+        fence.supersessionKey !== fence.effectScopeKey ||
+        fence.attemptId !== execution.attemptId ||
+        fence.executionGeneration !== execution.executionGeneration ||
+        fence.allocationId !== execution.allocationId
+      ) {
+        throw new Error("execution_terminal_evidence_identity_mismatch");
+      }
+      if (command.classification === "unknown") {
+        return Object.freeze({ disposition: "nonterminal", execution });
+      }
+      if (command.classification === "quarantined") {
+        return Object.freeze({ disposition: "quarantined", execution });
+      }
+      if (command.outcome === undefined) {
+        throw new Error("execution_terminal_outcome_missing");
+      }
+      if (["exited", "stopped"].includes(execution.state)) {
+        if (execution.terminalOutcome !== command.outcome) {
+          throw new Error("execution_terminal_outcome_conflict");
+        }
+        return Object.freeze({
+          disposition: "terminalized",
+          execution,
+        });
+      }
+      const terminal: Execution = Object.freeze({
+        ...execution,
+        observationSequence: execution.observationSequence + 1,
+        state: command.outcome === "canceled" ? "stopped" : "exited",
+        terminalOutcome: command.outcome,
+        version: execution.version + 1,
+      });
+      store.save(terminal);
+      return Object.freeze({
+        disposition: "terminalized",
+        execution: terminal,
+      });
     },
     observeTerminal(dispatchId, outcome) {
       const execution = store.getByDispatch(dispatchId);

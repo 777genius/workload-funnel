@@ -44,6 +44,10 @@ export {
   type ResultFinalizeCommand,
   type ResultManagementService,
 } from "./application/result-service.js";
+export {
+  createResultPublicationService,
+  type ResultPublicationService,
+} from "./application/result-publication-service.js";
 export { createResultManagementTransactionParticipant } from "./application/transaction-participant.js";
 export {
   deleteAndTombstoneResult,
