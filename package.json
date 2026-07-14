@@ -11,6 +11,7 @@
   "scripts": {
     "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check && node tooling/architecture/check-phase7-hyperqueue.mjs && node tooling/architecture/check-phase8-production.mjs",
     "build": "pnpm --filter './packages/*' --filter './apps/operator-cli' --filter './apps/scheduler-mutation-gateway' build",
+    "canary:hosted": "pnpm build && node tooling/hosted-canary/run.mjs",
     "changeset": "changeset",
     "changeset:status": "changeset status --since=main",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm architecture:check && pnpm exports:check",
@@ -24,6 +25,7 @@
     "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.pnpm-store\"",
     "test": "vitest run",
     "test:e2e": "vitest run tooling/e2e/full-synthetic-lifecycle.test.ts",
+    "test:hosted-canary": "vitest run packages/bridge-subscription-runtime/src/features/runtime-operation-dispatch/tests/hosted-canary-runtime.test.ts tooling/hosted-canary/hosted-canary.test.mjs",
     "test:phase8": "vitest run --testNamePattern=\"Phase 8|Phase 4D\"",
     "typecheck": "tsc --noEmit"
   },

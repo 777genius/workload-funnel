@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workload-funnel.invalid/schemas/hosted-subscription-runtime-canary-evidence.v1.json",
+  "title": "WorkloadFunnel hosted subscription-runtime canary evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "limitations",
+    "mode",
+    "outcome",
+    "productionStartsEnabled",
+    "project",
+    "runtime",
+    "safety",
+    "schemaVersion"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": {
+      "const": "workload-funnel.hosted-subscription-runtime-canary.v1"
+    },
+    "mode": { "enum": ["live", "probe"] },
+    "outcome": { "enum": ["passed", "probe_only", "unknown"] },
+    "productionStartsEnabled": { "const": false },
+    "startedAtMs": { "type": "integer", "minimum": 0 },
+    "completedAtMs": { "type": "integer", "minimum": 0 },
+    "failureCode": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.:-]{1,160}$"
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 5,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposable", "fingerprint", "purpose", "root"],
+      "properties": {
+        "disposable": { "const": true },
+        "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "purpose": {
+          "const": "WORKLOAD_FUNNEL_SUBSCRIPTION_RUNTIME_DISPOSABLE_CANARY_ONLY"
+        },
+        "root": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binarySha256",
+        "cliHelpSha256",
+        "contractVersion",
+        "toolsCatalogSha256"
+      ],
+      "properties": {
+        "binarySha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "contractVersion": {
+          "const": "subscription-runtime.codex-goal.hosted-canary.v1"
+        },
+        "cliHelpSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "foregroundNoTmux": { "const": true },
+        "startToolInvocation": { "const": "forbidden_tmux_path" },
+        "toolJsonUsesCamelCase": { "const": true },
+        "toolsCatalogSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completionMode",
+        "expectedArtifact",
+        "foregroundExitCode",
+        "foregroundStart",
+        "foregroundTimedOut",
+        "outerTermination",
+        "terminalResultStatus"
+      ],
+      "properties": {
+        "completionMode": {
+          "enum": ["natural_completion", "forced_stop"]
+        },
+        "expectedArtifact": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "sha256", "verified"],
+              "properties": {
+                "path": { "const": "hosted-canary-result.txt" },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "verified": { "const": true }
+              }
+            }
+          ]
+        },
+        "foregroundExitCode": { "type": ["integer", "null"] },
+        "foregroundExitedBeforeStop": { "type": "boolean" },
+        "foregroundStart": { "type": "string" },
+        "foregroundTimedOut": { "type": ["boolean", "null"] },
+        "outerTermination": { "type": "string" },
+        "terminalResultStatus": { "type": ["string", "null"] }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dbusRequestedByHarness",
+        "dockerSocketRequestedByHarness",
+        "credentialMaterialReadByHarness",
+        "foregroundOutputCaptured",
+        "foregroundModeRequiresNoTmux",
+        "hyperQueueRequestedByHarness",
+        "networkServiceRequestedByHarness",
+        "productionStartsEnabled",
+        "shellUsed",
+        "startToolInvoked",
+        "systemdRequestedByHarness"
+      ],
+      "properties": {
+        "dbusRequestedByHarness": { "const": false },
+        "dockerSocketRequestedByHarness": { "const": false },
+        "credentialMaterialReadByHarness": { "const": false },
+        "foregroundOutputCaptured": { "const": false },
+        "foregroundModeRequiresNoTmux": { "const": true },
+        "hyperQueueRequestedByHarness": { "const": false },
+        "networkServiceRequestedByHarness": { "const": false },
+        "productionStartsEnabled": { "const": false },
+        "shellUsed": { "const": false },
+        "startToolInvoked": { "const": false },
+        "systemdRequestedByHarness": { "const": false }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "probe" } } },
+      "then": {
+        "properties": { "outcome": { "const": "probe_only" } },
+        "not": {
+          "anyOf": [
+            { "required": ["startedAtMs"] },
+            { "required": ["completedAtMs"] },
+            { "required": ["operations"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "live" } } },
+      "then": {
+        "required": ["startedAtMs", "completedAtMs", "operations"],
+        "properties": {
+          "outcome": { "enum": ["passed", "unknown"] },
+          "runtime": {
+            "required": [
+              "foregroundNoTmux",
+              "startToolInvocation",
+              "toolJsonUsesCamelCase"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["outcome", "operations"],
+        "properties": {
+          "outcome": { "const": "passed" },
+          "operations": {
+            "properties": {
+              "completionMode": { "const": "natural_completion" }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "mode": { "const": "live" },
+          "operations": {
+            "properties": {
+              "expectedArtifact": { "type": "object" },
+              "foregroundExitCode": { "const": 0 },
+              "foregroundStart": { "const": "accepted" },
+              "foregroundTimedOut": { "const": false },
+              "outerTermination": { "const": "not_requested" },
+              "terminalResultStatus": { "const": "done" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["outcome", "operations"],
+        "properties": {
+          "outcome": { "const": "passed" },
+          "operations": {
+            "properties": {
+              "completionMode": { "const": "forced_stop" }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "mode": { "const": "live" },
+          "operations": {
+            "required": ["foregroundExitedBeforeStop"],
+            "properties": {
+              "expectedArtifact": { "type": "null" },
+              "foregroundExitCode": { "type": "null" },
+              "foregroundExitedBeforeStop": { "const": false },
+              "foregroundStart": { "const": "accepted" },
+              "foregroundTimedOut": { "const": false },
+              "outerTermination": { "const": "completed" },
+              "terminalResultStatus": { "type": "null" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

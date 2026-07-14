@@ -171,6 +171,7 @@ export default defineConfig({
       "packages/**/src/features/**/tests/**/*.test.ts",
       "apps/**/*.test.ts",
       "tooling/e2e/**/*.test.ts",
+      "tooling/hosted-canary/**/*.test.mjs",
       "tooling/architecture/**/*.test.mjs",
       "tooling/compatibility/**/*.test.mjs",
       "tooling/phase-0-5/**/*.test.mjs",
