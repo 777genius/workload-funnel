@@ -23,11 +23,25 @@ import {
   validateDisposableProject,
 } from "./disposable-project.mjs";
 import { createNodeHostedCanaryProcessRunner } from "./node-process-runner.mjs";
-import { runHostedCanaryCommand } from "./run.mjs";
+import {
+  HOSTED_CANARY_CHANGED_FILES_MAX_ITEMS,
+  HOSTED_CANARY_TERMINAL_RESULT_MAX_BYTES,
+  runHostedCanaryCommand,
+} from "./run.mjs";
 
 const roots = [];
 const brokeredStartEnvironmentKey =
   "SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START";
+const realisticPrivateChangedFiles = Object.freeze([
+  ".workload-funnel-canary/state/control/runtime-operation.json",
+  ".workload-funnel-canary/state/sessions/codex/session-state.jsonl",
+  ".workload-funnel-canary/state/cache/codex/app-server/index.json",
+]);
+const realisticSuccessfulChangedFiles = Object.freeze([
+  realisticPrivateChangedFiles[0],
+  CANARY_EXPECTED_ARTIFACT_FILE,
+  ...realisticPrivateChangedFiles.slice(1),
+]);
 const cliHelp = `usage:
   subscription-runtime-codex-goal run --job-root <dir> --workspace <dir> --prompt <file> --task-id <id> --accounts account-a,account-b [--tmux-session <name>] [--registry-root <dir>]
   subscription-runtime-codex-goal tools
@@ -95,6 +109,7 @@ async function writePrivate(path, contents) {
 
 async function disposableFixture({
   behavior = "natural_success",
+  changedFiles: configuredChangedFiles,
   gitConfig,
   remote = false,
   toolsCatalogOutput = toolsCatalog,
@@ -167,6 +182,11 @@ async function disposableFixture({
     })}\n`,
   );
   const runtimeBinary = join(sandboxParent, "subscription-runtime-codex-goal");
+  const changedFiles =
+    configuredChangedFiles ??
+    (behavior === "unexpected_changed_files"
+      ? [CANARY_EXPECTED_ARTIFACT_FILE, "unexpected.txt"]
+      : realisticSuccessfulChangedFiles);
   await writeFile(
     runtimeBinary,
     `#!/usr/local/bin/node
@@ -203,12 +223,9 @@ if (argv.length === 1 && argv[0] === "--help") {
     }
     if (behavior !== "missing_result") {
       const contradictory = behavior === "contradictory_result";
-      const changedFiles = behavior === "unexpected_changed_files"
-        ? [${JSON.stringify(CANARY_EXPECTED_ARTIFACT_FILE)}, "unexpected.txt"]
-        : [${JSON.stringify(CANARY_EXPECTED_ARTIFACT_FILE)}];
       writeFileSync(output, JSON.stringify({
         blockers: contradictory ? ["synthetic_failure"] : [],
-        changedFiles,
+        changedFiles: ${JSON.stringify(changedFiles)},
         evidence: ["safe_execution_status:completed"],
         nextAction: contradictory ? "recover" : "review_completed",
         provider: "codex",
@@ -369,6 +386,7 @@ describe("hosted canary command", { timeout: 120_000 }, () => {
       fixture.authRoot,
       "canary-account-a",
       "hosted-canary-profile",
+      ...realisticPrivateChangedFiles,
     ])
       expect(durableEvidence).not.toContain(forbidden);
 
@@ -522,6 +540,180 @@ describe("hosted canary command", { timeout: 120_000 }, () => {
       failureCode: "hosted_canary_terminal_result_unexpected_paths",
       outcome: "unknown",
     });
+  });
+
+  test.each([
+    [
+      "the private root itself",
+      [CANARY_EXPECTED_ARTIFACT_FILE, ".workload-funnel-canary"],
+    ],
+    [
+      "a private-root near-prefix",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        ".workload-funnel-canary-evil/state/control.json",
+      ],
+    ],
+    [
+      "private traversal",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        ".workload-funnel-canary/state/../secrets.json",
+      ],
+    ],
+    [
+      "a private dot segment",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        ".workload-funnel-canary/./state/control.json",
+      ],
+    ],
+    [
+      "a repeated private separator",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        ".workload-funnel-canary/state//control.json",
+      ],
+    ],
+    [
+      "a private path containing a backslash",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        ".workload-funnel-canary/state\\control.json",
+      ],
+    ],
+    [
+      "a duplicate private path",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        realisticPrivateChangedFiles[0],
+        realisticPrivateChangedFiles[0],
+      ],
+    ],
+    ["an empty path", [CANARY_EXPECTED_ARTIFACT_FILE, ""]],
+    [
+      "a control-character path",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        ".workload-funnel-canary/state/control\nrecord.json",
+      ],
+    ],
+    [
+      "an absolute path",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        "/.workload-funnel-canary/state/control.json",
+      ],
+    ],
+    [
+      "a Windows absolute path",
+      [CANARY_EXPECTED_ARTIFACT_FILE, "C:/runtime/control.json"],
+    ],
+    [
+      "a non-normalized Unicode path",
+      [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        ".workload-funnel-canary/state/cafe\u0301.json",
+      ],
+    ],
+  ])(
+    "rejects %s in the terminal changed-file list",
+    async (_, changedFiles) => {
+      const fixture = await disposableFixture({ changedFiles });
+      const probe = await runHostedCanaryCommand(
+        ["probe", ...commonArguments(fixture)],
+        {},
+      );
+      const evidence = await runHostedCanaryCommand(
+        liveArguments(fixture, probe),
+        { WORKLOAD_FUNNEL_HOSTED_CANARY_LIVE: "1" },
+      );
+      expect(evidence).toMatchObject({
+        failureCode: "hosted_canary_terminal_result_unexpected_paths",
+        outcome: "unknown",
+      });
+    },
+  );
+
+  test("rejects a malformed non-string terminal changed-file entry", async () => {
+    const fixture = await disposableFixture({
+      changedFiles: [CANARY_EXPECTED_ARTIFACT_FILE, null],
+    });
+    const probe = await runHostedCanaryCommand(
+      ["probe", ...commonArguments(fixture)],
+      {},
+    );
+    const evidence = await runHostedCanaryCommand(
+      liveArguments(fixture, probe),
+      { WORKLOAD_FUNNEL_HOSTED_CANARY_LIVE: "1" },
+    );
+    expect(evidence).toMatchObject({
+      failureCode: "hosted_canary_terminal_result_invalid",
+      outcome: "unknown",
+    });
+  });
+
+  test("rejects a terminal changed-file entry over the per-item bound", async () => {
+    const fixture = await disposableFixture({
+      changedFiles: [
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        `.workload-funnel-canary/state/${"x".repeat(8 * 1024)}.json`,
+      ],
+    });
+    const probe = await runHostedCanaryCommand(
+      ["probe", ...commonArguments(fixture)],
+      {},
+    );
+    const evidence = await runHostedCanaryCommand(
+      liveArguments(fixture, probe),
+      { WORKLOAD_FUNNEL_HOSTED_CANARY_LIVE: "1" },
+    );
+    expect(evidence).toMatchObject({
+      failureCode: "hosted_canary_terminal_result_invalid",
+      outcome: "unknown",
+    });
+  });
+
+  test("rejects a terminal changed-file total over the finite item cap", async () => {
+    const privateChangedFiles = Array.from(
+      { length: HOSTED_CANARY_CHANGED_FILES_MAX_ITEMS },
+      (_, index) =>
+        `.workload-funnel-canary/state/count-bound/entry-${index}.json`,
+    );
+    const changedFiles = [
+      CANARY_EXPECTED_ARTIFACT_FILE,
+      ...privateChangedFiles,
+    ];
+    expect(changedFiles).toHaveLength(
+      HOSTED_CANARY_CHANGED_FILES_MAX_ITEMS + 1,
+    );
+    expect(Buffer.byteLength(JSON.stringify({ changedFiles }))).toBeLessThan(
+      HOSTED_CANARY_TERMINAL_RESULT_MAX_BYTES,
+    );
+    const fixture = await disposableFixture({ changedFiles });
+    const probe = await runHostedCanaryCommand(
+      ["probe", ...commonArguments(fixture)],
+      {},
+    );
+    const evidence = await runHostedCanaryCommand(
+      liveArguments(fixture, probe),
+      { WORKLOAD_FUNNEL_HOSTED_CANARY_LIVE: "1" },
+    );
+    expect(evidence).toMatchObject({
+      failureCode: "hosted_canary_terminal_result_invalid",
+      outcome: "unknown",
+    });
+    const serializedEvidence = `${JSON.stringify(evidence)}\n`;
+    const durableEvidence = await readFile(fixture.evidencePath, "utf8");
+    expect(Buffer.byteLength(serializedEvidence)).toBeLessThan(16 * 1024);
+    expect(Buffer.byteLength(durableEvidence)).toBeLessThan(16 * 1024);
+    for (const privateChangedFile of [
+      privateChangedFiles[0],
+      privateChangedFiles.at(-1),
+    ]) {
+      expect(serializedEvidence).not.toContain(privateChangedFile);
+      expect(durableEvidence).not.toContain(privateChangedFile);
+    }
   });
 
   test("rejects a missing expected artifact after a successful result", async () => {

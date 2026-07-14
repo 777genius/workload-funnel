@@ -27,6 +27,16 @@ import {
 const entrypoint = join(import.meta.dirname, "run.mjs");
 const brokeredStartEnvironmentKey =
   "SUBSCRIPTION_RUNTIME_PROJECT_CONTROL_BROKERED_START";
+const realisticPrivateChangedFiles = [
+  ".workload-funnel-canary/state/control/runtime-operation.json",
+  ".workload-funnel-canary/state/sessions/codex/session-state.jsonl",
+  ".workload-funnel-canary/state/cache/codex/app-server/index.json",
+  ...Array.from(
+    { length: 180 },
+    (_, index) =>
+      `.workload-funnel-canary/state/sessions/codex/session-${String(index).padStart(3, "0")}/events.jsonl`,
+  ),
+];
 const cliHelp = `usage:
   subscription-runtime-codex-goal run --job-root <dir> --workspace <dir> --prompt <file> --task-id <id> --accounts account-a,account-b [--tmux-session <name>] [--registry-root <dir>]
   subscription-runtime-codex-goal tools
@@ -191,7 +201,11 @@ if (argv.length === 1 && argv[0] === "--help") {
     );
     writeFileSync(output, JSON.stringify({
       blockers: [],
-      changedFiles: [${JSON.stringify(CANARY_EXPECTED_ARTIFACT_FILE)}],
+      changedFiles: ${JSON.stringify([
+        realisticPrivateChangedFiles[0],
+        CANARY_EXPECTED_ARTIFACT_FILE,
+        ...realisticPrivateChangedFiles.slice(1),
+      ])},
       evidence: ["safe_execution_status:completed"],
       nextAction: "review_completed",
       provider: "codex",
@@ -382,6 +396,14 @@ test("the standalone entrypoint keeps brokered start foreground-only", async (t)
   assert.equal(liveEvidence.operations.foregroundStart, "accepted");
   assert.equal(liveEvidence.operations.foregroundExitCode, 0);
   assert.equal(liveEvidence.productionStartsEnabled, false);
+  const durableEvidence = await readFile(fixture.evidencePath, "utf8");
+  const liveStdoutContents = await readFile(liveStdoutPath, "utf8");
+  assert.ok(realisticPrivateChangedFiles.length > 128);
+  assert.equal(realisticPrivateChangedFiles.length + 1, 184);
+  for (const privateChangedFile of realisticPrivateChangedFiles) {
+    assert.equal(durableEvidence.includes(privateChangedFile), false);
+    assert.equal(liveStdoutContents.includes(privateChangedFile), false);
+  }
 
   const childEnvironments = (
     await readFile(fixture.childEnvironmentLog, "utf8")

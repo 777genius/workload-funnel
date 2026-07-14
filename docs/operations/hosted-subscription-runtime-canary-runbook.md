@@ -190,9 +190,18 @@ help, tools, capability, and output-pin checks do not.
 bounded foreground timeout for the direct child to exit on its own. Passing
 requires exit code zero and the deployed strict result contract: schema version
 1, provider `codex`, matching run/task IDs, status `done`, next action
-`review_completed`, no blockers, and exactly one changed path,
-`hosted-canary-result.txt`. The project is then checked independently: the
-artifact must be a regular owner-controlled file containing exactly
+`review_completed`, no blockers, and a bounded changed-file list containing
+strictly normalized relative paths. The list admits at most 512 entries, each
+string is at most 8,192 UTF-16 code units, and the complete terminal result
+remains capped at 256 KiB. Entries strictly beneath
+`.workload-funnel-canary/` are runtime-owned private paths and are excluded
+from the public changed-file set; they are not copied into durable canary
+evidence or logs. The private root itself, near-prefixes, absolute or ambiguous
+paths, dot or traversal segments, backslashes, and duplicate or non-normalized
+entries fail closed. After that classification, the public set must contain
+exactly one path, `hosted-canary-result.txt`. The project is then checked
+independently through descriptor-safe reads: the artifact must be a regular
+owner-controlled file containing exactly
 `WORKLOAD_FUNNEL_HOSTED_CANARY_COMPLETED` plus one newline, the prompt, request,
 sentinel, and fresh no-history git metadata must be unchanged, and no unexpected
 root path may exist. Timeout, missing or contradictory result, unexpected paths,

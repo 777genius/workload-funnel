@@ -2,7 +2,14 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  posix,
+  resolve,
+  win32,
+} from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import { URL } from "node:url";
 
@@ -28,6 +35,12 @@ import { createNodeHostedCanaryProcessRunner } from "./node-process-runner.mjs";
 import { createTrustedInvocationProfileResolver } from "./trusted-invocation-profile.mjs";
 
 const LIVE_OPT_IN = "WORKLOAD_FUNNEL_DISPOSABLE_CANARY_LIVE";
+const CANARY_PRIVATE_CHANGED_PATH_ROOT = ".workload-funnel-canary";
+const CANARY_PRIVATE_CHANGED_PATH_PREFIX = `${CANARY_PRIVATE_CHANGED_PATH_ROOT}/`;
+export const HOSTED_CANARY_CHANGED_FILES_MAX_ITEMS = 512;
+export const HOSTED_CANARY_TERMINAL_RESULT_MAX_BYTES = 256 * 1024;
+const HOSTED_CANARY_RESULT_LIST_MAX_ITEMS = 128;
+const HOSTED_CANARY_RESULT_STRING_MAX_LENGTH = 8 * 1024;
 const DEFAULT_CAPABILITY_OUTPUT_BYTES = 256 * 1024;
 const MAX_CAPABILITY_OUTPUT_BYTES = 2 * 1024 * 1024;
 const limitations = Object.freeze([
@@ -150,17 +163,58 @@ function isMissing(error) {
   );
 }
 
-function strictStringArray(value, maximumItems = 128) {
+function strictStringArray(value, maximumItems) {
   return (
     Array.isArray(value) &&
     value.length <= maximumItems &&
     value.every(
       (item) =>
         typeof item === "string" &&
-        item.length <= 8 * 1024 &&
+        item.length <= HOSTED_CANARY_RESULT_STRING_MAX_LENGTH &&
         !item.includes("\u0000"),
     )
   );
+}
+
+function isNormalizedRelativeChangedPath(path) {
+  if (
+    path.length === 0 ||
+    path.includes("\\") ||
+    [...path].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return (
+        codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)
+      );
+    }) ||
+    posix.isAbsolute(path) ||
+    win32.isAbsolute(path) ||
+    /^[A-Za-z]:/u.test(path) ||
+    path.normalize("NFC") !== path ||
+    posix.normalize(path) !== path
+  )
+    return false;
+  return path
+    .split("/")
+    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function assertExpectedPublicChangedFiles(changedFiles) {
+  const normalizedPaths = new Set();
+  const publicPaths = [];
+  for (const path of changedFiles) {
+    if (!isNormalizedRelativeChangedPath(path) || normalizedPaths.has(path))
+      throw new Error("hosted_canary_terminal_result_unexpected_paths");
+    normalizedPaths.add(path);
+    if (path === CANARY_PRIVATE_CHANGED_PATH_ROOT)
+      throw new Error("hosted_canary_terminal_result_unexpected_paths");
+    if (path.startsWith(CANARY_PRIVATE_CHANGED_PATH_PREFIX)) continue;
+    publicPaths.push(path);
+  }
+  if (
+    publicPaths.length !== 1 ||
+    publicPaths[0] !== CANARY_EXPECTED_ARTIFACT_FILE
+  )
+    throw new Error("hosted_canary_terminal_result_unexpected_paths");
 }
 
 async function readSuccessfulTerminalResult(path, taskId) {
@@ -181,7 +235,7 @@ async function readSuccessfulTerminalResult(path, taskId) {
     if (
       !metadata.isFile() ||
       metadata.size < 2 ||
-      metadata.size > 256 * 1024 ||
+      metadata.size > HOSTED_CANARY_TERMINAL_RESULT_MAX_BYTES ||
       (metadata.mode & 0o022) !== 0 ||
       (process.getuid !== undefined && metadata.uid !== process.getuid())
     )
@@ -212,9 +266,12 @@ async function readSuccessfulTerminalResult(path, taskId) {
     result.provider !== "codex" ||
     result.runId !== taskId ||
     result.taskId !== taskId ||
-    !strictStringArray(result.changedFiles) ||
-    !strictStringArray(result.evidence) ||
-    !strictStringArray(result.blockers) ||
+    !strictStringArray(
+      result.changedFiles,
+      HOSTED_CANARY_CHANGED_FILES_MAX_ITEMS,
+    ) ||
+    !strictStringArray(result.evidence, HOSTED_CANARY_RESULT_LIST_MAX_ITEMS) ||
+    !strictStringArray(result.blockers, HOSTED_CANARY_RESULT_LIST_MAX_ITEMS) ||
     typeof result.status !== "string" ||
     typeof result.nextAction !== "string" ||
     typeof result.updatedAt !== "string" ||
@@ -227,11 +284,7 @@ async function readSuccessfulTerminalResult(path, taskId) {
     result.blockers.length !== 0
   )
     throw new Error("hosted_canary_terminal_result_contradictory");
-  if (
-    result.changedFiles.length !== 1 ||
-    result.changedFiles[0] !== CANARY_EXPECTED_ARTIFACT_FILE
-  )
-    throw new Error("hosted_canary_terminal_result_unexpected_paths");
+  assertExpectedPublicChangedFiles(result.changedFiles);
   return Object.freeze({ status: result.status });
 }
 
