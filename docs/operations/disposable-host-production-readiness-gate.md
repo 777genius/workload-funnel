@@ -141,8 +141,8 @@ bounding capabilities, private network/device/tmp namespaces, closed device
 policy, read-only host filesystem except the run allocation, seccomp filtering,
 full-tree kill, and CPU, memory, swap, PID, file-size, runtime, and IO bounds.
 
-Docker uses an internal bridge, loopback-only ephemeral published ports,
-read-only filesystems, private IPC/UTS, init, no-new-privileges, all
+Docker uses an internal bridge with no host port publication, read-only
+filesystems, private IPC/UTS, init, no-new-privileges, all
 capabilities dropped, non-root users, exact platform, `--pull=never`, and
 fixed CPU, memory, swap, PID, file-size, file-descriptor, IO, command, and data
 budgets. Object data uses bounded tmpfs. PostgreSQL uses an exact-identity,
@@ -150,7 +150,14 @@ mode-0700 bind directory under the fixed sandbox so WAL recovery survives a
 forced server-process stop; its fixed probe SQL, connection count, statement
 timeouts, temporary-file limit, and WAL targets bound the fixture workload.
 The directory is prepared and fsynced in the cleanup ledger before creation and
-is removed only after its container. Secrets are mode-0400 bind-mounted files.
+is removed only after its container. Before the host contacts either fixture,
+the gate requires the exact internal network to be the container's only network,
+proves that network is an internal bridge, rejects every requested or assigned
+published port, and matches one canonical Docker-assigned IPv4 endpoint to the
+container's membership and the network's sole IPv4 subnet. Missing, malformed,
+multiple, or foreign network/IP evidence fails closed. The probes then connect
+directly to that validated internal-container address. Secrets are mode-0400
+bind-mounted files.
 Docker's persistent `Config.Env` and `Config.Cmd` metadata contains only
 non-secret values and secret-file paths. MinIO user credentials are streamed
 from the mounted file to `mc` stdin; `mc` argv contains only the non-secret

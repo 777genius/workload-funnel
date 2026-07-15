@@ -33,6 +33,7 @@ import {
   officialHyperQueueSubmitArguments,
   parseOfficialArray,
   parseOfficialCancel,
+  parseOfficialJobInfo,
   parseOfficialSubmit,
 } from "./hyperqueue-contract.mjs";
 import { runMixedWorkloadMeasurement } from "./mixed-load.mjs";
@@ -227,7 +228,7 @@ describe("manual production gate admission", () => {
 });
 
 describe("bounded resource plans", () => {
-  it("keeps Docker isolated, loopback-only, capped, and injection-closed", () => {
+  it("keeps Docker internal-only, unpublished, capped, and injection-closed", () => {
     expect(isolatedNetworkArguments(runId)).toContain("--internal");
     const args = postgresContainerArguments({
       database: `${runId.replaceAll("-", "_")}`,
@@ -250,9 +251,9 @@ describe("bounded resource plans", () => {
         "ALL",
         "--read-only",
         "--platform=linux/amd64",
-        "127.0.0.1:0:5432",
       ]),
     );
+    expect(args).not.toContain("--publish");
     expect(() => assertSafeDockerArguments(["run", "--privileged"])).toThrow(
       "unsafe_docker_gate_arguments",
     );
@@ -538,7 +539,9 @@ describe("official HyperQueue 0.26.2 translation", () => {
       expect.arrayContaining(["--task", "--mapping-fingerprint"]),
     );
     expect(parseOfficialCancel("{}")).toEqual({ acknowledged: true });
-    expect(parseOfficialArray('[{"id":7}]', "job_info")).toHaveLength(1);
+    expect(
+      parseOfficialJobInfo('[{"info":{"id":7},"tasks":[]}]', "7"),
+    ).toMatchObject({ jobId: "7" });
   });
 
   it("fails closed on malformed or legacy synthetic JSON", () => {
@@ -551,6 +554,22 @@ describe("official HyperQueue 0.26.2 translation", () => {
     expect(() => parseOfficialArray("{}", "worker_list")).toThrow(
       "hyperqueue_worker_list_schema_invalid",
     );
+    expect(() => parseOfficialJobInfo('[{"id":7,"tasks":[]}]', "7")).toThrow(
+      "hyperqueue_job_info_schema_invalid",
+    );
+    for (const malformed of [
+      "[]",
+      '[{"info":{"id":7},"tasks":[]},{"info":{"id":7},"tasks":[]}]',
+      '[{"info":{"id":"07"},"tasks":[]}]',
+      '[{"info":{"id":7},"tasks":[{"id":"00"}]}]',
+      '[{"info":{"id":7},"tasks":[{"id":0},{"id":"0"}]}]',
+    ])
+      expect(() => parseOfficialJobInfo(malformed, "7")).toThrow(
+        "hyperqueue_job_info_schema_invalid",
+      );
+    expect(() =>
+      parseOfficialJobInfo('[{"info":{"id":8},"tasks":[]}]', "7"),
+    ).toThrow("hyperqueue_job_info_identity_mismatch");
     expect(() => officialHyperQueueCancelArguments("/tmp/hq", "01")).toThrow(
       "hyperqueue_job_id_invalid",
     );
@@ -698,7 +717,7 @@ describe("systemd and SLO contracts", () => {
           run: vi.fn(() => {
             calls += 1;
             if (calls === 1) return Promise.resolve(absent);
-            if (calls === 6)
+            if (calls === 5)
               return Promise.resolve({
                 code: 0,
                 stderr: "",

@@ -68,17 +68,19 @@ export async function runPostgresCompatibilityStage({
       source: postgresData.path,
     },
     5432,
-  );
-  const port = await docker.loopbackPort(
-    name,
-    5432,
-    dockerConfinement.publishedHostPort,
+    config.postgresImage,
+    [
+      {
+        destination: "/run/secrets/postgres-password",
+        source: passwordFile,
+      },
+    ],
   );
   const connection = Object.freeze({
     database,
-    host: "127.0.0.1",
+    host: dockerConfinement.internalNetworkEndpoint.ipv4Address,
     password,
-    port,
+    port: dockerConfinement.internalNetworkEndpoint.port,
     psqlExecutable: config.psqlExecutable,
     schema: database,
     user: "wf_gate",

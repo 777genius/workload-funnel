@@ -147,12 +147,26 @@ export async function cleanupSystemdSlice(config, record) {
     { timeoutMs: 2_000 },
   );
   if (stopped.code !== 0) throw new Error("systemd_slice_cleanup_uncertain");
+  const afterStop = await showSlice(config, record.name);
+  if (implicitSliceBaseline(afterStop, record.name)) return;
+  const afterStopValues = parseSliceShow(afterStop);
+  if (
+    afterStop.code !== 0 ||
+    !unconfiguredSliceIdentity(afterStopValues, record.name) ||
+    afterStopValues.ActiveState !== "active" ||
+    afterStopValues.ControlGroup !== beforeValues.ControlGroup
+  )
+    throw new Error("systemd_slice_cleanup_identity_changed");
   const reset = await config.runner.run(
     config.systemctlExecutable,
     ["reset-failed", record.name],
     { timeoutMs: 2_000 },
   );
-  if (reset.code !== 0) throw new Error("systemd_slice_cleanup_uncertain");
+  if (reset.code !== 0) {
+    const afterFailedReset = await showSlice(config, record.name);
+    if (implicitSliceBaseline(afterFailedReset, record.name)) return;
+    throw new Error("systemd_slice_cleanup_uncertain");
+  }
   await observeStoppedSlice(config, record.name, beforeValues.ControlGroup);
 }
 

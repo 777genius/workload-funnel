@@ -358,11 +358,17 @@ async function main() {
         objectIdentity,
         { destination: "/data", kind: "tmpfs" },
         9000,
-      );
-      const port = await docker.loopbackPort(
-        objectName,
-        9000,
-        objectDockerConfinement.publishedHostPort,
+        config.objectImage,
+        [
+          {
+            destination: "/run/secrets/minio-root-user",
+            source: rootUserFile,
+          },
+          {
+            destination: "/run/secrets/minio-root-password",
+            source: rootPasswordFile,
+          },
+        ],
       );
       const adminConfigFile = await writeSecretFile({
         contents: `${JSON.stringify({
@@ -462,7 +468,7 @@ async function main() {
         flag: "wx",
         mode: 0o600,
       });
-      const endpoint = `http://127.0.0.1:${String(port)}`;
+      const endpoint = `http://${objectDockerConfinement.internalNetworkEndpoint.ipv4Address}:${String(objectDockerConfinement.internalNetworkEndpoint.port)}`;
       const awsEnvironment = (identity) => ({
         AWS_ACCESS_KEY_ID: identity.access,
         AWS_CONFIG_FILE: "/dev/null",
@@ -483,7 +489,33 @@ async function main() {
         checksum: `sha256:${createHash("sha256").update(body).digest("hex")}`,
         deleteEnvironment: awsEnvironment(identities.delete),
         endpoint,
-        heal: () => docker.heal(objectName),
+        heal: async () => {
+          await docker.heal(objectName);
+          const healed = await docker.inspectContainerConfinement(
+            objectName,
+            "1000:1000",
+            [rootSecret],
+            objectIdentity,
+            { destination: "/data", kind: "tmpfs" },
+            9000,
+            config.objectImage,
+            [
+              {
+                destination: "/run/secrets/minio-root-user",
+                source: rootUserFile,
+              },
+              {
+                destination: "/run/secrets/minio-root-password",
+                source: rootPasswordFile,
+              },
+            ],
+          );
+          if (
+            healed.internalNetworkEndpoint.ipv4Address !==
+            objectDockerConfinement.internalNetworkEndpoint.ipv4Address
+          )
+            throw new Error("docker_internal_endpoint_identity_changed");
+        },
         key: `${prefix}artifact.bin`,
         overwriteBodyPath,
         overwriteChecksum: `sha256:${createHash("sha256").update(overwriteBody).digest("hex")}`,

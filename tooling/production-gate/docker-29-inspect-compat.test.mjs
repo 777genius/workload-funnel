@@ -3,17 +3,33 @@ import { describe, expect, it, vi } from "vitest";
 import { GateDockerRuntime } from "./docker-runtime.mjs";
 
 const runId = "wf-production-gate-0123456789abcdef0123456789abcdef";
+const name = `${runId}-postgres`;
+const networkName = `${runId}-network`;
+const identity = "a".repeat(64);
+const networkIdentity = "b".repeat(64);
+const endpointIdentity = "c".repeat(64);
+const imageId = `sha256:${"d".repeat(64)}`;
+const image = `postgres:test@sha256:${"e".repeat(64)}`;
 const postgresData = `/var/data/workload-funnel/sandboxes/${runId}/postgres-data`;
+const passwordFile = `/tmp/${runId}/postgres-password`;
 const expectedStorage = {
   destination: "/var/lib/postgresql/data",
   kind: "bind",
   source: postgresData,
 };
+const expectedSecrets = [
+  {
+    destination: "/run/secrets/postgres-password",
+    source: passwordFile,
+  },
+];
 
 function docker29Inspect() {
   return {
     Config: {
       Env: ["POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password"],
+      Image: image,
+      Labels: { "workload-funnel.production-gate.resource": name },
       User: "70:70",
     },
     HostConfig: {
@@ -23,11 +39,9 @@ function docker29Inspect() {
       Memory: 2_147_483_648,
       MemorySwap: 2_147_483_648,
       NanoCpus: 2_000_000_000,
-      NetworkMode: `${runId}-network`,
+      NetworkMode: networkName,
       PidsLimit: 256,
-      PortBindings: {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
-      },
+      PortBindings: null,
       Privileged: false,
       ReadonlyRootfs: true,
       RestartPolicy: { Name: "no" },
@@ -35,8 +49,8 @@ function docker29Inspect() {
       Tmpfs: { "/tmp": "rw,size=67108864" },
       UTSMode: "",
     },
-    Id: "a".repeat(64),
-    Image: `sha256:${"b".repeat(64)}`,
+    Id: identity,
+    Image: imageId,
     Mounts: [
       {
         Destination: "/var/lib/postgresql/data",
@@ -45,16 +59,55 @@ function docker29Inspect() {
         Source: postgresData,
         Type: "bind",
       },
+      {
+        Destination: "/run/secrets/postgres-password",
+        Propagation: "rprivate",
+        RW: false,
+        Source: passwordFile,
+        Type: "bind",
+      },
     ],
     NetworkSettings: {
-      Ports: {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
+      Networks: {
+        [networkName]: {
+          EndpointID: endpointIdentity,
+          IPAddress: "172.28.0.2",
+          IPPrefixLen: 16,
+          MacAddress: "02:42:ac:1c:00:02",
+          NetworkID: networkIdentity,
+        },
       },
+      Ports: null,
     },
   };
 }
 
-function runtimeFor(inspected, dockerPort = "127.0.0.1:49152\n") {
+function docker29NetworkInspect() {
+  return {
+    Containers: {
+      [identity]: {
+        EndpointID: endpointIdentity,
+        IPv4Address: "172.28.0.2/16",
+        IPv6Address: "",
+        MacAddress: "02:42:ac:1c:00:02",
+        Name: name,
+      },
+    },
+    Driver: "bridge",
+    IPAM: { Config: [{ Gateway: "172.28.0.1", Subnet: "172.28.0.0/16" }] },
+    Id: networkIdentity,
+    Ingress: false,
+    Internal: true,
+    Labels: { "workload-funnel.production-gate.run": runId },
+    Name: networkName,
+  };
+}
+
+function runtimeFor(
+  inspected,
+  network = docker29NetworkInspect(),
+  publishedPorts = "",
+) {
   return new GateDockerRuntime({
     executable: "/usr/bin/docker",
     ioDevice: "/dev/vda",
@@ -65,7 +118,9 @@ function runtimeFor(inspected, dockerPort = "127.0.0.1:49152\n") {
           code: 0,
           stderr: "",
           stdout:
-            args[0] === "container" ? JSON.stringify([inspected]) : dockerPort,
+            args[0] === "port"
+              ? publishedPorts
+              : JSON.stringify([args[0] === "container" ? inspected : network]),
         }),
       ),
     },
@@ -73,141 +128,243 @@ function runtimeFor(inspected, dockerPort = "127.0.0.1:49152\n") {
   });
 }
 
-async function inspect(runtime, identity = "a".repeat(64)) {
+function inspect(runtime, forbiddenValues = []) {
   return runtime.inspectContainerConfinement(
-    `${runId}-postgres`,
+    name,
     "70:70",
-    [],
+    forbiddenValues,
     identity,
     expectedStorage,
     5432,
+    image,
+    expectedSecrets,
   );
 }
 
-describe("Docker 29 inspect port compatibility", () => {
-  it("distinguishes the requested ephemeral port from the assigned port", async () => {
-    const inspected = docker29Inspect();
-    const runtime = runtimeFor(inspected);
-    const confinement = await inspect(runtime);
-    expect(confinement).toMatchObject({
-      exactIdentity: inspected.Id,
-      publishedHostPort: 49152,
-      writableStorage: expectedStorage,
+describe("Docker 29 internal-network endpoint compatibility", () => {
+  it("proves the created bridge is internal before admitting any container", async () => {
+    let inspectCalls = 0;
+    const ledger = {
+      finalize: vi.fn(() => Promise.resolve()),
+      prepare: vi.fn(() => Promise.resolve("network-record")),
+    };
+    const emptyNetwork = { ...docker29NetworkInspect(), Containers: {} };
+    const runner = {
+      run: vi.fn((_executable, args) => {
+        if (args[0] === "network" && args[1] === "inspect") {
+          inspectCalls += 1;
+          return Promise.resolve(
+            inspectCalls === 1
+              ? {
+                  code: 1,
+                  stderr: "No such network",
+                  stdout: "",
+                }
+              : {
+                  code: 0,
+                  stderr: "",
+                  stdout: JSON.stringify([emptyNetwork]),
+                },
+          );
+        }
+        return Promise.resolve({
+          code: 0,
+          stderr: "",
+          stdout:
+            args[0] === "network" && args[1] === "create"
+              ? networkIdentity
+              : networkName,
+        });
+      }),
+    };
+    const runtime = new GateDockerRuntime({
+      executable: "/usr/bin/docker",
+      ioDevice: "/dev/vda",
+      ledger,
+      runId,
+      runner,
+      sandboxRoot: `/tmp/${runId}`,
     });
-    await expect(
-      runtime.loopbackPort(
-        `${runId}-postgres`,
-        5432,
-        confinement.publishedHostPort,
-      ),
-    ).resolves.toBe(49152);
+    await expect(runtime.createNetwork()).resolves.toBe(networkName);
+    expect(ledger.finalize).toHaveBeenCalledWith(
+      "network-record",
+      { identity: networkIdentity },
+      expect.any(Function),
+    );
+    expect(runner.run.mock.calls.map(([, args]) => args.slice(0, 2))).toEqual([
+      ["network", "inspect"],
+      ["network", "create"],
+      ["network", "inspect"],
+    ]);
   });
 
-  it("requires docker port to agree with the assigned inspect port", async () => {
-    const runtime = runtimeFor(docker29Inspect(), "127.0.0.1:49153\n");
-    const confinement = await inspect(runtime);
+  it("accepts no publication and returns only the exact validated internal endpoint", async () => {
+    const inspected = docker29Inspect();
+    const runtime = runtimeFor(inspected);
+    await expect(inspect(runtime)).resolves.toMatchObject({
+      exactIdentity: identity,
+      imageId,
+      internalNetwork: networkName,
+      internalNetworkEndpoint: { ipv4Address: "172.28.0.2", port: 5432 },
+      publishedPorts: 0,
+      writableStorage: expectedStorage,
+    });
+    expect(runtime.runner.run.mock.calls).toEqual([
+      [
+        "/usr/bin/docker",
+        ["container", "inspect", name],
+        { timeoutMs: 30_000 },
+      ],
+      [
+        "/usr/bin/docker",
+        ["network", "inspect", networkName],
+        { timeoutMs: 30_000 },
+      ],
+      ["/usr/bin/docker", ["port", name], { timeoutMs: 5_000 }],
+    ]);
+  });
+
+  it("rejects a docker port mapping even when inspect falsely reports none", async () => {
     await expect(
-      runtime.loopbackPort(
-        `${runId}-postgres`,
-        5432,
-        confinement.publishedHostPort,
+      inspect(
+        runtimeFor(
+          docker29Inspect(),
+          docker29NetworkInspect(),
+          "127.0.0.1:49152\n",
+        ),
       ),
-    ).rejects.toThrow("docker_published_port_identity_changed");
+    ).rejects.toThrow("docker_container_confinement_unproven");
   });
 
   it.each([
-    ["missing map", {}],
-    ["missing binding", { "5432/tcp": null }],
-    ["empty binding", { "5432/tcp": [] }],
     [
-      "preassigned request",
+      "retained requested binding",
+      { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }] },
+    ],
+    [
+      "assigned public binding",
       { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
     ],
-    [
-      "wildcard request",
-      { "5432/tcp": [{ HostIp: "0.0.0.0", HostPort: "0" }] },
-    ],
-    [
-      "multiple requests",
-      {
-        "5432/tcp": [
-          { HostIp: "127.0.0.1", HostPort: "0" },
-          { HostIp: "127.0.0.1", HostPort: "0" },
-        ],
-      },
-    ],
-    [
-      "extended request binding",
-      {
-        "5432/tcp": [
-          { Extra: "untrusted", HostIp: "127.0.0.1", HostPort: "0" },
-        ],
-      },
-    ],
-    [
-      "foreign request",
-      {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
-        "9000/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
-      },
-    ],
-  ])("rejects the adversarial requested-port shape: %s", async (_, ports) => {
+    ["empty assigned binding", { "5432/tcp": [] }],
+    ["malformed assigned map", "foreign"],
+  ])("rejects Docker 29 published-port evidence: %s", async (kind, ports) => {
     const inspected = docker29Inspect();
-    inspected.HostConfig.PortBindings = ports;
+    if (kind === "retained requested binding")
+      inspected.HostConfig.PortBindings = ports;
+    else inspected.NetworkSettings.Ports = ports;
     await expect(inspect(runtimeFor(inspected))).rejects.toThrow(
       "docker_container_confinement_unproven",
     );
   });
 
   it.each([
-    ["missing map", {}],
-    ["missing binding", { "5432/tcp": null }],
-    ["empty binding", { "5432/tcp": [] }],
+    ["absent", {}],
     [
-      "ephemeral result",
-      { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }] },
-    ],
-    [
-      "wildcard result",
-      { "5432/tcp": [{ HostIp: "0.0.0.0", HostPort: "49152" }] },
-    ],
-    [
-      "invalid result",
-      { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "65536" }] },
-    ],
-    [
-      "multiple results",
+      "multiple",
       {
-        "5432/tcp": [
-          { HostIp: "127.0.0.1", HostPort: "49152" },
-          { HostIp: "127.0.0.1", HostPort: "49153" },
-        ],
+        [networkName]: docker29Inspect().NetworkSettings.Networks[networkName],
+        "foreign-network":
+          docker29Inspect().NetworkSettings.Networks[networkName],
       },
     ],
     [
-      "extended result binding",
+      "malformed address",
       {
-        "5432/tcp": [
-          {
-            Extra: "untrusted",
-            HostIp: "127.0.0.1",
-            HostPort: "49152",
-          },
-        ],
+        [networkName]: {
+          ...docker29Inspect().NetworkSettings.Networks[networkName],
+          IPAddress: "172.28.0.999",
+        },
       },
     ],
     [
-      "foreign result",
+      "foreign address",
       {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
-        "9000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49153" }],
+        [networkName]: {
+          ...docker29Inspect().NetworkSettings.Networks[networkName],
+          IPAddress: "192.0.2.10",
+        },
       },
     ],
-  ])("rejects the adversarial assigned-port shape: %s", async (_, ports) => {
+  ])("rejects %s container-network membership", async (_, networks) => {
     const inspected = docker29Inspect();
-    inspected.NetworkSettings.Ports = ports;
+    inspected.NetworkSettings.Networks = networks;
     await expect(inspect(runtimeFor(inspected))).rejects.toThrow(
       "docker_container_confinement_unproven",
+    );
+  });
+
+  it.each([
+    ["external bridge", { Internal: false }],
+    ["foreign driver", { Driver: "overlay" }],
+    ["foreign name", { Name: "foreign-network" }],
+    ["foreign network identity", { Id: "f".repeat(64) }],
+    ["missing subnet", { IPAM: { Config: [] } }],
+    [
+      "multiple IPv4 subnets",
+      {
+        IPAM: {
+          Config: [{ Subnet: "172.28.0.0/16" }, { Subnet: "172.29.0.0/16" }],
+        },
+      },
+    ],
+    ["foreign membership", { Containers: {} }],
+    [
+      "foreign attached container",
+      {
+        Containers: {
+          ...docker29NetworkInspect().Containers,
+          ["f".repeat(64)]: {
+            EndpointID: "e".repeat(64),
+            IPv4Address: "172.28.0.3/16",
+            IPv6Address: "",
+            MacAddress: "02:42:ac:1c:00:03",
+            Name: "foreign-container",
+          },
+        },
+      },
+    ],
+    [
+      "duplicate attached address",
+      {
+        Containers: {
+          ...docker29NetworkInspect().Containers,
+          ["f".repeat(64)]: {
+            EndpointID: "e".repeat(64),
+            IPv4Address: "172.28.0.2/16",
+            IPv6Address: "",
+            MacAddress: "02:42:ac:1c:00:03",
+            Name: `${runId}-client-1`,
+          },
+        },
+      },
+    ],
+  ])("rejects %s network evidence", async (_, mutation) => {
+    const network = { ...docker29NetworkInspect(), ...mutation };
+    await expect(
+      inspect(runtimeFor(docker29Inspect(), network)),
+    ).rejects.toThrow("docker_container_confinement_unproven");
+  });
+
+  it.each([
+    ["image", (value) => (value.Config.Image = `${image}-foreign`)],
+    ["resource label", (value) => (value.Config.Labels = {})],
+    ["UTS namespace", (value) => (value.HostConfig.UTSMode = "host")],
+    ["writable storage", (value) => (value.Mounts[0].RW = false)],
+    ["mount propagation", (value) => (value.Mounts[0].Propagation = "rshared")],
+    ["secret mount", (value) => value.Mounts.pop()],
+    ["secret value", (value) => value.Config.Env.push("PASSWORD=gate-secret")],
+  ])("rejects mutated %s confinement", async (kind, mutate) => {
+    const inspected = docker29Inspect();
+    mutate(inspected);
+    await expect(
+      inspect(
+        runtimeFor(inspected),
+        kind === "secret value" ? ["gate-secret"] : [],
+      ),
+    ).rejects.toThrow(
+      kind === "secret value"
+        ? "docker_container_metadata_contains_secret"
+        : "docker_container_confinement_unproven",
     );
   });
 });

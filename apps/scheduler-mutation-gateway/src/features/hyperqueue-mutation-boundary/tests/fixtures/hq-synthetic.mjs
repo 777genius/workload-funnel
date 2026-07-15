@@ -146,7 +146,7 @@ if (jobIndex >= 0 && args[jobIndex + 1] === "info") {
   if (job === undefined) throw new Error("job absent");
   output([
     {
-      id: Number(jobId),
+      info: { id: Number(jobId) },
       tasks: [
         {
           exit_code: job.exitCode,

@@ -14,6 +14,159 @@ function missingDockerObject(result) {
   );
 }
 
+function ipv4Number(value) {
+  if (typeof value !== "string") return undefined;
+  const octets = value.split(".");
+  if (
+    octets.length !== 4 ||
+    octets.some(
+      (octet) => !/^(?:0|[1-9]\d{0,2})$/u.test(octet) || Number(octet) > 255,
+    )
+  )
+    return undefined;
+  return octets.reduce((address, octet) => address * 256 + Number(octet), 0);
+}
+
+function ipv4BelongsToSubnet(address, subnet, prefixLength) {
+  const addressNumber = ipv4Number(address);
+  const subnetNumber = ipv4Number(subnet);
+  if (
+    addressNumber === undefined ||
+    subnetNumber === undefined ||
+    !Number.isSafeInteger(prefixLength) ||
+    prefixLength < 1 ||
+    prefixLength > 32
+  )
+    return false;
+  const blockSize = 2 ** (32 - prefixLength);
+  return (
+    Math.floor(addressNumber / blockSize) ===
+    Math.floor(subnetNumber / blockSize)
+  );
+}
+
+function unpublishedPortMap(value) {
+  if (value === null) return true;
+  if (typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every((bindings) => bindings === null);
+}
+
+function noRequestedPortBindings(value) {
+  return (
+    value === null ||
+    (typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 0)
+  );
+}
+
+function exactSingleIpv4Subnet(network) {
+  if (!Array.isArray(network?.IPAM?.Config) || network.IPAM.Config.length !== 1)
+    return undefined;
+  const config = network.IPAM.Config[0];
+  if (
+    config === null ||
+    typeof config !== "object" ||
+    typeof config.Subnet !== "string"
+  )
+    return undefined;
+  const match = config.Subnet.match(
+    /^((?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3})\/(\d{1,2})$/u,
+  );
+  const prefixLength = Number(match?.[2]);
+  if (
+    match === null ||
+    ipv4Number(match[1]) === undefined ||
+    !Number.isSafeInteger(prefixLength) ||
+    prefixLength < 1 ||
+    prefixLength > 30 ||
+    !ipv4BelongsToSubnet(config.Gateway, match[1], prefixLength)
+  )
+    return undefined;
+  return Object.freeze({ address: match[1], prefixLength });
+}
+
+function usableIpv4Host(address, subnet) {
+  const addressNumber = ipv4Number(address);
+  const subnetNumber = ipv4Number(subnet?.address);
+  if (addressNumber === undefined || subnetNumber === undefined) return false;
+  const blockSize = 2 ** (32 - subnet.prefixLength);
+  const networkAddress = Math.floor(subnetNumber / blockSize) * blockSize;
+  return (
+    addressNumber > networkAddress &&
+    addressNumber < networkAddress + blockSize - 1
+  );
+}
+
+function exactOwnedNetworkMembers(network, runId, subnet) {
+  if (
+    network?.Containers === null ||
+    typeof network?.Containers !== "object" ||
+    Array.isArray(network?.Containers)
+  )
+    return false;
+  const addresses = [];
+  for (const [identity, member] of Object.entries(network.Containers)) {
+    if (
+      !/^[a-f0-9]{12,64}$/u.test(identity) ||
+      member === null ||
+      typeof member !== "object" ||
+      !OWNED_RESOURCE_PATTERN.test(member.Name ?? "") ||
+      !member.Name.startsWith(`${runId}-`) ||
+      !/^[a-f0-9]{12,64}$/u.test(member.EndpointID ?? "") ||
+      typeof member.IPv4Address !== "string"
+    )
+      return false;
+    const match = member.IPv4Address.match(
+      /^((?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3})\/(\d{1,2})$/u,
+    );
+    if (
+      match === null ||
+      Number(match[2]) !== subnet.prefixLength ||
+      !usableIpv4Host(match[1], subnet) ||
+      !ipv4BelongsToSubnet(match[1], subnet.address, subnet.prefixLength)
+    )
+      return false;
+    addresses.push(match[1]);
+  }
+  return new Set(addresses).size === addresses.length;
+}
+
+function exactBindMounts(mounts, expectedWritableStorage, expectedSecrets) {
+  if (!Array.isArray(mounts) || !Array.isArray(expectedSecrets)) return false;
+  const expected = [
+    ...(expectedWritableStorage?.kind === "bind"
+      ? [
+          {
+            destination: expectedWritableStorage.destination,
+            readWrite: true,
+            source: expectedWritableStorage.source,
+          },
+        ]
+      : []),
+    ...expectedSecrets.map(({ destination, source }) => ({
+      destination,
+      readWrite: false,
+      source,
+    })),
+  ];
+  return (
+    mounts.length === expected.length &&
+    expected.every(({ destination, readWrite, source }) =>
+      mounts.some(
+        (mount) =>
+          mount !== null &&
+          typeof mount === "object" &&
+          mount.Type === "bind" &&
+          mount.Source === source &&
+          mount.Destination === destination &&
+          mount.RW === readWrite &&
+          mount.Propagation === "rprivate",
+      ),
+    )
+  );
+}
+
 export function createDockerRecoveryCleaners({ executable, runId, runner }) {
   const command = (args) => runner.run(executable, args, { timeoutMs: 5_000 });
   return Object.freeze({
@@ -133,6 +286,34 @@ export class GateDockerRuntime {
       await this.command(["network", "rm", this.network]);
       throw new Error("docker_network_identity_invalid");
     }
+    let inspected;
+    try {
+      inspected = JSON.parse(
+        await this.command(["network", "inspect", this.network]),
+      );
+    } catch {
+      await this.command(["network", "rm", this.network]);
+      throw new Error("docker_network_confinement_unproven");
+    }
+    const network = inspected?.[0];
+    const subnet = exactSingleIpv4Subnet(network);
+    if (
+      !Array.isArray(inspected) ||
+      inspected.length !== 1 ||
+      network?.Id !== identity ||
+      network?.Name !== this.network ||
+      network?.Driver !== "bridge" ||
+      network?.Internal !== true ||
+      network?.Ingress !== false ||
+      network?.Labels?.["workload-funnel.production-gate.run"] !== this.runId ||
+      subnet === undefined ||
+      !exactOwnedNetworkMembers(network, this.runId, subnet) ||
+      Object.keys(network.Containers).length !== 0
+    ) {
+      await this.command(["network", "rm", this.network]);
+      throw new Error("docker_network_confinement_unproven");
+    }
+    this.networkIdentity = identity;
     const cleanup = async () => {
       const observed = await this.command([
         "network",
@@ -179,31 +360,6 @@ export class GateDockerRuntime {
     return identity;
   }
 
-  async loopbackPort(name, containerPort, expectedHostPort) {
-    const output = await this.command([
-      "port",
-      name,
-      `${String(containerPort)}/tcp`,
-    ]);
-    const match = output.match(/^127\.0\.0\.1:(\d{2,5})$/u);
-    const port = Number(match?.[1]);
-    if (
-      match === null ||
-      !Number.isSafeInteger(port) ||
-      port < 1 ||
-      port > 65_535
-    )
-      throw new Error("docker_published_port_not_loopback");
-    if (
-      !Number.isSafeInteger(expectedHostPort) ||
-      expectedHostPort < 1 ||
-      expectedHostPort > 65_535 ||
-      port !== expectedHostPort
-    )
-      throw new Error("docker_published_port_identity_changed");
-    return port;
-  }
-
   async inspectContainerConfinement(
     name,
     expectedUser,
@@ -211,8 +367,16 @@ export class GateDockerRuntime {
     expectedIdentity,
     expectedWritableStorage,
     expectedContainerPort,
+    expectedImage,
+    expectedSecretMounts,
   ) {
-    const output = await this.command(["container", "inspect", name]);
+    const [output, networkOutput, publishedPorts] = await Promise.all([
+      this.command(["container", "inspect", name]),
+      this.command(["network", "inspect", this.network]),
+      this.runner.run(this.executable, ["port", name], {
+        timeoutMs: 5_000,
+      }),
+    ]);
     if (
       forbiddenValues.some(
         (value) => typeof value !== "string" || value.length < 1,
@@ -221,36 +385,27 @@ export class GateDockerRuntime {
     )
       throw new Error("docker_container_metadata_contains_secret");
     let decoded;
+    let decodedNetwork;
     try {
       decoded = JSON.parse(output);
+      decodedNetwork = JSON.parse(networkOutput);
     } catch {
       throw new Error("docker_container_inspect_malformed");
     }
     const inspected = decoded?.[0];
     const host = inspected?.HostConfig;
     const container = inspected?.Config;
-    const requestedPorts = host?.PortBindings;
-    const assignedPorts = inspected?.NetworkSettings?.Ports;
-    const expectedPortKey = `${String(expectedContainerPort)}/tcp`;
-    const requestedPortKeys = Object.keys(requestedPorts ?? {});
-    const requestedBindings = requestedPorts?.[expectedPortKey];
-    const requestedBinding = requestedBindings?.[0];
-    const assignedPortKeys = Object.keys(assignedPorts ?? {});
-    const assignedBindings = assignedPorts?.[expectedPortKey];
-    const assignedBinding = assignedBindings?.[0];
-    const publishedHostPort = Number(assignedBinding?.HostPort);
+    const network = decodedNetwork?.[0];
+    const attachedNetworks = inspected?.NetworkSettings?.Networks;
+    const networkNames = Object.keys(attachedNetworks ?? {});
+    const endpoint = attachedNetworks?.[this.network];
+    const prefixLength = endpoint?.IPPrefixLen;
+    const ipv4Address = endpoint?.IPAddress;
+    const subnet = exactSingleIpv4Subnet(network);
+    const membership = network?.Containers?.[inspected?.Id];
     const writableStorageProven =
       expectedWritableStorage?.kind === "bind"
-        ? Array.isArray(inspected?.Mounts) &&
-          inspected.Mounts.some(
-            (mount) =>
-              mount.Type === "bind" &&
-              mount.Source === expectedWritableStorage.source &&
-              mount.Destination === expectedWritableStorage.destination &&
-              mount.RW === true &&
-              mount.Propagation === "rprivate",
-          ) &&
-          typeof host?.Tmpfs?.[expectedWritableStorage.destination] !== "string"
+        ? typeof host?.Tmpfs?.[expectedWritableStorage.destination] !== "string"
         : expectedWritableStorage?.kind === "tmpfs" &&
           typeof host?.Tmpfs?.[expectedWritableStorage.destination] ===
             "string";
@@ -260,6 +415,9 @@ export class GateDockerRuntime {
       typeof inspected?.Id !== "string" ||
       !/^sha256:[a-f0-9]{64}$/u.test(inspected?.Image ?? "") ||
       (expectedIdentity !== undefined && inspected.Id !== expectedIdentity) ||
+      container?.Image !== expectedImage ||
+      container?.Labels?.["workload-funnel.production-gate.resource"] !==
+        name ||
       container?.User !== expectedUser ||
       host?.Privileged !== false ||
       host?.ReadonlyRootfs !== true ||
@@ -278,31 +436,55 @@ export class GateDockerRuntime {
       ) ||
       typeof host?.Tmpfs?.["/tmp"] !== "string" ||
       !writableStorageProven ||
+      !exactBindMounts(
+        inspected?.Mounts,
+        expectedWritableStorage,
+        expectedSecretMounts,
+      ) ||
       !Number.isSafeInteger(expectedContainerPort) ||
       expectedContainerPort < 1 ||
       expectedContainerPort > 65_535 ||
-      requestedPortKeys.length !== 1 ||
-      requestedPortKeys[0] !== expectedPortKey ||
-      !Array.isArray(requestedBindings) ||
-      requestedBindings.length !== 1 ||
-      requestedBinding === null ||
-      typeof requestedBinding !== "object" ||
-      Array.isArray(requestedBinding) ||
-      Object.keys(requestedBinding).sort().join(",") !== "HostIp,HostPort" ||
-      requestedBinding.HostIp !== "127.0.0.1" ||
-      requestedBinding.HostPort !== "0" ||
-      assignedPortKeys.length !== 1 ||
-      assignedPortKeys[0] !== expectedPortKey ||
-      !Array.isArray(assignedBindings) ||
-      assignedBindings.length !== 1 ||
-      assignedBinding === null ||
-      typeof assignedBinding !== "object" ||
-      Array.isArray(assignedBinding) ||
-      Object.keys(assignedBinding).sort().join(",") !== "HostIp,HostPort" ||
-      assignedBinding.HostIp !== "127.0.0.1" ||
-      !/^[1-9]\d{0,4}$/u.test(assignedBinding.HostPort ?? "") ||
-      !Number.isSafeInteger(publishedHostPort) ||
-      publishedHostPort > 65_535
+      !noRequestedPortBindings(host?.PortBindings) ||
+      !unpublishedPortMap(inspected?.NetworkSettings?.Ports) ||
+      publishedPorts.code !== 0 ||
+      publishedPorts.stdout !== "" ||
+      publishedPorts.stderr !== "" ||
+      !Array.isArray(decodedNetwork) ||
+      decodedNetwork.length !== 1 ||
+      network?.Name !== this.network ||
+      (this.networkIdentity !== undefined &&
+        network?.Id !== this.networkIdentity) ||
+      network?.Driver !== "bridge" ||
+      network?.Internal !== true ||
+      network?.Ingress !== false ||
+      network?.Labels?.["workload-funnel.production-gate.run"] !== this.runId ||
+      networkNames.length !== 1 ||
+      networkNames[0] !== this.network ||
+      endpoint === null ||
+      typeof endpoint !== "object" ||
+      !/^[a-f0-9]{12,64}$/u.test(endpoint.NetworkID ?? "") ||
+      endpoint.NetworkID !== network.Id ||
+      !/^[a-f0-9]{12,64}$/u.test(endpoint.EndpointID ?? "") ||
+      ipv4Number(ipv4Address) === undefined ||
+      !Number.isSafeInteger(prefixLength) ||
+      prefixLength < 1 ||
+      prefixLength > 32 ||
+      subnet === undefined ||
+      subnet.prefixLength !== prefixLength ||
+      !usableIpv4Host(ipv4Address, subnet) ||
+      !ipv4BelongsToSubnet(
+        ipv4Address,
+        subnet?.address,
+        subnet?.prefixLength,
+      ) ||
+      membership === null ||
+      typeof membership !== "object" ||
+      !exactOwnedNetworkMembers(network, this.runId, subnet) ||
+      membership.Name !== name ||
+      membership.EndpointID !== endpoint.EndpointID ||
+      membership.MacAddress !== endpoint.MacAddress ||
+      membership.IPv4Address !== `${ipv4Address}/${String(prefixLength)}` ||
+      membership.IPv6Address !== ""
     )
       throw new Error("docker_container_confinement_unproven");
     return Object.freeze({
@@ -313,10 +495,14 @@ export class GateDockerRuntime {
       exactIdentity: inspected.Id,
       imageId: inspected.Image,
       internalNetwork: this.network,
+      internalNetworkEndpoint: Object.freeze({
+        ipv4Address,
+        port: expectedContainerPort,
+      }),
       metadataSecretValuesAbsent: true,
       nonRootUser: expectedUser,
       privateUtsNamespace: true,
-      publishedHostPort,
+      publishedPorts: 0,
       readOnlyRoot: true,
       writableStorage: Object.freeze({ ...expectedWritableStorage }),
       resourceLimits: Object.freeze({

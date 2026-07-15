@@ -108,6 +108,45 @@ export function parseOfficialArray(output, kind) {
   return Object.freeze(value);
 }
 
+function canonicalOfficialJobId(value) {
+  if (Number.isSafeInteger(value) && value >= 0) return String(value);
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value))
+    throw new Error("hyperqueue_job_info_schema_invalid");
+  const numeric = Number(value);
+  if (!Number.isSafeInteger(numeric))
+    throw new Error("hyperqueue_job_info_schema_invalid");
+  return value;
+}
+
+export function parseOfficialJobInfo(output, expectedJobId) {
+  const jobs = parseOfficialArray(output, "job_info");
+  const job = jobs[0];
+  if (
+    jobs.length !== 1 ||
+    job === null ||
+    typeof job !== "object" ||
+    Array.isArray(job) ||
+    Object.hasOwn(job, "id") ||
+    job.info === null ||
+    typeof job.info !== "object" ||
+    Array.isArray(job.info) ||
+    !Object.hasOwn(job.info, "id") ||
+    !Array.isArray(job.tasks)
+  )
+    throw new Error("hyperqueue_job_info_schema_invalid");
+  const jobId = canonicalOfficialJobId(job.info.id);
+  if (jobId !== canonicalOfficialJobId(expectedJobId))
+    throw new Error("hyperqueue_job_info_identity_mismatch");
+  const taskIds = job.tasks.map((task) => {
+    if (task === null || typeof task !== "object" || Array.isArray(task))
+      throw new Error("hyperqueue_job_info_schema_invalid");
+    return canonicalOfficialJobId(task.id);
+  });
+  if (new Set(taskIds).size !== taskIds.length)
+    throw new Error("hyperqueue_job_info_schema_invalid");
+  return Object.freeze({ job, jobId });
+}
+
 function pinnedArchiveBinary(archive) {
   let tar;
   try {
@@ -213,18 +252,14 @@ async function poll(config, operation, code) {
 }
 
 function exactCanceledTask(output, mapping) {
-  const jobs = parseOfficialArray(output, "job_info");
-  if (
-    jobs.length !== 1 ||
-    (jobs[0]?.id !== Number(mapping.jobId) && jobs[0]?.id !== mapping.jobId) ||
-    !Array.isArray(jobs[0]?.tasks)
-  )
+  let parsed;
+  try {
+    parsed = parseOfficialJobInfo(output, mapping.jobId);
+  } catch {
     return false;
-  const tasks = jobs[0].tasks.filter(
-    (task) =>
-      task !== null &&
-      typeof task === "object" &&
-      (task.id === Number(mapping.taskId) || task.id === mapping.taskId),
+  }
+  const tasks = parsed.job.tasks.filter(
+    (task) => canonicalOfficialJobId(task.id) === mapping.taskId,
   );
   return (
     tasks.length === 1 &&
@@ -319,12 +354,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
         ),
       "hyperqueue_job_info_timeout",
     );
-    const jobs = parseOfficialArray(info.stdout, "job_info");
-    if (
-      jobs.length !== 1 ||
-      (jobs[0]?.id !== Number(mapping.jobId) && jobs[0]?.id !== mapping.jobId)
-    )
-      throw new Error("hyperqueue_job_info_identity_mismatch");
+    parseOfficialJobInfo(info.stdout, mapping.jobId);
     const canceled = await config.runner.run(
       config.binaryPath,
       officialHyperQueueCancelArguments(config.serverDirectory, mapping.jobId),
@@ -336,7 +366,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
       ...release,
       cancelSchema: "empty_object",
       cancelTerminalObservation: "exact_job_and_task_canceled",
-      jobInfoSchema: "array",
+      jobInfoSchema: "array_with_nested_info_id",
       submitSchema: "numeric_id",
       submittedJobId: mapping.jobId,
       workerListSchema: "array",

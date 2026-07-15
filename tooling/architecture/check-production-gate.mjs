@@ -124,7 +124,6 @@ for (const token of [
 const docker = await source("tooling/production-gate/docker-plan.mjs");
 for (const token of [
   "--pull=never",
-  "127.0.0.1:0:",
   "--memory-swap",
   "--pids-limit",
   "--device-read-bps",
@@ -138,6 +137,8 @@ for (const token of [
   "--internal",
 ])
   if (!docker.includes(token)) failures.push(`Docker plan is missing ${token}`);
+if (/^ {4}"(?:--publish|-p)",/mu.test(docker))
+  failures.push("Docker plan permits host port publication");
 if (!docker.includes('"--env-file"'))
   failures.push("Docker plan does not explicitly refuse env-file metadata");
 

@@ -168,8 +168,20 @@ export function providerIdentity({ endpoint, fixtureImage, region }) {
 }
 
 function requestArguments(config, operationArguments) {
-  if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/u.test(config.endpoint))
-    throw new Error("object_fixture_endpoint_not_loopback");
+  const endpoint = config.endpoint.match(
+    /^http:\/\/((?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}):(\d{1,5})$/u,
+  );
+  const octets = endpoint?.[1].split(".").map(Number) ?? [];
+  const port = Number(endpoint?.[2]);
+  if (
+    endpoint === null ||
+    octets.length !== 4 ||
+    octets.some((octet) => octet > 255) ||
+    !Number.isSafeInteger(port) ||
+    port < 1 ||
+    port > 65_535
+  )
+    throw new Error("object_fixture_endpoint_not_direct_ipv4");
   return Object.freeze([
     "s3api",
     ...operationArguments,

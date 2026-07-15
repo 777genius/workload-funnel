@@ -110,10 +110,10 @@ describe("official HyperQueue v0.26.2 CLI schemas", () => {
     );
   });
 
-  it("parses real array-shaped job info and worker list output", () => {
+  it("parses the real nested job-info identity and top-level worker identity", () => {
     expect(
       parseHyperQueueObservation(
-        '[{"id":12,"tasks":[{"id":0,"state":"RUNNING","exit_code":null,"worker_id":7}]}]',
+        '[{"info":{"id":12},"tasks":[{"id":0,"state":"RUNNING","exit_code":null,"worker_id":7}]}]',
         { jobId: "12", mappingFingerprint: "mapping-1", taskId: "0" },
         { sourceEpoch: 1, sourceSequence: 1 },
       ),
@@ -124,6 +124,35 @@ describe("official HyperQueue v0.26.2 CLI schemas", () => {
         { sourceEpoch: 1, sourceSequence: 1 },
       ).workers,
     ).toEqual([{ customResources: { gpu: 1 }, state: "idle", workerId: "7" }]);
+  });
+
+  it("normalizes only safe canonical integer or decimal-string job-info identities", () => {
+    expect(
+      parseHyperQueueObservation(
+        '[{"info":{"id":"12"},"tasks":[{"id":"0","state":"WAITING"}]}]',
+        { jobId: "12", mappingFingerprint: "mapping-1", taskId: "0" },
+        { sourceEpoch: 1, sourceSequence: 1 },
+      ),
+    ).toMatchObject({ schedulerState: "waiting" });
+
+    for (const output of [
+      "[]",
+      '[{"info":{"id":12},"tasks":[]},{"info":{"id":12},"tasks":[]}]',
+      '[{"tasks":[]}]',
+      '[{"id":12,"info":{"id":12},"tasks":[]}]',
+      '[{"info":{"id":"01"},"tasks":[]}]',
+      '[{"info":{"id":-1},"tasks":[]}]',
+      '[{"info":{"id":1.5},"tasks":[]}]',
+      '[{"info":{"id":9007199254740992},"tasks":[]}]',
+      '[{"info":{"id":13},"tasks":[{"id":0,"state":"WAITING"}]}]',
+    ])
+      expect(() =>
+        parseHyperQueueObservation(
+          output,
+          { jobId: "12", mappingFingerprint: "mapping-1", taskId: "0" },
+          { sourceEpoch: 1, sourceSequence: 1 },
+        ),
+      ).toThrow("hyperqueue_observation_schema_invalid");
   });
 
   it("rejects the old synthetic object envelopes and noncanonical cancel IDs", () => {

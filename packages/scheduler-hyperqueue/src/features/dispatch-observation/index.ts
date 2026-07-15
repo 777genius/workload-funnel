@@ -48,6 +48,7 @@ export interface HyperQueueDispatchObservation {
 interface JsonRecord {
   readonly [key: string]: unknown;
   readonly id?: unknown;
+  readonly info?: unknown;
   readonly tasks?: unknown;
   readonly exitCode?: unknown;
   readonly exit_code?: unknown;
@@ -77,7 +78,12 @@ function identifier(value: unknown, nullable = false): string | null {
 function numericIdentifier(value: unknown): string {
   if (Number.isSafeInteger(value) && (value as number) >= 0)
     return String(value);
-  return identifier(value);
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value))
+    throw new Error("hyperqueue_observation_schema_invalid");
+  const numeric = Number(value);
+  if (!Number.isSafeInteger(numeric))
+    throw new Error("hyperqueue_observation_schema_invalid");
+  return value;
 }
 
 function schedulerState(
@@ -113,7 +119,10 @@ export function parseHyperQueueObservation(
   if (!Array.isArray(decoded) || decoded.length !== 1)
     throw new Error("hyperqueue_observation_schema_invalid");
   const job = record(decoded[0]);
-  const jobId = numericIdentifier(job.id);
+  if (Object.hasOwn(job, "id"))
+    throw new Error("hyperqueue_observation_schema_invalid");
+  const info = record(job.info);
+  const jobId = numericIdentifier(info.id);
   if (!Array.isArray(job.tasks))
     throw new Error("hyperqueue_observation_schema_invalid");
   const tasks = job.tasks

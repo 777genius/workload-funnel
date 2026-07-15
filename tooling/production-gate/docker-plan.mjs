@@ -19,19 +19,8 @@ export function assertSafeDockerArguments(args) {
       !OWNED_RESOURCE_PATTERN.test(args[index + 1] ?? "")
     )
       throw new Error("unsafe_docker_resource_name");
-    if (args[index] === "--publish" || args[index] === "-p") {
-      const match = (args[index + 1] ?? "").match(
-        /^127\.0\.0\.1:0:(\d{1,5})$/u,
-      );
-      const containerPort = Number(match?.[1]);
-      if (
-        match === null ||
-        !Number.isSafeInteger(containerPort) ||
-        containerPort < 1 ||
-        containerPort > 65_535
-      )
-        throw new Error("docker_port_not_loopback_ephemeral");
-    }
+    if (args[index] === "--publish" || args[index] === "-p")
+      throw new Error("docker_port_publication_forbidden");
   }
   return Object.freeze([...args]);
 }
@@ -58,7 +47,6 @@ function boundedContainerArguments({
   ioDevice,
   name,
   network,
-  port,
   scratchTmpfs,
   secretMounts,
   user,
@@ -118,8 +106,6 @@ function boundedContainerArguments({
     name,
     "--network",
     network,
-    "--publish",
-    `127.0.0.1:0:${String(port)}`,
     "--cpus",
     "2",
     "--memory",
@@ -196,7 +182,6 @@ export function postgresContainerArguments(config) {
       ioDevice: config.ioDevice,
       name: config.name,
       network: config.network,
-      port: 5432,
       scratchTmpfs:
         "/tmp:rw,nosuid,nodev,noexec,size=67108864,uid=70,gid=70,mode=0700",
       secretMounts: [
@@ -242,7 +227,6 @@ export function objectContainerArguments(config) {
       ioDevice: config.ioDevice,
       name: config.name,
       network: config.network,
-      port: 9000,
       scratchTmpfs:
         "/tmp:rw,nosuid,nodev,noexec,size=67108864,uid=1000,gid=1000,mode=0700",
       secretMounts: [

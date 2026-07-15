@@ -42,51 +42,6 @@ function sliceShow(overrides = {}) {
     .join("\n")}\n`;
 }
 
-function postgresInspect(overrides = {}) {
-  return {
-    Config: {
-      Env: ["POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password"],
-      User: "70:70",
-    },
-    HostConfig: {
-      CapDrop: ["ALL"],
-      Init: true,
-      IpcMode: "private",
-      Memory: 2_147_483_648,
-      MemorySwap: 2_147_483_648,
-      NanoCpus: 2_000_000_000,
-      NetworkMode: `${runId}-network`,
-      PidsLimit: 256,
-      PortBindings: {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
-      },
-      Privileged: false,
-      ReadonlyRootfs: true,
-      RestartPolicy: { Name: "no" },
-      SecurityOpt: ["no-new-privileges=true"],
-      Tmpfs: { "/tmp": "rw,size=67108864" },
-      UTSMode: "",
-      ...overrides,
-    },
-    Id: "a".repeat(64),
-    Image: `sha256:${"b".repeat(64)}`,
-    Mounts: [
-      {
-        Destination: "/var/lib/postgresql/data",
-        Propagation: "rprivate",
-        RW: true,
-        Source: postgresData,
-        Type: "bind",
-      },
-    ],
-    NetworkSettings: {
-      Ports: {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
-      },
-    },
-  };
-}
-
 function clientInspect(identity, overrides = {}) {
   return {
     Config: { Cmd: ["ready"], User: "1000:1000" },
@@ -113,7 +68,7 @@ function clientInspect(identity, overrides = {}) {
 }
 
 describe("Docker 29 production-gate compatibility", () => {
-  it("uses valid writable bind syntax and proves the exact rprivate mount", async () => {
+  it("uses valid writable bind syntax and forbids every host publication", () => {
     const args = postgresContainerArguments({
       database: "wf_gate",
       dataDirectory: postgresData,
@@ -133,157 +88,16 @@ describe("Docker 29 production-gate compatibility", () => {
     );
     expect(args.some((argument) => argument.startsWith("--uts"))).toBe(false);
     expect(args).toContain("--ipc=private");
-    expect(args).toContain("127.0.0.1:0:5432");
-    expect(() =>
-      assertSafeDockerArguments(["create", "--publish", "127.0.0.1::5432"]),
-    ).toThrow("docker_port_not_loopback_ephemeral");
-    expect(() =>
-      assertSafeDockerArguments([
-        "create",
-        "--publish",
-        "127.0.0.1:49152:5432",
-      ]),
-    ).toThrow("docker_port_not_loopback_ephemeral");
-    expect(() =>
-      assertSafeDockerArguments(["create", "--publish", "0.0.0.0:0:5432"]),
-    ).toThrow("docker_port_not_loopback_ephemeral");
-    expect(
-      assertSafeDockerArguments(["create", "--publish", "127.0.0.1:0:5432"]),
-    ).toEqual(["create", "--publish", "127.0.0.1:0:5432"]);
-
-    let inspected = postgresInspect();
-    const runtime = new GateDockerRuntime({
-      executable: "/usr/bin/docker",
-      ioDevice: "/dev/vda",
-      runId,
-      runner: {
-        run: () => Promise.resolve(result(JSON.stringify([inspected]))),
-      },
-      sandboxRoot: `/tmp/${runId}`,
-    });
-    const expectedStorage = {
-      destination: "/var/lib/postgresql/data",
-      kind: "bind",
-      source: postgresData,
-    };
-    await expect(
-      runtime.inspectContainerConfinement(
-        `${runId}-postgres`,
-        "70:70",
-        [],
-        inspected.Id,
-        expectedStorage,
-        5432,
-      ),
-    ).resolves.toMatchObject({
-      privateUtsNamespace: true,
-      publishedHostPort: 49152,
-      writableStorage: expectedStorage,
-    });
-
-    for (const binding of [
-      { HostIp: "127.0.0.1", HostPort: "" },
-      { HostIp: "127.0.0.1", HostPort: "49152" },
-      { HostIp: "0.0.0.0", HostPort: "49152" },
-      { HostIp: "127.0.0.1", HostPort: "65536" },
-    ]) {
-      inspected = postgresInspect({
-        PortBindings: { "5432/tcp": [binding] },
-      });
-      await expect(
-        runtime.inspectContainerConfinement(
-          `${runId}-postgres`,
-          "70:70",
-          [],
-          inspected.Id,
-          expectedStorage,
-          5432,
-        ),
-      ).rejects.toThrow("docker_container_confinement_unproven");
-    }
-
-    inspected = postgresInspect({
-      PortBindings: {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
-        "9000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49153" }],
-      },
-    });
-    await expect(
-      runtime.inspectContainerConfinement(
-        `${runId}-postgres`,
-        "70:70",
-        [],
-        inspected.Id,
-        expectedStorage,
-        5432,
-      ),
-    ).rejects.toThrow("docker_container_confinement_unproven");
-
-    inspected = postgresInspect({ UTSMode: "host" });
-    await expect(
-      runtime.inspectContainerConfinement(
-        `${runId}-postgres`,
-        "70:70",
-        [],
-        inspected.Id,
-        expectedStorage,
-        5432,
-      ),
-    ).rejects.toThrow("docker_container_confinement_unproven");
-
-    inspected = postgresInspect();
-    inspected.Mounts[0].RW = false;
-    await expect(
-      runtime.inspectContainerConfinement(
-        `${runId}-postgres`,
-        "70:70",
-        [],
-        inspected.Id,
-        expectedStorage,
-        5432,
-      ),
-    ).rejects.toThrow("docker_container_confinement_unproven");
-
-    inspected = postgresInspect();
-    inspected.Mounts[0].Propagation = "rshared";
-    await expect(
-      runtime.inspectContainerConfinement(
-        `${runId}-postgres`,
-        "70:70",
-        [],
-        inspected.Id,
-        expectedStorage,
-        5432,
-      ),
-    ).rejects.toThrow("docker_container_confinement_unproven");
-  });
-
-  it("requires docker port to prove one assigned loopback port", async () => {
-    let output = "127.0.0.1:49152\n";
-    const runtime = new GateDockerRuntime({
-      executable: "/usr/bin/docker",
-      ioDevice: "/dev/vda",
-      runId,
-      runner: { run: () => Promise.resolve(result(output)) },
-      sandboxRoot: `/tmp/${runId}`,
-    });
-    await expect(
-      runtime.loopbackPort(`${runId}-postgres`, 5432, 49152),
-    ).resolves.toBe(49152);
-    await expect(
-      runtime.loopbackPort(`${runId}-postgres`, 5432, 49153),
-    ).rejects.toThrow("docker_published_port_identity_changed");
-    for (const foreign of [
-      "0.0.0.0:49152\n",
-      "127.0.0.1:0\n",
-      "127.0.0.1:\n",
-      "127.0.0.1:49152\n127.0.0.1:49153\n",
-    ]) {
-      output = foreign;
-      await expect(
-        runtime.loopbackPort(`${runId}-postgres`, 5432, 49152),
-      ).rejects.toThrow("docker_published_port_not_loopback");
-    }
+    expect(args).not.toContain("--publish");
+    expect(args).not.toContain("-p");
+    for (const publication of [
+      ["create", "--publish", "127.0.0.1:0:5432"],
+      ["create", "--publish", "0.0.0.0:5432:5432"],
+      ["create", "-p", "5432:5432"],
+    ])
+      expect(() => assertSafeDockerArguments(publication)).toThrow(
+        "docker_port_publication_forbidden",
+      );
   });
 
   it("omits UTS flags for clients and accepts only Docker's empty private mode", async () => {
@@ -537,7 +351,6 @@ describe("systemd 255 production-gate compatibility", () => {
     expect(runner.run.mock.calls.map(([, args]) => args[0])).toEqual([
       "show",
       "stop",
-      "reset-failed",
       "show",
     ]);
   });
@@ -612,7 +425,7 @@ describe("systemd 255 production-gate compatibility", () => {
     ).rejects.toThrow("systemd_slice_cleanup_identity_changed");
   });
 
-  it("requires an exact inactive implicit baseline after stop and reset", async () => {
+  it("requires an exact inactive implicit baseline after stop", async () => {
     let calls = 0;
     const runner = {
       run: vi.fn((_executable, args) => {
@@ -641,7 +454,7 @@ describe("systemd 255 production-gate compatibility", () => {
           state: "prepared",
         },
       ),
-    ).rejects.toThrow("systemd_slice_cleanup_uncertain");
+    ).rejects.toThrow("systemd_slice_cleanup_identity_changed");
   });
 
   it("recognizes not-found among properties without weakening loaded identity", async () => {

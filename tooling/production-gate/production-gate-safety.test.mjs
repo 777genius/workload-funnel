@@ -295,89 +295,6 @@ describe("production gate host safety", () => {
       assertSafeDockerArguments(["create", "--env-file", "/tmp/secret"]),
     ).toThrow("unsafe_docker_gate_arguments");
 
-    const inspected = {
-      Config: {
-        Env: ["POSTGRES_PASSWORD_FILE=/run/secrets/password"],
-        User: "70:70",
-      },
-      HostConfig: {
-        CapDrop: ["ALL"],
-        Init: true,
-        IpcMode: "private",
-        Memory: 2_147_483_648,
-        MemorySwap: 2_147_483_648,
-        NanoCpus: 2_000_000_000,
-        NetworkMode: `${runId}-network`,
-        PidsLimit: 256,
-        PortBindings: {
-          "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
-        },
-        Privileged: false,
-        ReadonlyRootfs: true,
-        RestartPolicy: { Name: "no" },
-        SecurityOpt: ["no-new-privileges=true"],
-        Tmpfs: { "/tmp": "rw,size=67108864" },
-        UTSMode: "",
-      },
-      Id: "a".repeat(64),
-      Image: `sha256:${"b".repeat(64)}`,
-      Mounts: [
-        {
-          Destination: "/var/lib/postgresql/data",
-          Propagation: "rprivate",
-          RW: true,
-          Source: postgresData,
-          Type: "bind",
-        },
-      ],
-      NetworkSettings: {
-        Ports: {
-          "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
-        },
-      },
-    };
-    const inspectOutput = { value: JSON.stringify([inspected]) };
-    const runtime = new GateDockerRuntime({
-      executable: "/usr/bin/docker",
-      ioDevice: "/dev/vda",
-      runId,
-      runner: {
-        run: () =>
-          Promise.resolve({ code: 0, stderr: "", stdout: inspectOutput.value }),
-      },
-      sandboxRoot: `/tmp/${runId}`,
-    });
-    await expect(
-      runtime.inspectContainerConfinement(
-        `${runId}-postgres`,
-        "70:70",
-        [fakeCredential],
-        undefined,
-        {
-          destination: "/var/lib/postgresql/data",
-          kind: "bind",
-          source: postgresData,
-        },
-        5432,
-      ),
-    ).resolves.toMatchObject({ metadataSecretValuesAbsent: true });
-    inspected.Config.Env.push(`UNSAFE=${fakeCredential}`);
-    inspectOutput.value = JSON.stringify([inspected]);
-    await expect(
-      runtime.inspectContainerConfinement(
-        `${runId}-postgres`,
-        "70:70",
-        [fakeCredential],
-        undefined,
-        {
-          destination: "/var/lib/postgresql/data",
-          kind: "bind",
-          source: postgresData,
-        },
-        5432,
-      ),
-    ).rejects.toThrow("docker_container_metadata_contains_secret");
-
     const client = {
       Config: { Cmd: ["/gate/bootstrap.sh", "ready"], User: "1000:1000" },
       HostConfig: {
@@ -399,7 +316,17 @@ describe("production gate host safety", () => {
       },
       Id: "c".repeat(64),
     };
-    inspectOutput.value = JSON.stringify([client]);
+    const inspectOutput = { value: JSON.stringify([client]) };
+    const runtime = new GateDockerRuntime({
+      executable: "/usr/bin/docker",
+      ioDevice: "/dev/vda",
+      runId,
+      runner: {
+        run: () =>
+          Promise.resolve({ code: 0, stderr: "", stdout: inspectOutput.value }),
+      },
+      sandboxRoot: `/tmp/${runId}`,
+    });
     runtime.secretValues = [fakeCredential];
     await expect(
       runtime.inspectClientConfinement(`${runId}-client-1`, client.Id),
