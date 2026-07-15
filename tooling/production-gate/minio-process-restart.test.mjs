@@ -134,14 +134,14 @@ describe("confined MinIO server-process restart", () => {
               stderr: "",
               stdout: `running|401|${identity}|/${name}|${name}\n`,
             };
-          if (args[0] === "exec")
+          if (args[0] === "exec" && args[2] === "/bin/cat")
             return {
               code: 0,
               stderr: "",
               stdout: `${supervisorStates.shift()}\n`,
             };
-          if (args[0] === "kill")
-            return { code: 0, stderr: "", stdout: `${identity}\n` };
+          if (args[0] === "exec" && args[2] === "/bin/kill")
+            return { code: 0, stderr: "", stdout: "" };
           throw new Error("unexpected_test_command");
         }),
       },
@@ -166,10 +166,51 @@ describe("confined MinIO server-process restart", () => {
       supervisorBoundaryStable: true,
       supervisorPid: 7,
     });
-    expect(calls).toContainEqual(["kill", "--signal=USR1", identity]);
+    expect(calls).toContainEqual(["exec", identity, "/bin/kill", "-USR1", "7"]);
+    expect(calls.some((args) => args[0] === "kill")).toBe(false);
     expect(calls.flat()).not.toContain("restart");
     expect(calls.flat()).not.toContain("start");
     expect(supervisorStates).toHaveLength(0);
+  });
+
+  it("never accepts a container stop in the Docker command sequence", async () => {
+    let stopped = false;
+    const calls = [];
+    const runtime = new GateDockerRuntime({
+      executable: "/usr/bin/docker",
+      ioDevice: "/dev/vda",
+      runId,
+      runner: {
+        run: vi.fn(async (_executable, args) => {
+          calls.push(args);
+          if (args[0] === "container")
+            return {
+              code: 0,
+              stderr: "",
+              stdout: stopped
+                ? `exited|0|${identity}|/${name}|${name}\n`
+                : `running|401|${identity}|/${name}|${name}\n`,
+            };
+          if (args[0] === "exec" && args[2] === "/bin/cat")
+            return { code: 0, stderr: "", stdout: `${state(1, 11)}\n` };
+          if (args[0] === "exec" && args[2] === "/bin/kill") {
+            stopped = true;
+            return { code: 0, stderr: "", stdout: "" };
+          }
+          throw new Error("unexpected_test_command");
+        }),
+      },
+      sandboxRoot: `/tmp/${runId}`,
+    });
+
+    await expect(
+      runtime.restartMinioServerProcess(name, identity),
+    ).rejects.toThrow("minio_restart_container_boundary_unproven");
+    expect(calls).toContainEqual(["exec", identity, "/bin/kill", "-USR1", "7"]);
+    expect(calls.some((args) => args[0] === "kill")).toBe(false);
+    expect(
+      calls.filter((args) => args[0] === "exec" && args[2] === "/bin/cat"),
+    ).toHaveLength(1);
   });
 
   it.each([
@@ -259,7 +300,7 @@ describe("confined MinIO server-process restart", () => {
     ).resolves.toMatchObject({ stderr: "", stdout: "" });
   });
 
-  it("materializes exact credentials only into each synthetic MinIO generation", async () => {
+  it("keeps the synthetic POSIX supervisor alive across an interrupted wait and racing USR1", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wf-minio-supervisor-"));
     const sourcePath = fileURLToPath(
       new URL("./fixtures/minio-supervisor.sh", import.meta.url),
@@ -272,6 +313,7 @@ describe("confined MinIO server-process restart", () => {
     const argvCapture = join(directory, "argv");
     const passwordDigestCapture = join(directory, "password-digest");
     const startupCapture = join(directory, "startups");
+    const terminationCapture = join(directory, "terminations");
     const userDigestCapture = join(directory, "user-digest");
     const syntheticRootUser = "wfroot0123456789abcdef";
     const syntheticRootPassword = "synthetic_Root-Password_0123456789";
@@ -292,7 +334,7 @@ describe("confined MinIO server-process restart", () => {
           '/usr/bin/printf "%s" "$MINIO_ROOT_USER" | /usr/bin/sha256sum >> "$WF_GATE_USER_DIGEST_CAPTURE"',
           '/usr/bin/printf "%s" "$MINIO_ROOT_PASSWORD" | /usr/bin/sha256sum >> "$WF_GATE_PASSWORD_DIGEST_CAPTURE"',
           '/usr/bin/printf "started\\n" >> "$WF_GATE_STARTUP_CAPTURE"',
-          "trap 'exit 0' TERM INT",
+          'trap \'/usr/bin/printf "terminating\\n" >> "$WF_GATE_TERMINATION_CAPTURE"; /bin/sleep 0.2; exit 0\' TERM INT',
           "while :; do /bin/sleep 1; done",
           "",
         ].join("\n"),
@@ -321,6 +363,7 @@ describe("confined MinIO server-process restart", () => {
           WF_GATE_ARGV_CAPTURE: argvCapture,
           WF_GATE_PASSWORD_DIGEST_CAPTURE: passwordDigestCapture,
           WF_GATE_STARTUP_CAPTURE: startupCapture,
+          WF_GATE_TERMINATION_CAPTURE: terminationCapture,
           WF_GATE_USER_DIGEST_CAPTURE: userDigestCapture,
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -331,6 +374,8 @@ describe("confined MinIO server-process restart", () => {
       await waitForLines(startupCapture, 1);
       expect(before.supervisorPid).toBe(child.pid);
       expect(child.kill("SIGUSR1")).toBe(true);
+      await waitForLines(terminationCapture, 1);
+      expect(child.kill("SIGUSR1")).toBe(true);
       const after = await waitForState(statePath, 2);
       await waitForLines(startupCapture, 2);
       expect(after).toMatchObject({
@@ -339,6 +384,8 @@ describe("confined MinIO server-process restart", () => {
       });
       expect(after.serverPid).not.toBe(before.serverPid);
       expect(child.exitCode).toBeNull();
+      await delay(300);
+      expect(await waitForState(statePath, 2)).toEqual(after);
 
       const digest = (value) =>
         createHash("sha256").update(value, "utf8").digest("hex");

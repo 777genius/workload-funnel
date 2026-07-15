@@ -80,12 +80,10 @@ stop_server() {
 
 request_restart() {
   restart_requested=true
-  stop_server TERM
 }
 
 request_stop() {
   stop_requested=true
-  stop_server TERM
 }
 
 trap request_restart USR1
@@ -99,6 +97,10 @@ while [ "$stop_requested" = false ]; do
   write_state
 
   while true; do
+    if { [ "$restart_requested" = true ] || [ "$stop_requested" = true ]; } &&
+      [ "$kill_timer_pid" -eq 0 ]; then
+      stop_server TERM
+    fi
     if wait "$server_pid"; then
       server_status=0
       break

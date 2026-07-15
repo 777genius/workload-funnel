@@ -126,10 +126,16 @@ export async function restartMinioServerProcessWithDocker({
     throw new Error("minio_restart_identity_invalid");
   const before = await observeMinioServerProcess(runtime, name, identity);
   const signaled = await runtime.command(
-    ["kill", "--signal=USR1", identity],
+    [
+      "exec",
+      identity,
+      "/bin/kill",
+      "-USR1",
+      String(before.state.supervisorPid),
+    ],
     5_000,
   );
-  if (signaled !== identity) throw new Error("minio_restart_signal_unproven");
+  if (signaled !== "") throw new Error("minio_restart_signal_unproven");
   for (let attempt = 1; attempt <= 100; attempt += 1) {
     const after = await observeMinioServerProcess(runtime, name, identity);
     if (after.state.generation === before.state.generation) {

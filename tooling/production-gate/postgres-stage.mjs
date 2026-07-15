@@ -10,6 +10,23 @@ async function psql(runner, config, sql, timeoutMs = 5_000) {
   });
 }
 
+export function postgresCrashClientEvidence(result) {
+  if (
+    result === null ||
+    typeof result !== "object" ||
+    !Number.isSafeInteger(result.code) ||
+    result.code < 1 ||
+    result.errorCode !== undefined ||
+    (result.signal !== undefined && result.signal !== null)
+  )
+    throw new Error("postgres_crash_client_did_not_observe_server_failure");
+  return Object.freeze({
+    clientConnectionTerminated: true,
+    clientExitCode: result.code,
+    clientSignal: null,
+  });
+}
+
 export async function runPostgresCompatibilityStage({
   config,
   docker,
@@ -97,22 +114,13 @@ export async function runPostgresCompatibilityStage({
         postgresIdentity,
         async () => {
           clientResult = await client.completion;
-          if (
-            !Number.isSafeInteger(clientResult.code) ||
-            clientResult.code === 0 ||
-            clientResult.signal !== null
-          )
-            throw new Error(
-              "postgres_crash_client_did_not_observe_server_failure",
-            );
+          postgresCrashClientEvidence(clientResult);
         },
       );
       await waitFor(ready, "postgres_fixture_restart_timeout");
       return Object.freeze({
         ...crash,
-        clientConnectionTerminated: true,
-        clientExitCode: clientResult.code,
-        clientSignal: clientResult.signal,
+        ...postgresCrashClientEvidence(clientResult),
       });
     },
     runner,

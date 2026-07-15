@@ -216,20 +216,53 @@ async function executePsql(config, sql, timeoutMs = 20_000) {
   return result.stdout;
 }
 
-async function waitForCrashWindow(config, applicationName) {
+function crashWindowObservationSql(applicationName) {
+  return `SELECT state || '|' || coalesce(wait_event_type, '') || '|' || coalesce(wait_event, '') || '|' || CASE WHEN backend_xid IS NULL THEN 'after_commit' ELSE 'before_commit' END FROM pg_stat_activity WHERE application_name = ${literal(applicationName)};`;
+}
+
+function parseCrashWindowObservation(output, expectedWindow) {
+  const observation = parsePsqlSingleRow(
+    output,
+    "postgres_crash_window_observation_malformed",
+  );
+  if (observation === "") return false;
+  const match = observation.match(
+    /^(active|idle|idle in transaction)\|([^|]*)\|([^|]*)\|(before_commit|after_commit)$/u,
+  );
+  if (match === null)
+    throw new Error("postgres_crash_window_observation_malformed");
+  const [, state, waitEventType, waitEvent, observedWindow] = match;
+  if (
+    state !== "active" ||
+    waitEventType !== "Timeout" ||
+    waitEvent !== "PgSleep"
+  )
+    return false;
+  if (observedWindow !== expectedWindow)
+    throw new Error("postgres_crash_window_mismatch");
+  return true;
+}
+
+async function waitForCrashWindow(
+  config,
+  applicationName,
+  expectedWindow,
+  client,
+) {
   const deadline = Date.now() + 8_000;
-  const sql = `SELECT count(*) FROM pg_stat_activity WHERE application_name = ${literal(applicationName)} AND state = 'active' AND query LIKE '%pg_sleep%';`;
+  const exited = client.completion.then(() => {
+    throw new Error("postgres_crash_client_exited_before_window");
+  });
+  const sql = crashWindowObservationSql(applicationName);
   for (;;) {
-    if (
-      parsePsqlSingleRow(
-        await executePsql(config, sql, 2_000),
-        "postgres_crash_window_observation_malformed",
-      ) === "1"
-    )
-      return;
+    const output = await Promise.race([
+      executePsql(config, sql, 2_000),
+      exited,
+    ]);
+    if (parseCrashWindowObservation(output, expectedWindow)) return;
     if (Date.now() >= deadline)
       throw new Error("postgres_crash_window_not_synchronized");
-    await config.wait(25);
+    await Promise.race([config.wait(25), exited]);
   }
 }
 
@@ -248,7 +281,7 @@ async function startCrashClient(config, input, window, applicationName) {
       timeoutMs: 12_000,
     },
   );
-  await waitForCrashWindow(config, applicationName);
+  await waitForCrashWindow(config, applicationName, window, child);
   return child;
 }
 

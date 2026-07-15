@@ -208,6 +208,10 @@ for (const token of [
   'output.endsWith("\\n")',
   "return result.stdout;",
   "crashServer",
+  "wait_event_type",
+  "backend_xid IS NULL",
+  "postgres_crash_window_mismatch",
+  "postgres_crash_client_exited_before_window",
 ])
   if (!postgres.includes(token))
     failures.push(`Postgres crash proof is missing ${token}`);
@@ -217,6 +221,10 @@ if (
   postgres.includes("LIMIT 1;")
 )
   failures.push("Postgres replay identity is not canonically deduplicated");
+if (postgres.includes("query LIKE '%pg_sleep%'"))
+  failures.push(
+    "Postgres crash synchronization relies on truncated query text",
+  );
 const postgresRegression = await source(
   "tooling/production-gate/postgres-probe.test.mjs",
 );
@@ -226,9 +234,23 @@ for (const token of [
   "ERROR:  40001:",
   "does not retry a non-serialization psql failure",
   "foreign-workload\\n",
+  "actual orchestration path",
+  "long-query crash windows",
+  "crash client that exits before its window",
 ])
   if (!postgresRegression.includes(token))
     failures.push(`Postgres real-output regression is missing ${token}`);
+
+const postgresStage = await source(
+  "tooling/production-gate/postgres-stage.mjs",
+);
+for (const token of [
+  "postgresCrashClientEvidence",
+  "clientConnectionTerminated: true",
+  "clientSignal: null",
+])
+  if (!postgresStage.includes(token))
+    failures.push(`Postgres crash orchestration is missing ${token}`);
 
 for (const token of [
   "crashAndRestart",
@@ -272,6 +294,7 @@ for (const token of [
   "IFS= read -r root_user",
   "IFS= read -r root_password",
   'MINIO_ROOT_USER="$root_user" MINIO_ROOT_PASSWORD="$root_password"',
+  '[ "$restart_requested" = true ] || [ "$stop_requested" = true ]',
 ])
   if (!minioSupervisor.includes(token))
     failures.push(`MinIO process supervisor is missing ${token}`);
@@ -280,6 +303,11 @@ if (
   minioSupervisor.includes("set -x")
 )
   failures.push("MinIO process supervisor can disclose root credentials");
+if (
+  minioSupervisor.includes("restart_requested=true\n  stop_server") ||
+  minioSupervisor.includes("stop_requested=true\n  stop_server")
+)
+  failures.push("MinIO signal handler performs a racy child transition");
 
 const minioSupervisorRegression = await source(
   "tooling/production-gate/minio-process-restart.test.mjs",
@@ -292,6 +320,8 @@ for (const token of [
   "JSON.stringify(createMetadata)",
   "multi-line root-password file",
   "generation: 2",
+  "interrupted wait and racing USR1",
+  "never accepts a container stop",
 ])
   if (!minioSupervisorRegression.includes(token))
     failures.push(`MinIO credential regression is missing ${token}`);
@@ -306,9 +336,14 @@ for (const token of [
   "serverProcessPidChanged",
   "readinessAfterRestart",
   "containerConfinementStable",
+  '"exec"',
+  '"/bin/kill"',
+  '"-USR1"',
 ])
   if (!minioRestart.includes(token))
     failures.push(`MinIO process restart proof is missing ${token}`);
+if (minioRestart.includes('"kill", "--signal=USR1"'))
+  failures.push("MinIO restart signals the container boundary");
 if (
   !gate.includes("restartConfinedMinio") ||
   gate.includes("docker.restart(objectName)")

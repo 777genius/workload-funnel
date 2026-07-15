@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   atomicAcceptanceSql,
@@ -6,7 +6,9 @@ import {
   postgresCommandError,
   psqlArguments,
   proveConcurrentPostgresReplay,
+  runPostgresFixtureProbe,
 } from "./postgres-probe.mjs";
+import { postgresCrashClientEvidence } from "./postgres-stage.mjs";
 
 const input = {
   callerScope: "caller",
@@ -117,5 +119,144 @@ describe("Postgres concurrent acceptance replay", () => {
         ? "postgres_concurrent_duplicate_identity_unstable"
         : "postgres_gate_identity_malformed",
     );
+  });
+});
+
+function snapshot(workloadIds, terminalHistory) {
+  return `${JSON.stringify({
+    acceptedHistory: workloadIds.length,
+    outbox: workloadIds.length,
+    receipts: workloadIds.length,
+    terminalHistory,
+    workloadIds,
+    workloads: workloadIds.length,
+  })}\n`;
+}
+
+function actualCrashPathHarness({ beforeObservation, earlyExit = false } = {}) {
+  const snapshots = [
+    snapshot(["gate-workload"], 0),
+    snapshot(["gate-workload"], 1),
+    snapshot(["gate-after-commit-workload", "gate-workload"], 1),
+    snapshot(["gate-after-commit-workload", "gate-workload"], 1),
+    snapshot(["gate-after-commit-workload", "gate-workload"], 1),
+  ];
+  const observationQueries = [];
+  const starts = [];
+  const runner = {
+    run: vi.fn(async (_executable, args) => {
+      const sql = args.at(-1);
+      if (sql === "SHOW server_version;")
+        return { code: 0, stderr: "", stdout: "18.4\n" };
+      if (sql.includes("pg_stat_activity")) {
+        observationQueries.push(sql);
+        const before = sql.includes("wf-gate-before-commit");
+        return {
+          code: 0,
+          stderr: "",
+          stdout: before
+            ? (beforeObservation ?? "active|Timeout|PgSleep|before_commit\n")
+            : "active|Timeout|PgSleep|after_commit\n",
+        };
+      }
+      if (sql.includes("json_build_object"))
+        return { code: 0, stderr: "", stdout: snapshots.shift() };
+      if (sql.includes("WITH won AS"))
+        return { code: 0, stderr: "", stdout: "gate-workload\n" };
+      return { code: 0, stderr: "", stdout: "" };
+    }),
+    start: vi.fn(async (_executable, args, options) => {
+      starts.push({ args, options });
+      return {
+        completion: earlyExit
+          ? Promise.resolve({ code: 2, stderr: "", stdout: "" })
+          : Promise.race([]),
+        kill: vi.fn(),
+        pid: 101 + starts.length,
+      };
+    }),
+  };
+  const config = {
+    crashServer: vi.fn(async () => ({ signal: "SIGKILL" })),
+    database: "wf_gate",
+    host: "127.0.0.1",
+    password: "synthetic-password",
+    port: 5432,
+    psqlExecutable: "/usr/lib/postgresql/18/bin/psql",
+    runner,
+    schema: "wf_gate_schema",
+    user: "wf_gate",
+    wait: vi.fn(() => Promise.resolve()),
+  };
+  return { config, observationQueries, snapshots, starts };
+}
+
+describe("Postgres crash-window actual orchestration path", () => {
+  it("records an ordinary nonzero psql disconnect as an unsignaled crash observation", () => {
+    expect(
+      postgresCrashClientEvidence({ code: 2, stderr: "", stdout: "" }),
+    ).toEqual({
+      clientConnectionTerminated: true,
+      clientExitCode: 2,
+      clientSignal: null,
+    });
+  });
+
+  it.each([
+    ["success", { code: 0, stderr: "", stdout: "" }],
+    ["timeout", { code: null, errorCode: "command_timeout" }],
+    ["signal", { code: 2, signal: "SIGKILL" }],
+  ])("rejects a %s as crash-client disconnect evidence", (_case, result) => {
+    expect(() => postgresCrashClientEvidence(result)).toThrow(
+      "postgres_crash_client_did_not_observe_server_failure",
+    );
+  });
+
+  it("observes both long-query crash windows without relying on truncated query text", async () => {
+    const harness = actualCrashPathHarness();
+    await expect(
+      runPostgresFixtureProbe(harness.config),
+    ).resolves.toMatchObject({
+      crashWindows: {
+        postCommitSynchronizedBeforeKill: true,
+        preCommitSynchronizedBeforeKill: true,
+      },
+    });
+    expect(harness.starts).toHaveLength(2);
+    expect(harness.snapshots).toHaveLength(0);
+    expect(
+      harness.starts[0].args.at(-1).indexOf("SELECT pg_sleep(30)"),
+    ).toBeGreaterThan(1_024);
+    expect(
+      harness.starts.map(({ options }) => options.environment.PGAPPNAME),
+    ).toEqual(["wf-gate-before-commit", "wf-gate-after-commit"]);
+    expect(harness.observationQueries).toHaveLength(2);
+    for (const sql of harness.observationQueries) {
+      expect(sql).toContain("wait_event_type");
+      expect(sql).toContain("backend_xid IS NULL");
+      expect(sql).not.toContain("query LIKE");
+      expect(sql).not.toContain("pg_sleep%");
+    }
+  });
+
+  it("fails closed when the observed transaction boundary is wrong", async () => {
+    const harness = actualCrashPathHarness({
+      beforeObservation: "active|Timeout|PgSleep|after_commit\n",
+    });
+    await expect(runPostgresFixtureProbe(harness.config)).rejects.toThrow(
+      "postgres_crash_window_mismatch",
+    );
+    expect(harness.config.crashServer).not.toHaveBeenCalled();
+  });
+
+  it("detects a crash client that exits before its window is observable", async () => {
+    const harness = actualCrashPathHarness({
+      beforeObservation: "\n",
+      earlyExit: true,
+    });
+    await expect(runPostgresFixtureProbe(harness.config)).rejects.toThrow(
+      "postgres_crash_client_exited_before_window",
+    );
+    expect(harness.config.crashServer).not.toHaveBeenCalled();
   });
 });
