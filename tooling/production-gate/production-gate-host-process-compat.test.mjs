@@ -95,6 +95,7 @@ function processManagerHarness(
   stopResult = { code: 0, stderr: "", stdout: "" },
 ) {
   const events = [];
+  const observedUnitProperties = [];
   const reviewed = [];
   let complete;
   let stopped = false;
@@ -136,10 +137,12 @@ function processManagerHarness(
           stderr: "",
           stdout: "ActiveState=inactive\nControlGroup=\nLoadState=loaded\n",
         });
+      const stdout = loadedUnitShow(systemdArguments, propertyOverrides);
+      observedUnitProperties.push(stdout);
       return Promise.resolve({
         code: 0,
         stderr: "",
-        stdout: loadedUnitShow(systemdArguments, propertyOverrides),
+        stdout,
       });
     }),
     start: vi.fn((_executable, args) => {
@@ -195,10 +198,91 @@ function processManagerHarness(
       return Promise.resolve();
     }),
   });
-  return { events, manager, process, reviewed, runner };
+  return {
+    events,
+    manager,
+    observedUnitProperties,
+    process,
+    reviewed,
+    runner,
+  };
 }
 
 describe("systemd 255 bounded synchronous execution compatibility", () => {
+  it("forwards the exact pressure runtime through launch and observation", async () => {
+    const harness = processManagerHarness(
+      { code: 0, stderr: "", stdout: "" },
+      { foreign: { RuntimeMaxUSec: "75s" } },
+    );
+
+    const process = await harness.manager.start(
+      "/usr/bin/node",
+      ["-e", "setInterval(() => {}, 1000)"],
+      "pressure-cpu",
+      { runtimeMaxSec: 75 },
+    );
+
+    expect(harness.runner.run).toHaveBeenCalledWith(
+      "/usr/bin/systemd-run",
+      expect.arrayContaining(["--property=RuntimeMaxSec=75s"]),
+      { timeoutMs: 10_000 },
+    );
+    expect(
+      harness.runner.run.mock.calls.some(
+        ([executable, arguments_]) =>
+          executable === "/usr/bin/systemctl" &&
+          arguments_[0] === "show" &&
+          arguments_.some(
+            (argument) =>
+              argument.startsWith("--property=") &&
+              argument.includes("RuntimeMaxUSec"),
+          ),
+      ),
+    ).toBe(true);
+    expect(harness.observedUnitProperties).toHaveLength(1);
+    expect(harness.observedUnitProperties[0]).toContain("RuntimeMaxUSec=75s\n");
+    expect(process.runtimeMaxSec).toBe(75);
+  });
+
+  it("keeps non-pressure starts on the exact default runtime", async () => {
+    const defaultHarness = processManagerHarness({
+      code: 0,
+      stderr: "",
+      stdout: "",
+    });
+    const process = await defaultHarness.manager.start(
+      "/usr/bin/node",
+      ["-e", "setInterval(() => {}, 1000)"],
+      "hq-worker",
+    );
+
+    expect(defaultHarness.runner.run).toHaveBeenCalledWith(
+      "/usr/bin/systemd-run",
+      expect.arrayContaining(["--property=RuntimeMaxSec=30s"]),
+      { timeoutMs: 10_000 },
+    );
+    expect(defaultHarness.observedUnitProperties).toHaveLength(1);
+    expect(defaultHarness.observedUnitProperties[0]).toContain(
+      "RuntimeMaxUSec=30s\n",
+    );
+    expect(process.runtimeMaxSec).toBe(30);
+
+    const extendedHarness = processManagerHarness({
+      code: 0,
+      stderr: "",
+      stdout: "",
+    });
+    await expect(
+      extendedHarness.manager.start(
+        "/usr/bin/node",
+        ["-e", "setInterval(() => {}, 1000)"],
+        "hq-worker",
+        { runtimeMaxSec: 75 },
+      ),
+    ).rejects.toThrow("bounded_host_process_invocation_invalid");
+    expect(extendedHarness.runner.run).not.toHaveBeenCalled();
+  });
+
   it("measures repeated cancellation convergence around one confined process stop", async () => {
     const harness = processManagerHarness({
       code: 0,

@@ -565,6 +565,7 @@ export function createBoundedHostProcessManager(config) {
         executableArguments,
         joinNetworkOf: options.joinNetworkOf,
         role,
+        runtimeMaxSec: options.runtimeMaxSec,
       });
       const recordId = await config.ledger.prepare("systemd-unit", plan.unit, {
         description: plan.description,
