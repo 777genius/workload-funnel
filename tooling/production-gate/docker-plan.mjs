@@ -137,7 +137,6 @@ function boundedContainerArguments({
     "--read-only",
     "--init",
     "--ipc=private",
-    "--uts=private",
     "--user",
     user,
     "--restart",
@@ -150,7 +149,7 @@ function boundedContainerArguments({
       ? ["--tmpfs", dataStorage.options]
       : [
           "--mount",
-          `type=bind,src=${dataStorage.source},dst=${dataStorage.destination},rw,bind-propagation=rprivate`,
+          `type=bind,src=${dataStorage.source},dst=${dataStorage.destination},bind-propagation=rprivate`,
         ]),
     ...Object.entries(environment).flatMap(([key, value]) => [
       "--env",

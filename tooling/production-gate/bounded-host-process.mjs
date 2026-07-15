@@ -1,6 +1,9 @@
 function unitAbsent(result) {
+  const loadStates = result.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("LoadState="));
   return (
-    result.stdout.trim() === "LoadState=not-found" ||
+    (loadStates.length === 1 && loadStates[0] === "LoadState=not-found") ||
     (result.code !== 0 &&
       /(?:could not be found|not found|not loaded)/iu.test(result.stderr))
   );
@@ -155,6 +158,7 @@ export async function cleanupBoundedSystemdUnit(config, record) {
     throw new Error("bounded_host_process_cleanup_uncertain");
   const values = parseShow(before.stdout);
   if (
+    values.LoadState !== "loaded" ||
     values.Description !== record.expected.description ||
     (record.observed.invocationId !== undefined &&
       values.InvocationID !== record.observed.invocationId)

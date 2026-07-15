@@ -10,11 +10,21 @@ import {
 } from "node:fs/promises";
 
 function unitAbsent(result) {
+  const loadStates = result.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("LoadState="));
   return (
-    result.stdout.trim() === "LoadState=not-found" ||
+    (loadStates.length === 1 && loadStates[0] === "LoadState=not-found") ||
     (result.code !== 0 &&
       /(?:could not be found|not found|not loaded)/iu.test(result.stderr))
   );
+}
+
+function unitLoaded(result) {
+  const loadStates = result.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("LoadState="));
+  return loadStates.length === 1 && loadStates[0] === "LoadState=loaded";
 }
 
 function unitInactiveOrAbsent(result) {
@@ -207,6 +217,7 @@ export function createSystemdProbeIo(config) {
         if (unitAbsent(before)) return;
         if (
           before.code !== 0 ||
+          !unitLoaded(before) ||
           !before.stdout.includes(
             `Description=${record.expected.description}\n`,
           ) ||

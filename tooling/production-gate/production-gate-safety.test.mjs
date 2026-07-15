@@ -278,15 +278,16 @@ describe("production gate host safety", () => {
           "--read-only",
           "--init",
           "--ipc=private",
-          "--uts=private",
           "--security-opt",
           "no-new-privileges=true",
         ]),
       );
     }
     expect(postgres.join("\n")).toContain(
-      `type=bind,src=${postgresData},dst=/var/lib/postgresql/data,rw,bind-propagation=rprivate`,
+      `type=bind,src=${postgresData},dst=/var/lib/postgresql/data,bind-propagation=rprivate`,
     );
+    expect(postgres).not.toContain("--uts=private");
+    expect(postgres.join("\n")).not.toContain(",rw,");
     expect(postgres.join("\n")).toContain("POSTGRES_PASSWORD_FILE=");
     expect(object.join("\n")).toContain("MINIO_ROOT_PASSWORD_FILE=");
     expect(() =>
@@ -315,7 +316,7 @@ describe("production gate host safety", () => {
         RestartPolicy: { Name: "no" },
         SecurityOpt: ["no-new-privileges=true"],
         Tmpfs: { "/tmp": "rw,size=67108864" },
-        UTSMode: "private",
+        UTSMode: "",
       },
       Id: "a".repeat(64),
       Image: `sha256:${"b".repeat(64)}`,
@@ -386,7 +387,7 @@ describe("production gate host safety", () => {
         RestartPolicy: { Name: "no" },
         SecurityOpt: ["no-new-privileges=true"],
         Tmpfs: { "/tmp": "rw,size=16777216" },
-        UTSMode: "private",
+        UTSMode: "",
       },
       Id: "c".repeat(64),
     };

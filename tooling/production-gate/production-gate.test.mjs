@@ -66,6 +66,26 @@ import { createSystemdSliceOwnership } from "./systemd-slice-ledger.mjs";
 
 const runId = "wf-production-gate-0123456789abcdef0123456789abcdef";
 const digest = "a".repeat(64);
+const implicitSliceDescription =
+  "Slice /wf/production/gate/0123456789abcdef0123456789abcdef";
+
+function sliceShow(overrides = {}) {
+  return `${Object.entries({
+    ActiveState: "inactive",
+    ControlGroup: "",
+    Description: implicitSliceDescription,
+    DropInPaths: "",
+    FragmentPath: "",
+    Id: `${runId}.slice`,
+    LoadState: "loaded",
+    Names: `${runId}.slice`,
+    SourcePath: "",
+    Transient: "no",
+    ...overrides,
+  })
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n")}\n`;
+}
 
 function argumentsFor(root) {
   return [
@@ -171,22 +191,38 @@ describe("manual production gate admission", () => {
 
   it("admits only the fixed production sandbox parent and replacement operation", () => {
     const root = `${GATE_SANDBOX_PARENT}/${runId}`;
+    const environment = {
+      WF_PRODUCTION_GATE_DISPOSABLE_HOST_ATTESTATION:
+        DISPOSABLE_HOST_ATTESTATION,
+      WF_PRODUCTION_GATE_REVIEW_MANIFEST_SHA256: digest,
+    };
     expect(admitted(root)).toMatchObject({
       operation: "run",
       sandboxRoot: root,
     });
+    expect(
+      parseManualGateArguments(["--", ...argumentsFor(root)], environment),
+    ).toMatchObject({ operation: "run", sandboxRoot: root });
+    expect(() =>
+      parseManualGateArguments(
+        ["--", "--", ...argumentsFor(root)],
+        environment,
+      ),
+    ).toThrow("invalid_manual_gate_arguments");
+    expect(() =>
+      parseManualGateArguments(
+        argumentsFor(root).toSpliced(2, 0, "--"),
+        environment,
+      ),
+    ).toThrow("invalid_manual_gate_arguments");
     expect(() => admitted(`/tmp/${runId}`)).toThrow(
       "unsafe_production_gate_sandbox_root",
     );
     const recovery = argumentsFor(root);
     recovery[recovery.indexOf("--operation") + 1] = "recover-cleanup";
-    expect(
-      parseManualGateArguments(recovery, {
-        WF_PRODUCTION_GATE_DISPOSABLE_HOST_ATTESTATION:
-          DISPOSABLE_HOST_ATTESTATION,
-        WF_PRODUCTION_GATE_REVIEW_MANIFEST_SHA256: digest,
-      }).operation,
-    ).toBe("recover-cleanup");
+    expect(parseManualGateArguments(recovery, environment).operation).toBe(
+      "recover-cleanup",
+    );
   });
 });
 
@@ -635,7 +671,7 @@ describe("systemd and SLO contracts", () => {
             Promise.resolve({
               code: 0,
               stderr: "",
-              stdout: "LoadState=loaded\n",
+              stdout: sliceShow({ Description: "foreign slice" }),
             }),
           ),
         },
@@ -666,7 +702,10 @@ describe("systemd and SLO contracts", () => {
               return Promise.resolve({
                 code: 0,
                 stderr: "",
-                stdout: `ControlGroup=/gate.slice/${runId}.slice\nLoadState=loaded\n`,
+                stdout: sliceShow({
+                  ActiveState: "active",
+                  ControlGroup: `/gate.slice/${runId}.slice`,
+                }),
               });
             return Promise.resolve({ code: 0, stderr: "", stdout: "" });
           }),

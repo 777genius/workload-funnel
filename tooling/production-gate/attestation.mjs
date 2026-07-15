@@ -35,13 +35,16 @@ export class GateAdmissionError extends Error {
 }
 
 function exactOptions(argv) {
+  const normalized = argv[0] === "--" ? argv.slice(1) : argv;
+  if (normalized[0] === "--")
+    throw new GateAdmissionError("invalid_manual_gate_arguments");
   const values = new Map();
-  for (let index = 0; index < argv.length; index += 2) {
-    const name = argv[index];
-    const value = argv[index + 1];
+  for (let index = 0; index < normalized.length; index += 2) {
+    const name = normalized[index];
+    const value = normalized[index + 1];
     if (
       typeof name !== "string" ||
-      !name.startsWith("--") ||
+      !/^--[a-z][a-z0-9-]*$/u.test(name) ||
       typeof value !== "string" ||
       values.has(name)
     )

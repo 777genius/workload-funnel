@@ -248,7 +248,7 @@ export class GateDockerRuntime {
       host?.ReadonlyRootfs !== true ||
       host?.Init !== true ||
       host?.IpcMode !== "private" ||
-      host?.UTSMode !== "private" ||
+      host?.UTSMode !== "" ||
       host?.NetworkMode !== this.network ||
       host?.Memory !== 2_147_483_648 ||
       host?.MemorySwap !== 2_147_483_648 ||
@@ -278,6 +278,7 @@ export class GateDockerRuntime {
       internalNetwork: this.network,
       metadataSecretValuesAbsent: true,
       nonRootUser: expectedUser,
+      privateUtsNamespace: true,
       readOnlyRoot: true,
       writableStorage: Object.freeze({ ...expectedWritableStorage }),
       resourceLimits: Object.freeze({
@@ -437,7 +438,6 @@ export class GateDockerRuntime {
       "--read-only",
       "--init",
       "--ipc=private",
-      "--uts=private",
       "--user",
       "1000:1000",
       "--restart",
@@ -515,7 +515,7 @@ export class GateDockerRuntime {
       host?.ReadonlyRootfs !== true ||
       host?.Init !== true ||
       host?.IpcMode !== "private" ||
-      host?.UTSMode !== "private" ||
+      host?.UTSMode !== "" ||
       host?.NetworkMode !== this.network ||
       host?.Memory !== 268_435_456 ||
       host?.MemorySwap !== 268_435_456 ||
