@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   MINIO_DATA_TMPFS_OPTIONS,
-  MINIO_IMAGE_ENTRYPOINT,
   MINIO_SUPERVISOR_COMMAND,
   MINIO_SUPERVISOR_DESTINATION,
+  MINIO_SUPERVISOR_ENTRYPOINT,
   objectContainerArguments,
 } from "./docker-plan.mjs";
 import { GateDockerRuntime } from "./docker-runtime.mjs";
@@ -37,7 +37,7 @@ function containerInspect() {
   return {
     Config: {
       Cmd: [...MINIO_SUPERVISOR_COMMAND],
-      Entrypoint: [...MINIO_IMAGE_ENTRYPOINT],
+      Entrypoint: [...MINIO_SUPERVISOR_ENTRYPOINT],
       Env: [
         "MINIO_ROOT_USER_FILE=/run/secrets/minio-root-user",
         "MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-root-password",
@@ -169,7 +169,16 @@ describe("Docker 29 supervised MinIO confinement", () => {
       supervisorFile,
     });
     const imageIndex = args.indexOf(image);
+    expect(args.slice(imageIndex - 2, imageIndex)).toEqual([
+      "--entrypoint",
+      MINIO_SUPERVISOR_ENTRYPOINT[0],
+    ]);
     expect(args.slice(imageIndex + 1)).toEqual(MINIO_SUPERVISOR_COMMAND);
+    expect(args[imageIndex + 1]).toBe(MINIO_SUPERVISOR_DESTINATION);
+    expect(args.filter((argument) => argument === "--entrypoint")).toHaveLength(
+      1,
+    );
+    expect(args).not.toContain("/usr/bin/docker-entrypoint.sh");
     expect(args).toContain(`/data:${MINIO_DATA_TMPFS_OPTIONS}`);
     expect(args).toContain(
       `type=bind,src=${supervisorFile},dst=${MINIO_SUPERVISOR_DESTINATION},readonly`,
@@ -185,6 +194,7 @@ describe("Docker 29 supervised MinIO confinement", () => {
       metadataSecretValuesAbsent: true,
       processSupervisor: {
         command: MINIO_SUPERVISOR_COMMAND,
+        entrypoint: MINIO_SUPERVISOR_ENTRYPOINT,
         readOnlyMount: processSupervisor.readOnlyMounts[0],
       },
       publishedPorts: 0,
@@ -201,6 +211,10 @@ describe("Docker 29 supervised MinIO confinement", () => {
       (value) => (value.Mounts.at(-1).Source = "/tmp/foreign-supervisor"),
     ],
     ["supervisor command bypass", (value) => (value.Config.Cmd = ["server"])],
+    [
+      "image entrypoint wrapper",
+      (value) => (value.Config.Entrypoint = ["/usr/bin/docker-entrypoint.sh"]),
+    ],
     [
       "supervisor entrypoint bypass",
       (value) => (value.Config.Entrypoint = ["/usr/bin/minio"]),

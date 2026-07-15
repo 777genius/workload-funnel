@@ -294,6 +294,7 @@ describe("production gate host safety", () => {
     expect(object.join("\n")).toContain("MINIO_ROOT_PASSWORD_FILE=");
     expect(object).toEqual(
       expect.arrayContaining([
+        "--entrypoint",
         "/bin/sh",
         "/gate/minio-supervisor.sh",
         "server",

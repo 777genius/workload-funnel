@@ -20,11 +20,8 @@ const POSTGRES_SOCKET_TMPFS_ARGUMENT = `${POSTGRES_SOCKET_TMPFS_DESTINATION}:${P
 export const MINIO_DATA_TMPFS_OPTIONS =
   "rw,nosuid,nodev,noexec,size=268435456,uid=1000,gid=1000,mode=0700";
 export const MINIO_SUPERVISOR_DESTINATION = "/gate/minio-supervisor.sh";
-export const MINIO_IMAGE_ENTRYPOINT = Object.freeze([
-  "/usr/bin/docker-entrypoint.sh",
-]);
+export const MINIO_SUPERVISOR_ENTRYPOINT = Object.freeze(["/bin/sh"]);
 export const MINIO_SUPERVISOR_COMMAND = Object.freeze([
-  "/bin/sh",
   MINIO_SUPERVISOR_DESTINATION,
   "server",
   "/data",
@@ -67,6 +64,7 @@ export function isolatedNetworkArguments(runId) {
 
 function boundedContainerArguments({
   dataStorage,
+  entrypoint,
   environment,
   image,
   ioDevice,
@@ -100,6 +98,8 @@ function boundedContainerArguments({
       parentTmpfs !== POSTGRES_PARENT_TMPFS_ARGUMENT) ||
     (socketTmpfs !== undefined &&
       socketTmpfs !== POSTGRES_SOCKET_TMPFS_ARGUMENT) ||
+    (entrypoint !== undefined &&
+      entrypoint !== MINIO_SUPERVISOR_ENTRYPOINT[0]) ||
     !Array.isArray(secretMounts) ||
     secretMounts.some(
       ({ destination, source }) =>
@@ -202,6 +202,7 @@ function boundedContainerArguments({
     ]),
     "--label",
     `workload-funnel.production-gate.resource=${name}`,
+    ...(entrypoint === undefined ? [] : ["--entrypoint", entrypoint]),
     image,
   ]);
 }
@@ -273,6 +274,7 @@ export function objectContainerArguments(config) {
         kind: "tmpfs",
         options: `/data:${MINIO_DATA_TMPFS_OPTIONS}`,
       },
+      entrypoint: MINIO_SUPERVISOR_ENTRYPOINT[0],
       image: config.image,
       environment: {
         MINIO_ROOT_PASSWORD_FILE: "/run/secrets/minio-root-password",

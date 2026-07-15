@@ -4,8 +4,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import {
   MINIO_DATA_TMPFS_OPTIONS,
-  MINIO_IMAGE_ENTRYPOINT,
   MINIO_SUPERVISOR_COMMAND,
+  MINIO_SUPERVISOR_ENTRYPOINT,
   POSTGRES_PARENT_TMPFS_DESTINATION,
   POSTGRES_PARENT_TMPFS_OPTIONS,
   POSTGRES_SOCKET_TMPFS_DESTINATION,
@@ -368,14 +368,14 @@ export class GateDockerRuntime {
       (Array.isArray(expectedProcess.readOnlyMounts) &&
         expectedProcess.readOnlyMounts.length === 1 &&
         expectedProcess.readOnlyMounts[0].destination ===
-          MINIO_SUPERVISOR_COMMAND[1] &&
+          MINIO_SUPERVISOR_COMMAND[0] &&
         this.allowedReadOnlyMounts.has(
           expectedProcess.readOnlyMounts[0].source,
         ) &&
         Array.isArray(container?.Entrypoint) &&
-        container.Entrypoint.length === MINIO_IMAGE_ENTRYPOINT.length &&
+        container.Entrypoint.length === MINIO_SUPERVISOR_ENTRYPOINT.length &&
         container.Entrypoint.every(
-          (argument, index) => argument === MINIO_IMAGE_ENTRYPOINT[index],
+          (argument, index) => argument === MINIO_SUPERVISOR_ENTRYPOINT[index],
         ) &&
         Array.isArray(container?.Cmd) &&
         container.Cmd.length === MINIO_SUPERVISOR_COMMAND.length &&
@@ -492,6 +492,7 @@ export class GateDockerRuntime {
         : {
             processSupervisor: Object.freeze({
               command: Object.freeze([...MINIO_SUPERVISOR_COMMAND]),
+              entrypoint: Object.freeze([...MINIO_SUPERVISOR_ENTRYPOINT]),
               readOnlyMount: Object.freeze({
                 ...expectedProcess.readOnlyMounts[0],
               }),

@@ -137,8 +137,20 @@ for (const token of [
   "unix_socket_directories=",
   "temp_file_limit=16MB",
   "--internal",
+  "MINIO_SUPERVISOR_ENTRYPOINT",
+  '"--entrypoint"',
 ])
   if (!docker.includes(token)) failures.push(`Docker plan is missing ${token}`);
+if (
+  !docker.includes(
+    'export const MINIO_SUPERVISOR_ENTRYPOINT = Object.freeze(["/bin/sh"]);',
+  ) ||
+  !docker.includes(
+    "export const MINIO_SUPERVISOR_COMMAND = Object.freeze([\n  MINIO_SUPERVISOR_DESTINATION,",
+  ) ||
+  docker.includes("docker-entrypoint.sh")
+)
+  failures.push("Docker plan does not bypass the MinIO image wrapper exactly");
 if (/^ {4}"(?:--publish|-p)",/mu.test(docker))
   failures.push("Docker plan permits host port publication");
 if (!docker.includes('"--env-file"'))
@@ -166,6 +178,10 @@ for (const token of [
   "inspectContainerConfinement",
   "inspectClientConfinement",
   "docker_container_metadata_contains_secret",
+  "MINIO_SUPERVISOR_COMMAND[0]",
+  "MINIO_SUPERVISOR_ENTRYPOINT",
+  "container?.Cmd",
+  "container?.Entrypoint",
   "ReadonlyRootfs",
   "no-new-privileges",
 ])
@@ -178,10 +194,18 @@ for (const token of [
   '"after_commit"',
   "pg_stat_activity",
   "postCommitPersistedAfterRestart: true",
+  "parsePostgresCanonicalIdentity",
+  "proveConcurrentPostgresReplay",
   "crashServer",
 ])
   if (!postgres.includes(token))
     failures.push(`Postgres crash proof is missing ${token}`);
+if (
+  postgres.includes("UNION ALL SELECT workload_id FROM") ||
+  !postgres.includes("UNION SELECT workload_id FROM") ||
+  postgres.includes("LIMIT 1;")
+)
+  failures.push("Postgres replay identity is not canonically deduplicated");
 
 for (const token of [
   "crashAndRestart",

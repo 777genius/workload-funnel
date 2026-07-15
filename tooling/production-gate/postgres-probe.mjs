@@ -40,7 +40,7 @@ export function atomicAcceptanceSql({
     `created_workload AS (INSERT INTO ${name}.workload (workload_id) SELECT workload_id FROM won ON CONFLICT DO NOTHING RETURNING workload_id),`,
     `created_outbox AS (INSERT INTO ${name}.outbox (operation_id, workload_id, event_type) SELECT ${literal(operationId)}, workload_id, 'WorkloadAccepted' FROM created_workload ON CONFLICT DO NOTHING RETURNING workload_id),`,
     `created_history AS (INSERT INTO ${name}.history (history_id, workload_id, kind, payload_digest) SELECT ${literal(`history-${operationId}`)}, workload_id, 'accepted', ${literal(`sha256:${"a".repeat(64)}`)} FROM created_outbox ON CONFLICT DO NOTHING RETURNING workload_id)`,
-    `SELECT workload_id FROM won UNION ALL SELECT workload_id FROM ${name}.idempotency_receipt WHERE caller_scope = ${literal(callerScope)} AND idempotency_key = ${literal(idempotencyKey)} LIMIT 1;`,
+    `SELECT workload_id FROM won UNION SELECT workload_id FROM ${name}.idempotency_receipt WHERE caller_scope = ${literal(callerScope)} AND idempotency_key = ${literal(idempotencyKey)};`,
     "COMMIT;",
   ].join("\n");
 }
@@ -111,6 +111,40 @@ export function parsePostgresSnapshot(output) {
   )
     throw new Error("postgres_gate_snapshot_invalid");
   return Object.freeze(decoded);
+}
+
+export function parsePostgresCanonicalIdentity(output) {
+  if (typeof output !== "string" || !gateValue.test(output))
+    throw new Error("postgres_gate_identity_malformed");
+  return output;
+}
+
+export async function proveConcurrentPostgresReplay({
+  attempt,
+  expectedIdentity,
+}) {
+  if (typeof attempt !== "function" || !gateValue.test(expectedIdentity))
+    throw new Error("unsafe_postgres_replay_probe");
+  const replay = () =>
+    Promise.resolve().then(attempt).then(parsePostgresCanonicalIdentity);
+  const duplicates = await Promise.all(
+    Array.from({ length: 8 }, () => replay().catch((error) => error)),
+  );
+  if (duplicates.every((result) => result instanceof Error))
+    throw new Error("postgres_concurrent_duplicate_all_failed");
+  const identities = await Promise.all(
+    duplicates.map((result) =>
+      result instanceof Error || result !== expectedIdentity
+        ? replay()
+        : result,
+    ),
+  );
+  if (identities.some((identity) => identity !== expectedIdentity))
+    throw new Error("postgres_concurrent_duplicate_identity_unstable");
+  return Object.freeze({
+    attempts: duplicates.length,
+    identity: expectedIdentity,
+  });
 }
 
 export function postgresAtomicityProven(snapshot) {
@@ -186,26 +220,10 @@ export async function runPostgresFixtureProbe(config) {
     schema: config.schema,
     workloadId: "gate-workload",
   };
-  const duplicates = await Promise.all(
-    Array.from({ length: 8 }, () =>
-      executePsql(config, atomicAcceptanceSql(acceptance)).catch(
-        (error) => error,
-      ),
-    ),
-  );
-  if (duplicates.every((result) => result instanceof Error))
-    throw new Error("postgres_concurrent_duplicate_all_failed");
-  const duplicateIdentities = await Promise.all(
-    duplicates.map((result) =>
-      result instanceof Error || result !== acceptance.workloadId
-        ? executePsql(config, atomicAcceptanceSql(acceptance))
-        : result,
-    ),
-  );
-  if (
-    duplicateIdentities.some((identity) => identity !== acceptance.workloadId)
-  )
-    throw new Error("postgres_concurrent_duplicate_identity_unstable");
+  const concurrentReplay = await proveConcurrentPostgresReplay({
+    attempt: () => executePsql(config, atomicAcceptanceSql(acceptance)),
+    expectedIdentity: acceptance.workloadId,
+  });
   const initial = parsePostgresSnapshot(
     await executePsql(config, postgresSnapshotSql(config.schema)),
   );
@@ -278,8 +296,8 @@ export async function runPostgresFixtureProbe(config) {
   )
     throw new Error("postgres_crash_restart_state_unstable");
   return Object.freeze({
-    concurrentDuplicateAttempts: duplicates.length,
-    concurrentDuplicateIdentity: acceptance.workloadId,
+    concurrentDuplicateAttempts: concurrentReplay.attempts,
+    concurrentDuplicateIdentity: concurrentReplay.identity,
     crashWindows: Object.freeze({
       postCommitCrash: afterCommitCrash,
       postCommitPersistedAfterRestart: true,
