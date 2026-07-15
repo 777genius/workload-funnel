@@ -179,7 +179,7 @@ export class GateDockerRuntime {
     return identity;
   }
 
-  async loopbackPort(name, containerPort) {
+  async loopbackPort(name, containerPort, expectedHostPort) {
     const output = await this.command([
       "port",
       name,
@@ -194,6 +194,13 @@ export class GateDockerRuntime {
       port > 65_535
     )
       throw new Error("docker_published_port_not_loopback");
+    if (
+      !Number.isSafeInteger(expectedHostPort) ||
+      expectedHostPort < 1 ||
+      expectedHostPort > 65_535 ||
+      port !== expectedHostPort
+    )
+      throw new Error("docker_published_port_identity_changed");
     return port;
   }
 
@@ -203,6 +210,7 @@ export class GateDockerRuntime {
     forbiddenValues = [],
     expectedIdentity,
     expectedWritableStorage,
+    expectedContainerPort,
   ) {
     const output = await this.command(["container", "inspect", name]);
     if (
@@ -222,6 +230,11 @@ export class GateDockerRuntime {
     const host = inspected?.HostConfig;
     const container = inspected?.Config;
     const ports = host?.PortBindings;
+    const expectedPortKey = `${String(expectedContainerPort)}/tcp`;
+    const portKeys = Object.keys(ports ?? {});
+    const publishedBindings = ports?.[expectedPortKey];
+    const publishedBinding = publishedBindings?.[0];
+    const publishedHostPort = Number(publishedBinding?.HostPort);
     const writableStorageProven =
       expectedWritableStorage?.kind === "bind"
         ? Array.isArray(inspected?.Mounts) &&
@@ -261,11 +274,21 @@ export class GateDockerRuntime {
       ) ||
       typeof host?.Tmpfs?.["/tmp"] !== "string" ||
       !writableStorageProven ||
-      Object.values(ports ?? {}).some(
-        (bindings) =>
-          !Array.isArray(bindings) ||
-          bindings.some((binding) => binding.HostIp !== "127.0.0.1"),
-      )
+      !Number.isSafeInteger(expectedContainerPort) ||
+      expectedContainerPort < 1 ||
+      expectedContainerPort > 65_535 ||
+      portKeys.length !== 1 ||
+      portKeys[0] !== expectedPortKey ||
+      !Array.isArray(publishedBindings) ||
+      publishedBindings.length !== 1 ||
+      publishedBinding === null ||
+      typeof publishedBinding !== "object" ||
+      Array.isArray(publishedBinding) ||
+      Object.keys(publishedBinding).sort().join(",") !== "HostIp,HostPort" ||
+      publishedBinding.HostIp !== "127.0.0.1" ||
+      !/^[1-9]\d{0,4}$/u.test(publishedBinding.HostPort ?? "") ||
+      !Number.isSafeInteger(publishedHostPort) ||
+      publishedHostPort > 65_535
     )
       throw new Error("docker_container_confinement_unproven");
     return Object.freeze({
@@ -279,6 +302,7 @@ export class GateDockerRuntime {
       metadataSecretValuesAbsent: true,
       nonRootUser: expectedUser,
       privateUtsNamespace: true,
+      publishedHostPort,
       readOnlyRoot: true,
       writableStorage: Object.freeze({ ...expectedWritableStorage }),
       resourceLimits: Object.freeze({

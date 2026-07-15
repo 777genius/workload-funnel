@@ -357,8 +357,13 @@ async function main() {
         [rootSecret],
         objectIdentity,
         { destination: "/data", kind: "tmpfs" },
+        9000,
       );
-      const port = await docker.loopbackPort(objectName, 9000);
+      const port = await docker.loopbackPort(
+        objectName,
+        9000,
+        objectDockerConfinement.publishedHostPort,
+      );
       const adminConfigFile = await writeSecretFile({
         contents: `${JSON.stringify({
           aliases: {

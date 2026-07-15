@@ -1,3 +1,12 @@
+import { rm, writeFile } from "node:fs/promises";
+import { setTimeout as wait } from "node:timers/promises";
+import { fileURLToPath, URL } from "node:url";
+
+const OBSERVATION_WINDOW_TIMEOUT_MS = 4_000;
+const observationWindowScript = fileURLToPath(
+  new URL("./fixtures/systemd-observation-window.mjs", import.meta.url),
+);
+
 function unitAbsent(result) {
   const loadStates = result.stdout
     .split("\n")
@@ -63,6 +72,21 @@ function sameWords(value, expected) {
   );
 }
 
+function exactExecStopPostObserved(value, observationWindow) {
+  if (observationWindow === undefined) return (value ?? "") === "";
+  const prefix = `{ path=${observationWindow.nodeExecutable} ; argv[]=${[
+    observationWindow.nodeExecutable,
+    observationWindow.script,
+    observationWindow.marker,
+    String(OBSERVATION_WINDOW_TIMEOUT_MS),
+  ].join(" ")} ; ignore_errors=no ;`;
+  return (
+    typeof value === "string" &&
+    value.startsWith(prefix) &&
+    value.indexOf("{ path=", prefix.length) === -1
+  );
+}
+
 export function exactBoundedHostPropertiesObserved(
   values,
   config,
@@ -81,6 +105,7 @@ export function exactBoundedHostPropertiesObserved(
     KillMode: "control-group",
     LimitFSIZE: "67108864",
     LimitNOFILE: "1024",
+    LoadState: "loaded",
     LockPersonality: "yes",
     NoNewPrivileges: "yes",
     PrivateDevices: "yes",
@@ -115,7 +140,12 @@ export function exactBoundedHostPropertiesObserved(
     values.Environment !==
       "HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC" ||
     !/^[a-f0-9]{32}$/u.test(values.InvocationID ?? "") ||
-    (requireControlGroup && values.ActiveState !== "active") ||
+    (requireControlGroup &&
+      !new Set(
+        plan.observationWindow === undefined
+          ? ["active"]
+          : ["active", "deactivating"],
+      ).has(values.ActiveState)) ||
     (requireControlGroup &&
       !/^\/[A-Za-z0-9_./-]+$/u.test(values.ControlGroup ?? "")) ||
     systemdInteger(values.CPUQuotaPerSecUSec) !== 1_000_000n ||
@@ -139,6 +169,7 @@ export function exactBoundedHostPropertiesObserved(
     ]) ||
     typeof values.SystemCallFilter !== "string" ||
     values.SystemCallFilter.length === 0 ||
+    !exactExecStopPostObserved(values.ExecStopPost, plan.observationWindow) ||
     (joinNetworkOf === undefined
       ? (values.JoinsNamespaceOf ?? "") !== ""
       : !sameWords(values.JoinsNamespaceOf, [joinNetworkOf]))
@@ -171,7 +202,7 @@ export async function cleanupBoundedSystemdUnit(config, record) {
   );
   if (stopped.code !== 0)
     throw new Error("bounded_host_process_cleanup_uncertain");
-  await config.runner.run(
+  const reset = await config.runner.run(
     config.systemctlExecutable,
     ["reset-failed", record.name],
     { timeoutMs: 2_000 },
@@ -181,7 +212,7 @@ export async function cleanupBoundedSystemdUnit(config, record) {
     "ControlGroup",
     "LoadState",
   ]);
-  if (!unitInactiveOrAbsent(after))
+  if ((reset.code !== 0 && !unitAbsent(after)) || !unitInactiveOrAbsent(after))
     throw new Error("bounded_host_process_cleanup_uncertain");
 }
 
@@ -199,7 +230,12 @@ export function boundedHostSystemdArguments(config, input) {
       input.joinNetworkOf !== `${config.runId}-hq-server.service`) ||
     input.executableArguments.some(
       (argument) => typeof argument !== "string" || argument.includes("\0"),
-    )
+    ) ||
+    (input.observationWindow !== undefined &&
+      (input.observationWindow.nodeExecutable !== config.nodeExecutable ||
+        input.observationWindow.script !== observationWindowScript ||
+        input.observationWindow.marker !==
+          `${config.workloadRoot}/.observed-${input.role}`))
   )
     throw new Error("bounded_host_process_invocation_invalid");
   const unit = `${config.runId}-${input.role}.service`;
@@ -221,6 +257,11 @@ export function boundedHostSystemdArguments(config, input) {
       "--property=CPUQuota=100%",
       "--property=CPUWeight=100",
       "--property=DevicePolicy=closed",
+      ...(input.observationWindow === undefined
+        ? []
+        : [
+            `--property=ExecStopPost=${input.observationWindow.nodeExecutable} ${input.observationWindow.script} ${input.observationWindow.marker} ${String(OBSERVATION_WINDOW_TIMEOUT_MS)}`,
+          ]),
       "--property=FinalKillSignal=SIGKILL",
       `--property=Group=${config.workloadGroup}`,
       "--property=IOWeight=100",
@@ -271,14 +312,19 @@ export function boundedHostSystemdArguments(config, input) {
     ]),
     description,
     joinNetworkOf: input.joinNetworkOf,
+    observationWindow: input.observationWindow,
     unit,
   });
 }
 
 export function createBoundedHostProcessManager(config) {
   const units = new Map();
-  const observeStarted = async (plan, requireControlGroup = true) => {
-    const observed = await showUnit(config, plan.unit, [
+  const observeStarted = async (
+    plan,
+    requireControlGroup = true,
+    retryAbsent = false,
+  ) => {
+    const properties = [
       "ActiveState",
       "ControlGroup",
       "AmbientCapabilities",
@@ -288,6 +334,7 @@ export function createBoundedHostProcessManager(config) {
       "Description",
       "DevicePolicy",
       "Environment",
+      "ExecStopPost",
       "FinalKillSignal",
       "Group",
       "IOReadBandwidthMax",
@@ -299,6 +346,7 @@ export function createBoundedHostProcessManager(config) {
       "KillSignal",
       "LimitFSIZE",
       "LimitNOFILE",
+      "LoadState",
       "LockPersonality",
       "MemoryHigh",
       "MemoryMax",
@@ -332,18 +380,26 @@ export function createBoundedHostProcessManager(config) {
       "UMask",
       "User",
       "WorkingDirectory",
-    ]);
-    if (observed.code !== 0)
-      throw new Error("bounded_host_process_identity_unproven");
-    const values = parseShow(observed.stdout);
-    exactBoundedHostPropertiesObserved(
-      values,
-      config,
-      plan,
-      plan.joinNetworkOf,
-      requireControlGroup,
-    );
-    return values;
+    ];
+    const deadline = Date.now() + 1_000;
+    for (;;) {
+      const observed = await showUnit(config, plan.unit, properties);
+      if (retryAbsent && unitAbsent(observed) && Date.now() < deadline) {
+        await wait(10);
+        continue;
+      }
+      if (observed.code !== 0 || unitAbsent(observed))
+        throw new Error("bounded_host_process_identity_unproven");
+      const values = parseShow(observed.stdout);
+      exactBoundedHostPropertiesObserved(
+        values,
+        config,
+        plan,
+        plan.joinNetworkOf,
+        requireControlGroup,
+      );
+      return values;
+    }
   };
   const finalize = async (recordId, plan, values) => {
     const record = Object.freeze({
@@ -355,14 +411,22 @@ export function createBoundedHostProcessManager(config) {
       cleanupBoundedSystemdUnit(config, record),
     );
     await config.sliceOwnership.register();
+    return record;
   };
   return Object.freeze({
     async execute(executable, executableArguments, role, options = {}) {
       await config.reviewedExecutables.assertUnchanged(executable);
+      await config.reviewedExecutables.assertUnchanged(config.nodeExecutable);
+      const observationMarker = `${config.workloadRoot}/.observed-${role}`;
       const plan = boundedHostSystemdArguments(config, {
         executable,
         executableArguments,
         joinNetworkOf: options.joinNetworkOf,
+        observationWindow: {
+          marker: observationMarker,
+          nodeExecutable: config.nodeExecutable,
+          script: observationWindowScript,
+        },
         role,
       });
       const recordId = await config.ledger.prepare("systemd-unit", plan.unit, {
@@ -371,20 +435,64 @@ export function createBoundedHostProcessManager(config) {
       await config.sliceOwnership.admit();
       const marker = plan.arguments.indexOf("--");
       const args = [
-        ...plan.arguments
-          .slice(0, marker)
-          .filter((value) => value !== "--collect"),
+        ...plan.arguments.slice(0, marker),
         "--wait",
         "--pipe",
         ...plan.arguments.slice(marker),
       ];
-      const result = await config.runner.run(
-        config.systemdRunExecutable,
-        args,
-        options.limits,
-      );
-      const values = await observeStarted(plan, false);
-      await finalize(recordId, plan, values);
+      let execution;
+      let record = Object.freeze({
+        expected: { description: plan.description },
+        name: plan.unit,
+        observed: {},
+      });
+      let result;
+      let failure;
+      let markerReleased = false;
+      try {
+        execution = await config.runner.start(
+          config.systemdRunExecutable,
+          args,
+          options.limits,
+        );
+        const values = await observeStarted(plan, true, true);
+        record = await finalize(recordId, plan, values);
+        const durableValues = await observeStarted(plan);
+        if (durableValues.InvocationID !== values.InvocationID)
+          throw new Error("bounded_host_process_identity_changed");
+        await (config.writeObservationMarker ?? writeFile)(
+          observationMarker,
+          "",
+          { flag: "wx", mode: 0o400 },
+        );
+        markerReleased = true;
+        result = await execution.completion;
+      } catch (error) {
+        failure = error;
+      }
+      if (failure !== undefined && execution !== undefined) {
+        execution.kill();
+        await execution.completion;
+      }
+      let cleanupFailure;
+      if (execution !== undefined) {
+        try {
+          await cleanupBoundedSystemdUnit(config, record);
+        } catch (error) {
+          cleanupFailure = error;
+        }
+      }
+      if (markerReleased) {
+        try {
+          await (config.removeObservationMarker ?? rm)(observationMarker, {
+            force: true,
+          });
+        } catch (error) {
+          cleanupFailure ??= error;
+        }
+      }
+      if (cleanupFailure !== undefined) throw cleanupFailure;
+      if (failure !== undefined) throw failure;
       return result;
     },
     async start(executable, executableArguments, role, options = {}) {

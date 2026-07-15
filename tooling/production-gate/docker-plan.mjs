@@ -19,11 +19,19 @@ export function assertSafeDockerArguments(args) {
       !OWNED_RESOURCE_PATTERN.test(args[index + 1] ?? "")
     )
       throw new Error("unsafe_docker_resource_name");
-    if (
-      (args[index] === "--publish" || args[index] === "-p") &&
-      !/^127\.0\.0\.1::\d{2,5}$/u.test(args[index + 1] ?? "")
-    )
-      throw new Error("docker_port_not_loopback_ephemeral");
+    if (args[index] === "--publish" || args[index] === "-p") {
+      const match = (args[index + 1] ?? "").match(
+        /^127\.0\.0\.1:0:(\d{1,5})$/u,
+      );
+      const containerPort = Number(match?.[1]);
+      if (
+        match === null ||
+        !Number.isSafeInteger(containerPort) ||
+        containerPort < 1 ||
+        containerPort > 65_535
+      )
+        throw new Error("docker_port_not_loopback_ephemeral");
+    }
   }
   return Object.freeze([...args]);
 }
@@ -111,7 +119,7 @@ function boundedContainerArguments({
     "--network",
     network,
     "--publish",
-    `127.0.0.1::${String(port)}`,
+    `127.0.0.1:0:${String(port)}`,
     "--cpus",
     "2",
     "--memory",

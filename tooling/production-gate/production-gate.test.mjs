@@ -250,7 +250,7 @@ describe("bounded resource plans", () => {
         "ALL",
         "--read-only",
         "--platform=linux/amd64",
-        "127.0.0.1::5432",
+        "127.0.0.1:0:5432",
       ]),
     );
     expect(() => assertSafeDockerArguments(["run", "--privileged"])).toThrow(
@@ -697,14 +697,20 @@ describe("systemd and SLO contracts", () => {
         runner: {
           run: vi.fn(() => {
             calls += 1;
-            if (calls === 1 || calls === 6) return Promise.resolve(absent);
+            if (calls === 1) return Promise.resolve(absent);
+            if (calls === 6)
+              return Promise.resolve({
+                code: 0,
+                stderr: "",
+                stdout: sliceShow(),
+              });
             if (calls === 2 || calls === 3)
               return Promise.resolve({
                 code: 0,
                 stderr: "",
                 stdout: sliceShow({
                   ActiveState: "active",
-                  ControlGroup: `/gate.slice/${runId}.slice`,
+                  ControlGroup: `/wf.slice/wf-production.slice/wf-production-gate.slice/${runId}.slice`,
                 }),
               });
             return Promise.resolve({ code: 0, stderr: "", stdout: "" });

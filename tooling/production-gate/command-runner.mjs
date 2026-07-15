@@ -113,9 +113,17 @@ export class BoundedCommandRunner {
     }
   }
 
-  async start(executable, args, { environment = {}, timeoutMs = 30_000 } = {}) {
+  async start(
+    executable,
+    args,
+    {
+      environment = {},
+      maxOutputBytes = HOST_COMMAND_LIMITS.maxOutputBytes,
+      timeoutMs = HOST_COMMAND_LIMITS.timeoutMs,
+    } = {},
+  ) {
     const limits = {
-      maxOutputBytes: HOST_COMMAND_LIMITS.maxOutputBytes,
+      maxOutputBytes,
       timeoutMs,
     };
     validateInvocation(executable, args, limits);
@@ -127,38 +135,56 @@ export class BoundedCommandRunner {
       windowsHide: true,
     });
     let settled = false;
+    let outputLimitExceeded = false;
+    let timedOut = false;
     const completion = new Promise((resolve) => {
       const stdout = [];
       const stderr = [];
       let outputBytes = 0;
       const capture = (target, chunk) => {
         outputBytes += chunk.byteLength;
-        if (outputBytes > limits.maxOutputBytes) child.kill("SIGKILL");
-        else target.push(chunk);
+        if (outputBytes > limits.maxOutputBytes) {
+          outputLimitExceeded = true;
+          child.kill("SIGKILL");
+        } else target.push(chunk);
       };
       child.stdout?.on("data", (chunk) => capture(stdout, chunk));
       child.stderr?.on("data", (chunk) => capture(stderr, chunk));
-      child.once("exit", (code, signal) => {
+      child.once("close", (code, signal) => {
         settled = true;
-        resolve({
-          code,
-          signal,
-          stderr: Buffer.concat(stderr).toString("utf8"),
-          stdout: Buffer.concat(stdout).toString("utf8"),
-        });
+        resolve(
+          Object.freeze({
+            code:
+              outputLimitExceeded || timedOut || signal !== null ? null : code,
+            ...(outputLimitExceeded
+              ? { errorCode: "command_output_limit" }
+              : timedOut
+                ? { errorCode: "command_timeout" }
+                : signal !== null
+                  ? { errorCode: "command_failed" }
+                  : {}),
+            stderr: Buffer.concat(stderr).toString("utf8"),
+            stdout: Buffer.concat(stdout).toString("utf8"),
+          }),
+        );
       });
-      child.once("error", (error) => {
+      child.once("error", () => {
         settled = true;
-        resolve({
-          code: null,
-          errorCode: error.message,
-          stderr: "",
-          stdout: "",
-        });
+        resolve(
+          Object.freeze({
+            code: null,
+            errorCode: "command_failed",
+            stderr: "",
+            stdout: "",
+          }),
+        );
       });
     });
     const timer = setTimeout(() => {
-      if (!settled) child.kill("SIGKILL");
+      if (!settled) {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }
     }, timeoutMs);
     timer.unref();
     return Object.freeze({

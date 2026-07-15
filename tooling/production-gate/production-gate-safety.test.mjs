@@ -200,6 +200,7 @@ describe("production gate host safety", () => {
       KillSignal: "SIGTERM",
       LimitFSIZE: "67108864",
       LimitNOFILE: "1024",
+      LoadState: "loaded",
       LockPersonality: "yes",
       MemoryHigh: "384M",
       MemoryMax: "512M",
@@ -352,6 +353,7 @@ describe("production gate host safety", () => {
           kind: "bind",
           source: postgresData,
         },
+        5432,
       ),
     ).resolves.toMatchObject({ metadataSecretValuesAbsent: true });
     inspected.Config.Env.push(`UNSAFE=${fakeCredential}`);
@@ -367,6 +369,7 @@ describe("production gate host safety", () => {
           kind: "bind",
           source: postgresData,
         },
+        5432,
       ),
     ).rejects.toThrow("docker_container_metadata_contains_secret");
 

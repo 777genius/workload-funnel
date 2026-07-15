@@ -61,6 +61,15 @@ function unconfiguredSliceIdentity(values, slice) {
   );
 }
 
+function ownedSliceControlGroup(value, slice) {
+  return (
+    typeof value === "string" &&
+    /^\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/u.test(value) &&
+    value.startsWith("/wf.slice/wf-production.slice/") &&
+    value.endsWith(`/${slice}`)
+  );
+}
+
 function implicitSliceBaseline(result, slice) {
   const values = parseSliceShow(result);
   return (
@@ -87,11 +96,18 @@ export async function cleanupSystemdSlice(config, record) {
   const before = await showSlice(config, record.name);
   if (unitAbsent(before) || implicitSliceBaseline(before, record.name)) return;
   const beforeValues = parseSliceShow(before);
+  const finalizedControlGroup = record.observed.controlGroup;
+  const preparedOnly =
+    Object.keys(record.observed).length === 0 &&
+    record.expected?.controlGroupSuffix === `/${record.name}`;
   if (
     !unconfiguredSliceIdentity(beforeValues, record.name) ||
-    typeof record.observed.controlGroup !== "string" ||
-    record.observed.controlGroup.length === 0 ||
-    beforeValues.ControlGroup !== record.observed.controlGroup
+    beforeValues.ActiveState !== "active" ||
+    !ownedSliceControlGroup(beforeValues.ControlGroup, record.name) ||
+    (typeof finalizedControlGroup === "string"
+      ? !ownedSliceControlGroup(finalizedControlGroup, record.name) ||
+        finalizedControlGroup !== beforeValues.ControlGroup
+      : !preparedOnly)
   )
     throw new Error("systemd_slice_cleanup_identity_changed");
   const stopped = await config.runner.run(
@@ -100,13 +116,13 @@ export async function cleanupSystemdSlice(config, record) {
     { timeoutMs: 2_000 },
   );
   if (stopped.code !== 0) throw new Error("systemd_slice_cleanup_uncertain");
-  await config.runner.run(
+  const reset = await config.runner.run(
     config.systemctlExecutable,
     ["reset-failed", record.name],
     { timeoutMs: 2_000 },
   );
   const after = await showSlice(config, record.name);
-  if (!unitAbsent(after) && !implicitSliceBaseline(after, record.name))
+  if (reset.code !== 0 || !implicitSliceBaseline(after, record.name))
     throw new Error("systemd_slice_cleanup_uncertain");
 }
 
@@ -121,7 +137,7 @@ export function createSystemdSliceOwnership(config) {
       if (!unitAbsent(observed) && !implicitSliceBaseline(observed, slice))
         throw new Error("systemd_gate_slice_already_exists_or_unprovable");
       recordId = await config.ledger.prepare("systemd-slice", slice, {
-        controlGroup: `/${slice}`,
+        controlGroupSuffix: `/${slice}`,
       });
     },
     async register() {
@@ -134,12 +150,11 @@ export function createSystemdSliceOwnership(config) {
       if (
         !unconfiguredSliceIdentity(values, slice) ||
         typeof controlGroup !== "string" ||
-        controlGroup.length === 0 ||
-        !controlGroup.endsWith(`/${slice}`)
+        !ownedSliceControlGroup(controlGroup, slice)
       )
         throw new Error("systemd_gate_slice_identity_unproven");
       const record = Object.freeze({
-        expected: { controlGroup: `/${slice}` },
+        expected: { controlGroupSuffix: `/${slice}` },
         name: slice,
         observed: { controlGroup },
       });

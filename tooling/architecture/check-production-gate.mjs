@@ -124,7 +124,7 @@ for (const token of [
 const docker = await source("tooling/production-gate/docker-plan.mjs");
 for (const token of [
   "--pull=never",
-  "127.0.0.1::",
+  "127.0.0.1:0:",
   "--memory-swap",
   "--pids-limit",
   "--device-read-bps",

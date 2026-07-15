@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { cleanupBoundedSystemdUnit } from "./bounded-host-process.mjs";
 import { POSTGRES_FIXTURE_IMAGE } from "./constants.mjs";
-import { postgresContainerArguments } from "./docker-plan.mjs";
+import {
+  assertSafeDockerArguments,
+  postgresContainerArguments,
+} from "./docker-plan.mjs";
 import { GateDockerRuntime } from "./docker-runtime.mjs";
 import { createSystemdProbeIo } from "./systemd-runtime.mjs";
 import {
@@ -15,6 +18,7 @@ const slice = `${runId}.slice`;
 const implicitSliceDescription =
   "Slice /wf/production/gate/0123456789abcdef0123456789abcdef";
 const postgresData = `/var/data/workload-funnel/sandboxes/${runId}/postgres-data`;
+const sliceControlGroup = `/wf.slice/wf-production.slice/wf-production-gate.slice/${slice}`;
 
 function result(stdout, code = 0, stderr = "") {
   return { code, stderr, stdout };
@@ -124,6 +128,23 @@ describe("Docker 29 production-gate compatibility", () => {
     );
     expect(args.some((argument) => argument.startsWith("--uts"))).toBe(false);
     expect(args).toContain("--ipc=private");
+    expect(args).toContain("127.0.0.1:0:5432");
+    expect(() =>
+      assertSafeDockerArguments(["create", "--publish", "127.0.0.1::5432"]),
+    ).toThrow("docker_port_not_loopback_ephemeral");
+    expect(() =>
+      assertSafeDockerArguments([
+        "create",
+        "--publish",
+        "127.0.0.1:49152:5432",
+      ]),
+    ).toThrow("docker_port_not_loopback_ephemeral");
+    expect(() =>
+      assertSafeDockerArguments(["create", "--publish", "0.0.0.0:0:5432"]),
+    ).toThrow("docker_port_not_loopback_ephemeral");
+    expect(
+      assertSafeDockerArguments(["create", "--publish", "127.0.0.1:0:5432"]),
+    ).toEqual(["create", "--publish", "127.0.0.1:0:5432"]);
 
     let inspected = postgresInspect();
     const runtime = new GateDockerRuntime({
@@ -147,11 +168,51 @@ describe("Docker 29 production-gate compatibility", () => {
         [],
         inspected.Id,
         expectedStorage,
+        5432,
       ),
     ).resolves.toMatchObject({
       privateUtsNamespace: true,
+      publishedHostPort: 49152,
       writableStorage: expectedStorage,
     });
+
+    for (const binding of [
+      { HostIp: "127.0.0.1", HostPort: "" },
+      { HostIp: "127.0.0.1", HostPort: "0" },
+      { HostIp: "0.0.0.0", HostPort: "49152" },
+      { HostIp: "127.0.0.1", HostPort: "65536" },
+    ]) {
+      inspected = postgresInspect({
+        PortBindings: { "5432/tcp": [binding] },
+      });
+      await expect(
+        runtime.inspectContainerConfinement(
+          `${runId}-postgres`,
+          "70:70",
+          [],
+          inspected.Id,
+          expectedStorage,
+          5432,
+        ),
+      ).rejects.toThrow("docker_container_confinement_unproven");
+    }
+
+    inspected = postgresInspect({
+      PortBindings: {
+        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
+        "9000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49153" }],
+      },
+    });
+    await expect(
+      runtime.inspectContainerConfinement(
+        `${runId}-postgres`,
+        "70:70",
+        [],
+        inspected.Id,
+        expectedStorage,
+        5432,
+      ),
+    ).rejects.toThrow("docker_container_confinement_unproven");
 
     inspected = postgresInspect({ UTSMode: "host" });
     await expect(
@@ -161,6 +222,7 @@ describe("Docker 29 production-gate compatibility", () => {
         [],
         inspected.Id,
         expectedStorage,
+        5432,
       ),
     ).rejects.toThrow("docker_container_confinement_unproven");
 
@@ -173,6 +235,7 @@ describe("Docker 29 production-gate compatibility", () => {
         [],
         inspected.Id,
         expectedStorage,
+        5432,
       ),
     ).rejects.toThrow("docker_container_confinement_unproven");
 
@@ -185,8 +248,37 @@ describe("Docker 29 production-gate compatibility", () => {
         [],
         inspected.Id,
         expectedStorage,
+        5432,
       ),
     ).rejects.toThrow("docker_container_confinement_unproven");
+  });
+
+  it("requires docker port to prove one assigned loopback port", async () => {
+    let output = "127.0.0.1:49152\n";
+    const runtime = new GateDockerRuntime({
+      executable: "/usr/bin/docker",
+      ioDevice: "/dev/vda",
+      runId,
+      runner: { run: () => Promise.resolve(result(output)) },
+      sandboxRoot: `/tmp/${runId}`,
+    });
+    await expect(
+      runtime.loopbackPort(`${runId}-postgres`, 5432, 49152),
+    ).resolves.toBe(49152);
+    await expect(
+      runtime.loopbackPort(`${runId}-postgres`, 5432, 49153),
+    ).rejects.toThrow("docker_published_port_identity_changed");
+    for (const foreign of [
+      "0.0.0.0:49152\n",
+      "127.0.0.1:0\n",
+      "127.0.0.1:\n",
+      "127.0.0.1:49152\n127.0.0.1:49153\n",
+    ]) {
+      output = foreign;
+      await expect(
+        runtime.loopbackPort(`${runId}-postgres`, 5432, 49152),
+      ).rejects.toThrow("docker_published_port_not_loopback");
+    }
   });
 
   it("omits UTS flags for clients and accepts only Docker's empty private mode", async () => {
@@ -250,6 +342,9 @@ describe("systemd 255 production-gate compatibility", () => {
     });
     await expect(baseline.admit()).resolves.toBeUndefined();
     expect(prepare).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledWith("systemd-slice", slice, {
+      controlGroupSuffix: `/${slice}`,
+    });
     expect(sliceShow()).toContain(`Description=${implicitSliceDescription}\n`);
 
     const foreignStates = [
@@ -283,6 +378,41 @@ describe("systemd 255 production-gate compatibility", () => {
     }
   });
 
+  it("persists the exact observed implicit-slice hierarchy", async () => {
+    const finalize = vi.fn(() => Promise.resolve());
+    let calls = 0;
+    const ownership = createSystemdSliceOwnership({
+      ledger: {
+        finalize,
+        prepare: () => Promise.resolve("slice-record"),
+      },
+      runId,
+      runner: {
+        run: () => {
+          calls += 1;
+          return Promise.resolve(
+            result(
+              calls === 1
+                ? sliceShow()
+                : sliceShow({
+                    ActiveState: "active",
+                    ControlGroup: sliceControlGroup,
+                  }),
+            ),
+          );
+        },
+      },
+      systemctlExecutable: "/usr/bin/systemctl",
+    });
+    await ownership.admit();
+    await ownership.register();
+    expect(finalize).toHaveBeenCalledWith(
+      "slice-record",
+      { controlGroup: sliceControlGroup },
+      expect.any(Function),
+    );
+  });
+
   it("treats only an exact implicit baseline as already clean", async () => {
     const cleanRunner = {
       run: vi.fn(() => Promise.resolve(result(sliceShow()))),
@@ -304,7 +434,7 @@ describe("systemd 255 production-gate compatibility", () => {
           result(
             sliceShow({
               ActiveState: "active",
-              ControlGroup: `/${slice}`,
+              ControlGroup: sliceControlGroup,
             }),
           ),
         ),
@@ -332,7 +462,7 @@ describe("systemd 255 production-gate compatibility", () => {
             result(
               sliceShow({
                 ActiveState: "active",
-                ControlGroup: `/${slice}`,
+                ControlGroup: sliceControlGroup,
                 ...foreignState,
               }),
             ),
@@ -345,11 +475,168 @@ describe("systemd 255 production-gate compatibility", () => {
             runner: foreignRunner,
             systemctlExecutable: "/usr/bin/systemctl",
           },
-          { name: slice, observed: { controlGroup: `/${slice}` } },
+          {
+            expected: { controlGroupSuffix: `/${slice}` },
+            name: slice,
+            observed: { controlGroup: sliceControlGroup },
+          },
         ),
       ).rejects.toThrow("systemd_slice_cleanup_identity_changed");
       expect(foreignRunner.run).toHaveBeenCalledOnce();
     }
+  });
+
+  it.each([
+    [
+      "finalized",
+      {
+        expected: { controlGroupSuffix: `/${slice}` },
+        name: slice,
+        observed: { controlGroup: sliceControlGroup },
+        state: "active",
+      },
+    ],
+    [
+      "prepared-only",
+      {
+        expected: { controlGroupSuffix: `/${slice}` },
+        name: slice,
+        observed: {},
+        state: "prepared",
+      },
+    ],
+  ])("cleans an exact %s hierarchical implicit slice", async (_, record) => {
+    let calls = 0;
+    const runner = {
+      run: vi.fn((_executable, args) => {
+        calls += 1;
+        if (calls === 1)
+          return Promise.resolve(
+            result(
+              sliceShow({
+                ActiveState: "active",
+                ControlGroup: sliceControlGroup,
+              }),
+            ),
+          );
+        if (args[0] === "show") return Promise.resolve(result(sliceShow()));
+        return Promise.resolve(result(""));
+      }),
+    };
+    await expect(
+      cleanupSystemdSlice(
+        { runner, systemctlExecutable: "/usr/bin/systemctl" },
+        record,
+      ),
+    ).resolves.toBeUndefined();
+    expect(runner.run.mock.calls.map(([, args]) => args[0])).toEqual([
+      "show",
+      "stop",
+      "reset-failed",
+      "show",
+    ]);
+  });
+
+  it("rejects foreign or contradictory prepared-only recovery identities", async () => {
+    const record = {
+      expected: { controlGroupSuffix: `/${slice}` },
+      name: slice,
+      observed: {},
+      state: "prepared",
+    };
+    const foreignShows = [
+      sliceShow({
+        ActiveState: "active",
+        ControlGroup: `/foreign.slice/${slice}`,
+      }),
+      sliceShow({
+        ActiveState: "active",
+        ControlGroup: sliceControlGroup,
+        Description: "foreign",
+      }),
+      sliceShow({
+        ActiveState: "active",
+        ControlGroup: sliceControlGroup,
+        DropInPaths: "/run/systemd/system/foreign.conf",
+      }),
+      sliceShow({
+        ActiveState: "active",
+        ControlGroup: sliceControlGroup,
+        Transient: "yes",
+      }),
+      `${sliceShow({
+        ActiveState: "active",
+        ControlGroup: sliceControlGroup,
+      })}ControlGroup=${sliceControlGroup}\n`,
+    ];
+    for (const stdout of foreignShows) {
+      const runner = {
+        run: vi.fn(() => Promise.resolve(result(stdout))),
+      };
+      await expect(
+        cleanupSystemdSlice(
+          { runner, systemctlExecutable: "/usr/bin/systemctl" },
+          record,
+        ),
+      ).rejects.toThrow("systemd_slice_cleanup_identity_changed");
+      expect(runner.run).toHaveBeenCalledOnce();
+    }
+
+    const contradictoryRecord = {
+      ...record,
+      expected: { controlGroupSuffix: "/foreign.slice" },
+    };
+    await expect(
+      cleanupSystemdSlice(
+        {
+          runner: {
+            run: () =>
+              Promise.resolve(
+                result(
+                  sliceShow({
+                    ActiveState: "active",
+                    ControlGroup: sliceControlGroup,
+                  }),
+                ),
+              ),
+          },
+          systemctlExecutable: "/usr/bin/systemctl",
+        },
+        contradictoryRecord,
+      ),
+    ).rejects.toThrow("systemd_slice_cleanup_identity_changed");
+  });
+
+  it("requires an exact inactive implicit baseline after stop and reset", async () => {
+    let calls = 0;
+    const runner = {
+      run: vi.fn((_executable, args) => {
+        calls += 1;
+        if (calls === 1)
+          return Promise.resolve(
+            result(
+              sliceShow({
+                ActiveState: "active",
+                ControlGroup: sliceControlGroup,
+              }),
+            ),
+          );
+        if (args[0] === "show")
+          return Promise.resolve(result("LoadState=not-found\n"));
+        return Promise.resolve(result(""));
+      }),
+    };
+    await expect(
+      cleanupSystemdSlice(
+        { runner, systemctlExecutable: "/usr/bin/systemctl" },
+        {
+          expected: { controlGroupSuffix: `/${slice}` },
+          name: slice,
+          observed: {},
+          state: "prepared",
+        },
+      ),
+    ).rejects.toThrow("systemd_slice_cleanup_uncertain");
   });
 
   it("recognizes not-found among properties without weakening loaded identity", async () => {

@@ -67,8 +67,13 @@ export async function runPostgresCompatibilityStage({
       kind: "bind",
       source: postgresData.path,
     },
+    5432,
   );
-  const port = await docker.loopbackPort(name, 5432);
+  const port = await docker.loopbackPort(
+    name,
+    5432,
+    dockerConfinement.publishedHostPort,
+  );
   const connection = Object.freeze({
     database,
     host: "127.0.0.1",
