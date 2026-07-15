@@ -1,8 +1,13 @@
+import { readFile } from "node:fs/promises";
+import { URL } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
   encodePressureFixtureReadiness,
   parsePressureFixtureReadiness,
+  pressureFixturePrimedState,
+  PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
 } from "./pressure-fixture-protocol.mjs";
 import {
@@ -25,6 +30,40 @@ function missingReady() {
 }
 
 describe("pressure fixture priming and bounded lifetime", () => {
+  it("keeps the memory fixture and strict protocol on one 22 x 16 MiB target", async () => {
+    expect(PRESSURE_FIXTURE_MEMORY_TARGET).toStrictEqual({
+      chunkBytes: 16 * 1024 * 1024,
+      chunkCount: 22,
+      retainedBytes: 352 * 1024 * 1024,
+    });
+    expect(Object.isFrozen(PRESSURE_FIXTURE_MEMORY_TARGET)).toBe(true);
+    expect(pressureFixturePrimedState("memory")).toStrictEqual({
+      retainedBytes: PRESSURE_FIXTURE_MEMORY_TARGET.retainedBytes,
+    });
+
+    const fixtureSource = await readFile(
+      new URL("./fixtures/pressure-load.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(fixtureSource).toContain(
+      "index < PRESSURE_FIXTURE_MEMORY_TARGET.chunkCount",
+    );
+    expect(fixtureSource).toContain(
+      "Buffer.alloc(PRESSURE_FIXTURE_MEMORY_TARGET.chunkBytes, 1)",
+    );
+
+    expect(() =>
+      parsePressureFixtureReadiness(
+        JSON.stringify({
+          mode: "memory",
+          primed: { retainedBytes: 28 * 16 * 1024 * 1024 },
+          schemaVersion: "workload-funnel.production-gate.pressure-ready.v1",
+        }),
+        "memory",
+      ),
+    ).toThrow("pressure_fixture_readiness_malformed");
+  });
+
   it("accepts only each mode's exact primed-state marker", () => {
     for (const mode of PRESSURE_FIXTURE_MODES)
       expect(

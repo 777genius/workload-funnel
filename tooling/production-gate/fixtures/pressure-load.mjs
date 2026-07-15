@@ -5,6 +5,7 @@ import { setInterval, setTimeout } from "node:timers";
 
 import {
   encodePressureFixtureReadiness,
+  PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
 } from "../pressure-fixture-protocol.mjs";
 
@@ -53,8 +54,14 @@ if (mode === "cpu") {
 }
 
 if (mode === "memory") {
-  for (let index = 0; index < 28; index += 1) {
-    retainedMemory.push(Buffer.alloc(16 * 1024 * 1024, 1));
+  for (
+    let index = 0;
+    index < PRESSURE_FIXTURE_MEMORY_TARGET.chunkCount;
+    index += 1
+  ) {
+    retainedMemory.push(
+      Buffer.alloc(PRESSURE_FIXTURE_MEMORY_TARGET.chunkBytes, 1),
+    );
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
