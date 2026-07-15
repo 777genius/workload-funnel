@@ -1,11 +1,16 @@
 import { Worker } from "node:worker_threads";
 import { Buffer } from "node:buffer";
-import { mkdir, open, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, writeFile } from "node:fs/promises";
 import { setInterval, setTimeout } from "node:timers";
+
+import {
+  encodePressureFixtureReadiness,
+  PRESSURE_FIXTURE_MODES,
+} from "../pressure-fixture-protocol.mjs";
 
 const [mode, root] = process.argv.slice(2);
 if (
-  !new Set(["cpu", "disk", "inodes", "io", "memory"]).has(mode) ||
+  !PRESSURE_FIXTURE_MODES.includes(mode) ||
   !/^\/var\/lib\/workload-funnel\/allocations\/wf-production-gate-[a-f0-9]{32}\/pressure$/u.test(
     root ?? "",
   )
@@ -14,16 +19,37 @@ if (
 
 await mkdir(root, { mode: 0o700, recursive: true });
 const retainedMemory = [];
+const retainedWorkers = [];
 
-const ready = () =>
-  writeFile(`${root}/.ready-${mode}`, `${mode}\n`, {
+const ready = async () => {
+  const marker = `${root}/.ready-${mode}`;
+  const temporary = `${marker}.next`;
+  await writeFile(temporary, encodePressureFixtureReadiness(mode), {
     flag: "wx",
     mode: 0o600,
   });
+  await rename(temporary, marker);
+};
 
 if (mode === "cpu") {
-  for (let index = 0; index < 4; index += 1)
-    new Worker("for (;;) Math.imul(Date.now(), 17)", { eval: true });
+  const startWorker = () =>
+    new Promise((resolve, reject) => {
+      const worker = new Worker(
+        'const { parentPort } = require("node:worker_threads"); parentPort.postMessage("primed"); for (;;) Math.imul(Date.now(), 17)',
+        { eval: true },
+      );
+      worker.once("error", reject);
+      worker.once("message", (message) => {
+        if (message !== "primed") {
+          reject(new Error("pressure_cpu_worker_priming_failed"));
+          return;
+        }
+        resolve(worker);
+      });
+    });
+  retainedWorkers.push(
+    ...(await Promise.all(Array.from({ length: 4 }, startWorker))),
+  );
 }
 
 if (mode === "memory") {
@@ -36,12 +62,14 @@ if (mode === "memory") {
 if (mode === "io") {
   const descriptor = await open(`${root}/io-pressure.bin`, "w", 0o600);
   const block = Buffer.alloc(1024 * 1024, 2);
-  await ready();
-  for (;;) {
+  const writeCycle = async () => {
     for (let offset = 0; offset < 8 * 1024 * 1024; offset += block.byteLength)
       await descriptor.write(block, 0, block.byteLength, offset);
     await descriptor.sync();
-  }
+  };
+  await writeCycle();
+  await ready();
+  for (;;) await writeCycle();
 }
 
 if (mode === "disk")
@@ -63,5 +91,5 @@ if (mode === "inodes") {
 
 if (mode !== "io") await ready();
 
-setInterval(() => retainedMemory.length, 1_000);
+setInterval(() => retainedMemory.length + retainedWorkers.length, 1_000);
 await new Promise(() => undefined);

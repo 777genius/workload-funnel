@@ -3,6 +3,18 @@ import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 
 const OBSERVATION_WINDOW_TIMEOUT_MS = 4_000;
+const DEFAULT_RUNTIME_MAX_SEC = 30;
+const PRESSURE_RUNTIME_MAX_SEC_RANGE = Object.freeze({
+  maximum: 90,
+  minimum: 60,
+});
+const PRESSURE_ROLES = new Set([
+  "pressure-cpu",
+  "pressure-disk",
+  "pressure-inodes",
+  "pressure-io",
+  "pressure-memory",
+]);
 const observationWindowScript = fileURLToPath(
   new URL("./fixtures/systemd-observation-window.mjs", import.meta.url),
 );
@@ -158,7 +170,8 @@ export function exactBoundedHostPropertiesObserved(
     systemdInteger(values.MemoryHigh) !== 402_653_184n ||
     systemdInteger(values.MemoryMax) !== 536_870_912n ||
     systemdInteger(values.MemorySwapMax) !== 0n ||
-    systemdInteger(values.RuntimeMaxUSec) !== 30_000_000n ||
+    systemdInteger(values.RuntimeMaxUSec) !==
+      BigInt(plan.runtimeMaxSec ?? DEFAULT_RUNTIME_MAX_SEC) * 1_000_000n ||
     systemdInteger(values.TimeoutStopUSec) !== 5_000_000n ||
     !new Set(["9", "SIGKILL", "kill"]).has(values.FinalKillSignal) ||
     !new Set(["15", "SIGTERM", "term"]).has(values.KillSignal) ||
@@ -217,6 +230,7 @@ export async function cleanupBoundedSystemdUnit(config, record) {
 }
 
 export function boundedHostSystemdArguments(config, input) {
+  const runtimeMaxSec = input.runtimeMaxSec ?? DEFAULT_RUNTIME_MAX_SEC;
   if (
     !/^[a-z0-9-]{1,24}$/u.test(input.role) ||
     config.workloadUser !== "workload-funnel-synthetic" ||
@@ -235,7 +249,13 @@ export function boundedHostSystemdArguments(config, input) {
       (input.observationWindow.nodeExecutable !== config.nodeExecutable ||
         input.observationWindow.script !== observationWindowScript ||
         input.observationWindow.marker !==
-          `${config.workloadRoot}/.observed-${input.role}`))
+          `${config.workloadRoot}/.observed-${input.role}`)) ||
+    !Number.isSafeInteger(runtimeMaxSec) ||
+    (input.runtimeMaxSec === undefined
+      ? runtimeMaxSec !== DEFAULT_RUNTIME_MAX_SEC
+      : !PRESSURE_ROLES.has(input.role) ||
+        runtimeMaxSec < PRESSURE_RUNTIME_MAX_SEC_RANGE.minimum ||
+        runtimeMaxSec > PRESSURE_RUNTIME_MAX_SEC_RANGE.maximum)
   )
     throw new Error("bounded_host_process_invocation_invalid");
   const unit = `${config.runId}-${input.role}.service`;
@@ -294,7 +314,7 @@ export function boundedHostSystemdArguments(config, input) {
       "--property=RestrictNamespaces=yes",
       "--property=RestrictRealtime=yes",
       "--property=RestrictSUIDSGID=yes",
-      "--property=RuntimeMaxSec=30s",
+      `--property=RuntimeMaxSec=${String(runtimeMaxSec)}s`,
       "--property=SendSIGKILL=yes",
       "--property=SystemCallArchitectures=native",
       "--property=SystemCallFilter=@system-service ~@mount ~@privileged ~@resources ~@reboot",
@@ -313,6 +333,7 @@ export function boundedHostSystemdArguments(config, input) {
     description,
     joinNetworkOf: input.joinNetworkOf,
     observationWindow: input.observationWindow,
+    runtimeMaxSec,
     unit,
   });
 }
@@ -413,6 +434,45 @@ export function createBoundedHostProcessManager(config) {
     );
     await config.sliceOwnership.register();
     return record;
+  };
+  const assertOwnedActive = async (process, code) => {
+    const expected = units.get(process.role);
+    if (
+      expected === undefined ||
+      expected.unit !== process.unit ||
+      expected.invocationId !== process.invocationId ||
+      expected.controlGroup !== process.controlGroup ||
+      expected.description !== process.description ||
+      expected.runtimeMaxSec !== process.runtimeMaxSec
+    )
+      throw new Error("bounded_host_process_not_owned");
+    const observed = await showUnit(config, process.unit, [
+      "ActiveState",
+      "ControlGroup",
+      "Description",
+      "InvocationID",
+      "LoadState",
+      "RuntimeMaxUSec",
+    ]);
+    if (observed.code !== 0 || unitAbsent(observed)) throw new Error(code);
+    const values = parseShow(observed.stdout);
+    if (
+      values.ActiveState !== "active" ||
+      values.ControlGroup !== process.controlGroup ||
+      values.Description !== process.description ||
+      values.InvocationID !== process.invocationId ||
+      values.LoadState !== "loaded" ||
+      systemdInteger(values.RuntimeMaxUSec) !==
+        BigInt(process.runtimeMaxSec) * 1_000_000n
+    )
+      throw new Error(code);
+    return Object.freeze({
+      active: true,
+      controlGroup: process.controlGroup,
+      invocationId: process.invocationId,
+      runtimeMaxSec: process.runtimeMaxSec,
+      unit: process.unit,
+    });
   };
   return Object.freeze({
     async execute(executable, executableArguments, role, options = {}) {
@@ -524,6 +584,7 @@ export function createBoundedHostProcessManager(config) {
         description: plan.description,
         invocationId: values.InvocationID,
         role,
+        runtimeMaxSec: plan.runtimeMaxSec,
         unit: plan.unit,
       });
       units.set(role, process);
@@ -540,24 +601,10 @@ export function createBoundedHostProcessManager(config) {
         throw new Error("bounded_host_process_not_owned");
       const prior = cancellations.get(process.role);
       if (prior === undefined) {
-        const before = await showUnit(config, process.unit, [
-          "ActiveState",
-          "ControlGroup",
-          "Description",
-          "InvocationID",
-          "LoadState",
-        ]);
-        if (before.code !== 0 || unitAbsent(before))
-          throw new Error("bounded_host_process_cancel_identity_unproven");
-        const values = parseShow(before.stdout);
-        if (
-          values.ActiveState !== "active" ||
-          values.ControlGroup !== process.controlGroup ||
-          values.Description !== process.description ||
-          values.InvocationID !== process.invocationId ||
-          values.LoadState !== "loaded"
-        )
-          throw new Error("bounded_host_process_cancel_identity_unproven");
+        await assertOwnedActive(
+          process,
+          "bounded_host_process_cancel_identity_unproven",
+        );
         const stopped = await config.runner.run(
           config.systemctlExecutable,
           ["stop", process.unit],
@@ -595,20 +642,30 @@ export function createBoundedHostProcessManager(config) {
         confinedCancellationPerformed: false,
       });
     },
+    verify(process) {
+      return assertOwnedActive(
+        process,
+        "bounded_host_process_identity_unproven",
+      );
+    },
     async stop(process) {
-      const expected = units.get(process.role);
-      if (
-        expected === undefined ||
-        expected.unit !== process.unit ||
-        expected.invocationId !== process.invocationId
-      )
-        throw new Error("bounded_host_process_not_owned");
+      await assertOwnedActive(
+        process,
+        "bounded_host_process_stop_identity_unproven",
+      );
       const result = await config.runner.run(
         config.systemctlExecutable,
         ["stop", process.unit],
         { timeoutMs: 2_000 },
       );
       if (result.code !== 0)
+        throw new Error("bounded_host_process_stop_uncertain");
+      const after = await showUnit(config, process.unit, [
+        "ActiveState",
+        "ControlGroup",
+        "LoadState",
+      ]);
+      if (!unitInactiveOrAbsent(after))
         throw new Error("bounded_host_process_stop_uncertain");
       units.delete(process.role);
       cancellations.delete(process.role);

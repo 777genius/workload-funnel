@@ -35,6 +35,7 @@ import {
   parseOfficialCancel,
   parseOfficialJobInfo,
   parseOfficialSubmit,
+  stopHyperQueueCompatibilityProcesses,
 } from "./hyperqueue-contract.mjs";
 import { runMixedWorkloadMeasurement } from "./mixed-load.mjs";
 import { observeGateStorage, parseLoadAverage } from "./host-observation.mjs";
@@ -49,6 +50,10 @@ import {
   parsePsi,
   ProducerPressureGate,
 } from "./pressure.mjs";
+import {
+  encodePressureFixtureReadiness,
+  PRESSURE_FIXTURE_MODES,
+} from "./pressure-fixture-protocol.mjs";
 import {
   atomicAcceptanceSql,
   crashWindowAcceptanceSql,
@@ -492,14 +497,26 @@ describe("live pressure admission", () => {
     expect(result.slo.passed).toBe(true);
   });
 
-  it("starts the full measurement after the observed 9631ms fixture ramp", async () => {
+  it("starts the full measurement after staggered fixtures are primed with bounded runtime remaining", async () => {
     const initialNow = 1_000;
     const rampDurationMs = 9_631;
     let now = initialNow;
     let observations = 0;
     let pressureQuiesced = false;
     let readiness;
-    const modes = ["cpu", "memory", "io", "disk", "inodes"];
+    const modes = PRESSURE_FIXTURE_MODES;
+    const readyOffsets = new Map([
+      ["cpu", 1_200],
+      ["memory", 3_400],
+      ["io", 5_600],
+      ["disk", 7_800],
+      ["inodes", rampDurationMs],
+    ]);
+    const fixtures = modes.map((mode, index) => ({
+      mode,
+      process: { mode },
+      runtimeDeadlineMs: initialNow - (4 - index) * 1_000 + 75_000,
+    }));
     const result = await runMixedWorkloadMeasurement({
       clock: () => now,
       durationMs: 30_000,
@@ -527,9 +544,11 @@ describe("live pressure admission", () => {
         const readyAt = now + rampDurationMs;
         readiness = await waitForPressureFixtureReadiness({
           clock: () => now,
-          modes,
-          ready: () => {
-            if (now >= readyAt) return Promise.resolve();
+          fixtures,
+          readReady: (path) => {
+            const mode = path.slice(path.lastIndexOf("-") + 1);
+            if (now - initialNow >= readyOffsets.get(mode))
+              return Promise.resolve(encodePressureFixtureReadiness(mode));
             return Promise.reject(
               Object.assign(new Error("not ready"), {
                 code: "ENOENT",
@@ -537,6 +556,8 @@ describe("live pressure admission", () => {
             );
           },
           root: "/synthetic/pressure",
+          verifyRunning: (process) =>
+            Promise.resolve({ active: true, mode: process.mode }),
           wait: (milliseconds) => {
             now += Math.min(milliseconds, readyAt - now);
             return Promise.resolve();
@@ -554,10 +575,16 @@ describe("live pressure admission", () => {
         return Promise.resolve();
       },
     });
-    expect(readiness).toEqual({
+    expect(readiness).toMatchObject({
       allModesReady: true,
       durationMs: rampDurationMs,
+      minimumRuntimeRemainingMs: 61_369,
       modes,
+      verifiedFixtures: modes.map((mode) => ({
+        mode,
+        primed: expect.any(Object),
+        process: { active: true, mode },
+      })),
     });
     expect(result).toMatchObject({
       acceptedAfterReopen: expect.any(Number),
@@ -748,6 +775,35 @@ describe("S3-compatible contract", () => {
 });
 
 describe("official HyperQueue 0.26.2 translation", () => {
+  it("stops the exact worker before its server and never advances past an uncertain worker stop", async () => {
+    const server = Object.freeze({ invocationId: "server", role: "hq-server" });
+    const worker = Object.freeze({ invocationId: "worker", role: "hq-worker" });
+    const order = [];
+    const stopProcess = vi.fn((process) => {
+      order.push(process);
+      return Promise.resolve();
+    });
+    await expect(
+      stopHyperQueueCompatibilityProcesses({ server, stopProcess, worker }),
+    ).resolves.toBeUndefined();
+    expect(order).toEqual([worker, server]);
+
+    const uncertainStop = vi.fn((process) => {
+      if (process === worker)
+        return Promise.reject(new Error("bounded_host_process_stop_uncertain"));
+      return Promise.resolve();
+    });
+    await expect(
+      stopHyperQueueCompatibilityProcesses({
+        server,
+        stopProcess: uncertainStop,
+        worker,
+      }),
+    ).rejects.toThrow("bounded_host_process_stop_uncertain");
+    expect(uncertainStop).toHaveBeenCalledTimes(1);
+    expect(uncertainStop).toHaveBeenCalledWith(worker);
+  });
+
   it("uses global server-dir and the real submit/cancel schemas", () => {
     const submit = officialHyperQueueSubmitArguments({
       cpus: 1,

@@ -169,6 +169,10 @@ for (const token of [
   "exactBoundedHostPropertiesObserved",
   "bounded_host_process_cancel_identity_unproven",
   "confinedCancellationPerformed: true",
+  "PRESSURE_RUNTIME_MAX_SEC_RANGE",
+  "bounded_host_process_stop_identity_unproven",
+  "bounded_host_process_stop_uncertain",
+  "runtimeMaxSec ?? DEFAULT_RUNTIME_MAX_SEC",
 ])
   if (!bounded.includes(token))
     failures.push(`bounded host unit is missing ${token}`);
@@ -463,9 +467,23 @@ if (
 const pressureFixture = await source(
   "tooling/production-gate/fixtures/pressure-load.mjs",
 );
+const pressureFixtureProtocol = await source(
+  "tooling/production-gate/pressure-fixture-protocol.mjs",
+);
 for (const token of ['"cpu"', '"memory"', '"io"', '"disk"', '"inodes"'])
   if (!pressureFixture.includes(token))
     failures.push(`mixed pressure fixture is missing ${token}`);
+for (const token of [
+  "PRESSURE_FIXTURE_READY_SCHEMA",
+  "workersOnline: 4",
+  "retainedBytes: 28 * 16 * 1024 * 1024",
+  "syncedBytes: 8 * 1024 * 1024",
+  "writtenBytes: 48 * 1024 * 1024",
+  "createdFiles: 3_200",
+  "parsePressureFixtureReadiness",
+])
+  if (!pressureFixtureProtocol.includes(token))
+    failures.push(`pressure priming protocol is missing ${token}`);
 
 const mixedLoad = await source("tooling/production-gate/mixed-load.mjs");
 for (const token of [
@@ -493,6 +511,10 @@ for (const token of [
   "maximumIterations: 900",
   "waitForPressureFixtureReadiness",
   "pressureReadiness?.allModesReady === true",
+  "PRESSURE_FIXTURE_RUNTIME_MAX_SEC = 75",
+  "pressure_fixture_runtime_budget_insufficient",
+  "processManager.verify(process)",
+  "Promise.allSettled",
 ])
   if (!pressureStage.includes(token))
     failures.push(`real pressure stage is missing ${token}`);
@@ -501,6 +523,25 @@ if (/`cancel-\$\{String\(/u.test(pressureStage))
 for (const token of [".ready-${mode}", 'if (mode !== "io") await ready()'])
   if (!pressureFixture.includes(token))
     failures.push(`pressure fixture readiness is missing ${token}`);
+for (const token of [
+  "encodePressureFixtureReadiness(mode)",
+  "await writeCycle();\n  await ready();",
+  "await rename(temporary, marker)",
+  'parentPort.postMessage("primed")',
+])
+  if (!pressureFixture.includes(token))
+    failures.push(`pressure fixture priming is missing ${token}`);
+
+const hyperQueueContract = await source(
+  "tooling/production-gate/hyperqueue-contract.mjs",
+);
+for (const token of [
+  "stopHyperQueueCompatibilityProcesses",
+  "if (worker !== undefined) await stopProcess(worker)",
+  "await stopProcess(server)",
+])
+  if (!hyperQueueContract.includes(token))
+    failures.push(`HyperQueue ordered cleanup is missing ${token}`);
 
 const order = await source(
   "packages/scheduler-hyperqueue/src/features/dispatch-observation/filesystem-observation-order.ts",

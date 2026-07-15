@@ -112,6 +112,7 @@ describe("production gate host safety", () => {
         "--property=ProtectSystem=strict",
         "--property=NoNewPrivileges=yes",
         "--property=KillMode=control-group",
+        "--property=RuntimeMaxSec=30s",
         "--setenv=HOME=/nonexistent",
       ]),
     );
@@ -132,6 +133,39 @@ describe("production gate host safety", () => {
         },
       ),
     ).toThrow("bounded_host_process_invocation_invalid");
+  });
+
+  it("scopes an extended bounded runtime to exact pressure roles and a strict range", () => {
+    const config = {
+      allowedExecutables: new Set(["/usr/bin/node"]),
+      ioDevice: "/dev/vda",
+      runId,
+      workloadGroup: "workload-funnel-synthetic",
+      workloadRoot: `/var/lib/workload-funnel/allocations/${runId}`,
+      workloadUser: "workload-funnel-synthetic",
+    };
+    const pressure = boundedHostSystemdArguments(config, {
+      executable: "/usr/bin/node",
+      executableArguments: ["--version"],
+      role: "pressure-cpu",
+      runtimeMaxSec: 75,
+    });
+    expect(pressure.arguments).toContain("--property=RuntimeMaxSec=75s");
+    expect(pressure.runtimeMaxSec).toBe(75);
+
+    for (const input of [
+      { role: "probe", runtimeMaxSec: 75 },
+      { role: "pressure-cpu", runtimeMaxSec: 59 },
+      { role: "pressure-cpu", runtimeMaxSec: 91 },
+      { role: "pressure-unknown", runtimeMaxSec: 75 },
+    ])
+      expect(() =>
+        boundedHostSystemdArguments(config, {
+          executable: "/usr/bin/node",
+          executableArguments: [],
+          ...input,
+        }),
+      ).toThrow("bounded_host_process_invocation_invalid");
   });
 
   it("refuses executable digest, inode, mode, and canonical-path drift", async () => {

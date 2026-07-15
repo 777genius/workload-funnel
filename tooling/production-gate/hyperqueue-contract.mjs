@@ -283,6 +283,22 @@ async function observeCanceled(config, global, mapping) {
   }
 }
 
+export async function stopHyperQueueCompatibilityProcesses({
+  server,
+  stopProcess,
+  worker,
+}) {
+  if (
+    server === null ||
+    typeof server !== "object" ||
+    typeof stopProcess !== "function" ||
+    (worker !== undefined && (worker === null || typeof worker !== "object"))
+  )
+    throw new Error("hyperqueue_cleanup_input_invalid");
+  if (worker !== undefined) await stopProcess(worker);
+  await stopProcess(server);
+}
+
 export async function runHyperQueueCompatibilityProbe(config) {
   const release = await verifyHyperQueueRelease({
     archivePath: config.archivePath,
@@ -372,9 +388,10 @@ export async function runHyperQueueCompatibilityProbe(config) {
       workerListSchema: "array",
     });
   } finally {
-    await Promise.all([
-      worker === undefined ? undefined : config.stopProcess(worker),
-      config.stopProcess(server),
-    ]);
+    await stopHyperQueueCompatibilityProcesses({
+      server,
+      stopProcess: config.stopProcess,
+      worker,
+    });
   }
 }

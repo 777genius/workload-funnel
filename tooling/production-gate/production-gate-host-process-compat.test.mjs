@@ -89,7 +89,11 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     .join("\n")}\n`;
 }
 
-function processManagerHarness(completionResult, propertyOverrides = {}) {
+function processManagerHarness(
+  completionResult,
+  propertyOverrides = {},
+  stopResult = { code: 0, stderr: "", stdout: "" },
+) {
   const events = [];
   const reviewed = [];
   let complete;
@@ -118,9 +122,9 @@ function processManagerHarness(completionResult, propertyOverrides = {}) {
         return Promise.resolve({ code: 0, stderr: "", stdout: "" });
       }
       if (args[0] === "stop") {
-        stopped = true;
+        if (stopResult.code === 0) stopped = true;
         events.push("stop");
-        return Promise.resolve({ code: 0, stderr: "", stdout: "" });
+        return Promise.resolve(stopResult);
       }
       if (args[0] === "reset-failed") {
         events.push("reset");
@@ -230,6 +234,39 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
       "register",
       "stop",
     ]);
+  });
+
+  it("keeps exact ownership live and fails closed when a stop is uncertain", async () => {
+    const harness = processManagerHarness(
+      { code: 0, stderr: "", stdout: "" },
+      {},
+      { code: 1, stderr: "stop failed", stdout: "" },
+    );
+    const process = await harness.manager.start(
+      "/usr/bin/node",
+      ["-e", "setInterval(() => {}, 1000)"],
+      "hq-worker",
+    );
+    await expect(harness.manager.verify(process)).resolves.toMatchObject({
+      active: true,
+      controlGroup: process.controlGroup,
+      invocationId: process.invocationId,
+      runtimeMaxSec: 30,
+      unit: process.unit,
+    });
+    const callsBeforeStop = harness.runner.run.mock.calls.length;
+    await expect(harness.manager.stop(process)).rejects.toThrow(
+      "bounded_host_process_stop_uncertain",
+    );
+    expect(
+      harness.runner.run.mock.calls
+        .slice(callsBeforeStop)
+        .map(([, arguments_]) => arguments_[0]),
+    ).toEqual(["show", "stop"]);
+    await expect(harness.manager.verify(process)).resolves.toMatchObject({
+      active: true,
+      invocationId: process.invocationId,
+    });
   });
 
   it.each([
