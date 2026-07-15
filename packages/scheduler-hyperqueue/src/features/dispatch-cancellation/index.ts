@@ -65,15 +65,62 @@ export interface HyperQueueDispatchCancellationProvider {
   ): Promise<ExternalDispatchMutationReceipt>;
 }
 
+export interface HyperQueueCancellationObserver {
+  readonly observationOrderDurability: string;
+  observe(
+    input: Readonly<{
+      jobId: string;
+      mappingFingerprint: string;
+      taskId: string;
+    }>,
+  ): Promise<
+    Readonly<{
+      schedulerState:
+        | "waiting"
+        | "running"
+        | "finished"
+        | "failed"
+        | "canceled"
+        | "lost"
+        | "unknown";
+    }>
+  >;
+}
+
 export function createProvider(
   gateway: SchedulerMutationGatewayClient,
+  observer: HyperQueueCancellationObserver,
 ): HyperQueueDispatchCancellationProvider {
+  if (observer.observationOrderDurability !== "restart_durable")
+    throw new Error("hyperqueue_cancel_observation_order_not_durable");
   return Object.freeze({
     async cancelAfterInstall(input: HyperQueueCancellationInput) {
       const evidence = await gateway.mutate(
         createHyperQueueCancelMutation(input),
       );
-      return toExternalDispatchMutationReceipt(evidence);
+      const acknowledgement = toExternalDispatchMutationReceipt(evidence);
+      if (
+        acknowledgement.disposition !== "accepted" &&
+        acknowledgement.disposition !== "already_applied"
+      )
+        return acknowledgement;
+      try {
+        const observation = await observer.observe({
+          jobId: input.jobId,
+          mappingFingerprint: input.mappingFingerprint,
+          taskId: input.taskId,
+        });
+        if (observation.schedulerState !== "canceled")
+          throw new Error("hyperqueue_cancel_not_terminal");
+        return acknowledgement;
+      } catch {
+        return toExternalDispatchMutationReceipt({
+          ...acknowledgement.evidence,
+          comparisonResult: "cancel_acknowledged_observation_ambiguous",
+          outcome: "unknown",
+          reason: "hyperqueue_cancel_terminal_observation_required",
+        });
+      }
     },
   });
 }

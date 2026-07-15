@@ -16,7 +16,7 @@ function required(name) {
 }
 
 function statePath() {
-  return join(required("--server-directory"), "scheduler.json");
+  return join(required("--server-dir"), "scheduler.json");
 }
 
 function load() {
@@ -46,6 +46,7 @@ if (args.includes("--version")) {
 }
 
 const jobIndex = args.indexOf("job");
+const submitIndex = args.indexOf("submit");
 const workerIndex = args.indexOf("worker");
 const fixtureWorkerIndex = args.indexOf("fixture-worker");
 const fixtureServerRestartIndex = args.indexOf("fixture-server-restart");
@@ -85,11 +86,11 @@ if (fixtureWorkerIndex >= 0) {
   process.exit(0);
 }
 
-if (jobIndex >= 0 && args[jobIndex + 1] === "submit") {
+if (submitIndex >= 0) {
   const state = load();
   state.mutationCalls += 1;
   const mappingFingerprint = required("--mapping-fingerprint");
-  const jobId = `job-${String(state.nextJobId)}`;
+  const jobId = String(state.nextJobId);
   state.nextJobId += 1;
   state.jobs[jobId] = {
     exitCode: null,
@@ -121,13 +122,7 @@ if (jobIndex >= 0 && args[jobIndex + 1] === "submit") {
     writeFileSync(2, "synthetic partition after submit\n");
     process.exit(70);
   }
-  output({
-    jobId,
-    mappingFingerprint,
-    schemaVersion: 1,
-    state: "accepted",
-    taskId: "0",
-  });
+  output({ id: Number(jobId) });
   process.exit(0);
 }
 
@@ -135,20 +130,12 @@ if (jobIndex >= 0 && args[jobIndex + 1] === "cancel") {
   const state = load();
   state.mutationCalls += 1;
   const jobId = args[jobIndex + 2];
-  const taskId = required("--task");
-  const mappingFingerprint = required("--mapping-fingerprint");
   const job = state.jobs[jobId];
   if (job === undefined) throw new Error("job absent");
   job.state = "canceled";
   job.sourceSequence += 1;
   save(state);
-  output({
-    jobId,
-    mappingFingerprint,
-    schemaVersion: 1,
-    state: "canceled",
-    taskId,
-  });
+  output({});
   process.exit(0);
 }
 
@@ -157,19 +144,31 @@ if (jobIndex >= 0 && args[jobIndex + 1] === "info") {
   const jobId = args[jobIndex + 2];
   const job = state.jobs[jobId];
   if (job === undefined) throw new Error("job absent");
-  output({ schemaVersion: 1, ...job });
+  output([
+    {
+      id: Number(jobId),
+      tasks: [
+        {
+          exit_code: job.exitCode,
+          id: Number(job.taskId),
+          state: job.state,
+          worker_id: job.workerId,
+        },
+      ],
+    },
+  ]);
   process.exit(0);
 }
 
 if (workerIndex >= 0 && args[workerIndex + 1] === "list") {
   const state = load();
-  output({
-    schemaVersion: 1,
-    shimProtocol: "phase7.scheduler-shim.v1",
-    sourceEpoch: 1,
-    sourceSequence: state.workerSequence,
-    workers: state.workers,
-  });
+  output(
+    state.workers.map((worker) => ({
+      id: worker.workerId,
+      resources: worker.customResources,
+      state: worker.state,
+    })),
+  );
   process.exit(0);
 }
 

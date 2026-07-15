@@ -1,5 +1,6 @@
 import { SCHEDULER_SHIM_PROTOCOL } from "@workload-funnel/node-execution/scheduler-shim-entrypoint";
 import type { DispatchEvidence } from "@workload-funnel/workload-control/dispatch-reconciliation";
+import { createHash } from "node:crypto";
 
 export interface HyperQueueWorkerInventoryExecutor {
   executeRead(
@@ -11,6 +12,13 @@ export interface HyperQueueWorkerInventoryExecutor {
 export interface HyperQueueWorkerInventoryLimits {
   readonly maxOutputBytes: number;
   readonly timeoutMs: number;
+}
+
+export interface HyperQueueWorkerInventoryOrder {
+  readonly durability: string;
+  next(
+    source: string,
+  ): Promise<Readonly<{ sourceEpoch: number; sourceSequence: number }>>;
 }
 
 export interface SchedulerWorkerInventoryItem {
@@ -27,38 +35,39 @@ export interface SchedulerInventory {
 
 interface UntrustedWorker {
   readonly [key: string]: unknown;
-  readonly customResources?: unknown;
+  readonly custom_resources?: unknown;
+  readonly id?: unknown;
+  readonly resources?: unknown;
   readonly state?: unknown;
-  readonly workerId?: unknown;
-}
-
-interface UntrustedInventory {
-  readonly [key: string]: unknown;
-  readonly schemaVersion?: unknown;
-  readonly shimProtocol?: unknown;
-  readonly sourceEpoch?: unknown;
-  readonly sourceSequence?: unknown;
-  readonly workers?: unknown;
 }
 
 function parseWorker(value: unknown): SchedulerWorkerInventoryItem {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error("hyperqueue_worker_schema_invalid");
   const worker = value as UntrustedWorker;
+  const workerId = Number.isSafeInteger(worker.id)
+    ? String(worker.id)
+    : worker.id;
+  const rawState =
+    typeof worker.state === "string" ? worker.state.toLowerCase() : undefined;
+  const state =
+    rawState === "running"
+      ? "running"
+      : rawState === "idle"
+        ? "idle"
+        : rawState === "offline" || rawState === "stopped"
+          ? "offline"
+          : undefined;
+  const resourceValue = worker.custom_resources ?? worker.resources ?? {};
   if (
-    Object.keys(worker).sort().join() !==
-      ["customResources", "state", "workerId"].sort().join() ||
-    typeof worker.workerId !== "string" ||
-    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(worker.workerId) ||
-    (worker.state !== "idle" &&
-      worker.state !== "running" &&
-      worker.state !== "offline") ||
-    typeof worker.customResources !== "object" ||
-    worker.customResources === null ||
-    Array.isArray(worker.customResources)
+    typeof workerId !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(workerId) ||
+    state === undefined ||
+    typeof resourceValue !== "object" ||
+    Array.isArray(resourceValue)
   )
     throw new Error("hyperqueue_worker_schema_invalid");
-  const resources = worker.customResources as Readonly<Record<string, unknown>>;
+  const resources = resourceValue as Readonly<Record<string, unknown>>;
   if (
     Object.entries(resources).some(
       ([key, amount]) =>
@@ -72,13 +81,14 @@ function parseWorker(value: unknown): SchedulerWorkerInventoryItem {
     customResources: Object.freeze(
       resources as Readonly<Record<string, number>>,
     ),
-    state: worker.state,
-    workerId: worker.workerId,
+    state,
+    workerId,
   });
 }
 
 export function parseHyperQueueWorkerInventory(
   output: string,
+  order: Readonly<{ sourceEpoch: number; sourceSequence: number }>,
 ): SchedulerInventory {
   let decoded: unknown;
   try {
@@ -86,47 +96,33 @@ export function parseHyperQueueWorkerInventory(
   } catch {
     throw new Error("hyperqueue_worker_inventory_malformed");
   }
-  if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded))
-    throw new Error("hyperqueue_worker_schema_invalid");
-  const value = decoded as UntrustedInventory;
   if (
-    Object.keys(value).sort().join() !==
-      [
-        "schemaVersion",
-        "shimProtocol",
-        "sourceEpoch",
-        "sourceSequence",
-        "workers",
-      ]
-        .sort()
-        .join() ||
-    value.schemaVersion !== 1 ||
-    value.shimProtocol !== SCHEDULER_SHIM_PROTOCOL ||
-    !Number.isSafeInteger(value.sourceEpoch) ||
-    (value.sourceEpoch as number) < 1 ||
-    !Number.isSafeInteger(value.sourceSequence) ||
-    (value.sourceSequence as number) < 1 ||
-    !Array.isArray(value.workers)
+    !Array.isArray(decoded) ||
+    !Number.isSafeInteger(order.sourceEpoch) ||
+    order.sourceEpoch < 1 ||
+    !Number.isSafeInteger(order.sourceSequence) ||
+    order.sourceSequence < 1
   )
     throw new Error("hyperqueue_worker_schema_invalid");
   return Object.freeze({
     evidence: Object.freeze({
       complete: true,
-      digest: `worker-inventory:${String(value.sourceEpoch)}:${String(value.sourceSequence)}`,
+      digest: `sha256:${createHash("sha256").update(output, "utf8").digest("hex")}`,
       kind: "scheduler_event",
       observed: "accepted",
       source: "scheduler-hyperqueue-workers",
-      sourceEpoch: value.sourceEpoch as number,
-      sourceSequence: value.sourceSequence as number,
+      sourceEpoch: order.sourceEpoch,
+      sourceSequence: order.sourceSequence,
     }),
     shimProtocol: SCHEDULER_SHIM_PROTOCOL,
-    workers: Object.freeze(value.workers.map(parseWorker)),
+    workers: Object.freeze(decoded.map(parseWorker)),
   });
 }
 
 export function createProvider(
   executor: HyperQueueWorkerInventoryExecutor,
   limits: HyperQueueWorkerInventoryLimits,
+  order: HyperQueueWorkerInventoryOrder,
 ) {
   if (
     !Number.isSafeInteger(limits.maxOutputBytes) ||
@@ -137,6 +133,8 @@ export function createProvider(
     limits.timeoutMs > 60_000
   )
     throw new Error("hyperqueue_worker_inventory_limits_invalid");
+  if (order.durability !== "restart_durable")
+    throw new Error("hyperqueue_worker_inventory_order_not_durable");
   return Object.freeze({
     async inventory(): Promise<SchedulerInventory> {
       const output = await executor.executeRead(
@@ -145,7 +143,10 @@ export function createProvider(
       );
       if (Buffer.byteLength(output) > limits.maxOutputBytes)
         throw new Error("hyperqueue_worker_inventory_output_limit_exceeded");
-      return parseHyperQueueWorkerInventory(output);
+      return parseHyperQueueWorkerInventory(
+        output,
+        await order.next("worker-inventory"),
+      );
     },
   });
 }

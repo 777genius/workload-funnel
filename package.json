@@ -9,7 +9,7 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check && node tooling/architecture/check-phase7-hyperqueue.mjs && node tooling/architecture/check-phase8-production.mjs",
+    "architecture:check": "node tooling/architecture/check-dependencies.mjs && node tooling/architecture/check-mutation-fence-import-bijection.mjs && node tooling/architecture/generate-composition.mjs --check && node tooling/architecture/check-phase7-hyperqueue.mjs && node tooling/architecture/check-phase8-production.mjs && node tooling/architecture/check-production-gate.mjs",
     "build": "pnpm --filter './packages/*' --filter './apps/operator-cli' --filter './apps/scheduler-mutation-gateway' build",
     "canary:hosted": "pnpm build && node tooling/hosted-canary/run.mjs",
     "changeset": "changeset",
@@ -23,6 +23,7 @@
     "lint": "pnpm lint:code && pnpm lint:docs",
     "lint:code": "eslint . --max-warnings=0",
     "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.pnpm-store\"",
+    "production-gate:host": "node tooling/production-gate/run.mjs",
     "test": "vitest run",
     "test:e2e": "vitest run tooling/e2e/full-synthetic-lifecycle.test.ts",
     "test:hosted-canary": "vitest run packages/bridge-subscription-runtime/src/features/runtime-operation-dispatch/tests/hosted-canary-runtime.test.ts tooling/hosted-canary/hosted-canary.test.mjs && node --test tooling/hosted-canary/standalone-probe.process-regression.mjs",

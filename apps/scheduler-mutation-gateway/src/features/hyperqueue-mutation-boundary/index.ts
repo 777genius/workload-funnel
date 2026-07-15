@@ -79,7 +79,7 @@ class GatewayCredentialedExecutor implements CredentialedHyperQueueExecutor {
     const result = await this.run(
       [
         ...(this.config.fixedExecutableArguments ?? []),
-        "--server-directory",
+        "--server-dir",
         this.config.mutationServerDirectory,
         ...args,
       ],

@@ -34,17 +34,13 @@ export interface HyperQueueCliMutationResult {
   readonly externalReference: string;
   readonly jobId: string;
   readonly mappingFingerprint: string;
-  readonly state: "accepted" | "canceled";
+  readonly state: "accepted" | "cancel_acknowledged";
   readonly taskId: string;
 }
 
 interface JsonRecord {
   readonly [key: string]: unknown;
-  readonly jobId?: unknown;
-  readonly mappingFingerprint?: unknown;
-  readonly schemaVersion?: unknown;
-  readonly state?: unknown;
-  readonly taskId?: unknown;
+  readonly id?: unknown;
 }
 
 function record(value: unknown): JsonRecord {
@@ -67,6 +63,21 @@ function identifier(value: unknown): string {
   return value;
 }
 
+function canonicalJobId(value: unknown): string {
+  if (!Number.isSafeInteger(value) || (value as number) < 0)
+    throw new Error("hyperqueue_cli_schema_invalid");
+  return String(value);
+}
+
+function canonicalJobIdText(value: unknown): string {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value))
+    throw new Error("hyperqueue_cli_schema_invalid");
+  const number = Number(value);
+  if (!Number.isSafeInteger(number))
+    throw new Error("hyperqueue_cli_schema_invalid");
+  return value;
+}
+
 function parseMutationOutput(
   output: string,
   mutation: HyperQueueMutation,
@@ -78,29 +89,18 @@ function parseMutationOutput(
     throw new Error("hyperqueue_cli_output_malformed");
   }
   const value = record(decoded);
-  exactKeys(value, [
-    "jobId",
-    "mappingFingerprint",
-    "schemaVersion",
-    "state",
-    "taskId",
-  ]);
-  if (value.schemaVersion !== 1)
-    throw new Error("hyperqueue_cli_schema_unsupported");
-  const jobId = identifier(value.jobId);
-  const taskId = identifier(value.taskId);
-  const mappingFingerprint = identifier(value.mappingFingerprint);
-  if (
-    mappingFingerprint !== mutation.mappingFingerprint ||
-    (mutation.kind === "cancel" &&
-      (mutation.jobId !== jobId || mutation.taskId !== taskId))
-  )
-    throw new Error("hyperqueue_cli_mapping_mismatch");
-  const expectedState = mutation.kind === "submit" ? "accepted" : "canceled";
-  if (value.state !== expectedState)
-    throw new Error("hyperqueue_cli_state_invalid");
+  if (mutation.kind === "submit") exactKeys(value, ["id"]);
+  else exactKeys(value, []);
+  const jobId =
+    mutation.kind === "submit"
+      ? canonicalJobId(value.id)
+      : canonicalJobIdText(mutation.jobId);
+  const taskId = mutation.kind === "submit" ? "0" : identifier(mutation.taskId);
+  const mappingFingerprint = identifier(mutation.mappingFingerprint);
+  const expectedState =
+    mutation.kind === "submit" ? "accepted" : "cancel_acknowledged";
   return Object.freeze({
-    externalReference: `hq://${jobId}/${taskId}`,
+    externalReference: `hq://${jobId}`,
     jobId,
     mappingFingerprint,
     state: expectedState,
@@ -120,7 +120,6 @@ function submitArguments(
   shimExecutable: string,
 ): readonly string[] {
   const args = [
-    "job",
     "submit",
     "--output-mode",
     "json",
@@ -155,16 +154,13 @@ function submitArguments(
 function cancelArguments(
   mutation: Extract<HyperQueueMutation, { readonly kind: "cancel" }>,
 ): readonly string[] {
+  canonicalJobIdText(mutation.jobId);
   return Object.freeze([
     "job",
     "cancel",
     mutation.jobId,
-    "--task",
-    mutation.taskId,
     "--output-mode",
     "json",
-    "--mapping-fingerprint",
-    mutation.mappingFingerprint,
   ]);
 }
 

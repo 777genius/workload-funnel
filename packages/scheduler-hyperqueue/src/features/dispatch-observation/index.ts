@@ -1,4 +1,5 @@
-import { SCHEDULER_SHIM_PROTOCOL } from "@workload-funnel/node-execution/scheduler-shim-entrypoint";
+import { createHash } from "node:crypto";
+
 import type { DispatchEvidence } from "@workload-funnel/workload-control/dispatch-reconciliation";
 
 export interface HyperQueueReadExecutor {
@@ -15,6 +16,13 @@ export interface HyperQueueReadExecutor {
 export interface HyperQueueReadLimits {
   readonly maxOutputBytes: number;
   readonly timeoutMs: number;
+}
+
+export interface HyperQueueObservationOrder {
+  readonly durability: string;
+  next(
+    source: string,
+  ): Promise<Readonly<{ sourceEpoch: number; sourceSequence: number }>>;
 }
 
 export interface HyperQueueDispatchMapping {
@@ -39,16 +47,13 @@ export interface HyperQueueDispatchObservation {
 
 interface JsonRecord {
   readonly [key: string]: unknown;
+  readonly id?: unknown;
+  readonly tasks?: unknown;
   readonly exitCode?: unknown;
-  readonly jobId?: unknown;
-  readonly mappingFingerprint?: unknown;
-  readonly schemaVersion?: unknown;
-  readonly shimProtocol?: unknown;
-  readonly sourceEpoch?: unknown;
-  readonly sourceSequence?: unknown;
+  readonly exit_code?: unknown;
   readonly state?: unknown;
-  readonly taskId?: unknown;
-  readonly workerId?: unknown;
+  readonly worker?: unknown;
+  readonly worker_id?: unknown;
 }
 
 function record(value: unknown): JsonRecord {
@@ -57,6 +62,8 @@ function record(value: unknown): JsonRecord {
   return value as JsonRecord;
 }
 
+function identifier(value: unknown): string;
+function identifier(value: unknown, nullable: true): string | null;
 function identifier(value: unknown, nullable = false): string | null {
   if (nullable && value === null) return null;
   if (
@@ -67,9 +74,35 @@ function identifier(value: unknown, nullable = false): string | null {
   return value;
 }
 
+function numericIdentifier(value: unknown): string {
+  if (Number.isSafeInteger(value) && (value as number) >= 0)
+    return String(value);
+  return identifier(value);
+}
+
+function schedulerState(
+  value: unknown,
+): HyperQueueDispatchObservation["schedulerState"] {
+  if (typeof value !== "string")
+    throw new Error("hyperqueue_observation_schema_invalid");
+  const normalized = value.toLowerCase();
+  if (normalized === "queued") return "waiting";
+  if (
+    normalized === "waiting" ||
+    normalized === "running" ||
+    normalized === "finished" ||
+    normalized === "failed" ||
+    normalized === "canceled" ||
+    normalized === "lost"
+  )
+    return normalized;
+  return "unknown";
+}
+
 export function parseHyperQueueObservation(
   output: string,
   mapping: HyperQueueDispatchMapping,
+  order: Readonly<{ sourceEpoch: number; sourceSequence: number }>,
 ): HyperQueueDispatchObservation {
   let decoded: unknown;
   try {
@@ -77,49 +110,39 @@ export function parseHyperQueueObservation(
   } catch {
     throw new Error("hyperqueue_observation_malformed");
   }
-  const value = record(decoded);
-  const keys = [
-    "exitCode",
-    "jobId",
-    "mappingFingerprint",
-    "schemaVersion",
-    "shimProtocol",
-    "sourceEpoch",
-    "sourceSequence",
-    "state",
-    "taskId",
-    "workerId",
-  ];
-  if (Object.keys(value).sort().join() !== keys.sort().join())
+  if (!Array.isArray(decoded) || decoded.length !== 1)
     throw new Error("hyperqueue_observation_schema_invalid");
-  const states = new Set([
-    "waiting",
-    "running",
-    "finished",
-    "failed",
-    "canceled",
-    "lost",
-    "unknown",
-  ]);
-  const jobId = identifier(value.jobId);
-  const taskId = identifier(value.taskId);
-  const fingerprint = identifier(value.mappingFingerprint);
+  const job = record(decoded[0]);
+  const jobId = numericIdentifier(job.id);
+  if (!Array.isArray(job.tasks))
+    throw new Error("hyperqueue_observation_schema_invalid");
+  const tasks = job.tasks
+    .map(record)
+    .filter((task) => numericIdentifier(task.id) === mapping.taskId);
+  if (tasks.length !== 1)
+    throw new Error("hyperqueue_observation_schema_invalid");
+  const value = tasks.at(0);
+  if (value === undefined)
+    throw new Error("hyperqueue_observation_schema_invalid");
   if (
-    value.schemaVersion !== 1 ||
-    value.shimProtocol !== SCHEDULER_SHIM_PROTOCOL ||
     jobId !== mapping.jobId ||
-    taskId !== mapping.taskId ||
-    fingerprint !== mapping.mappingFingerprint ||
-    typeof value.state !== "string" ||
-    !states.has(value.state) ||
-    !Number.isSafeInteger(value.sourceEpoch) ||
-    (value.sourceEpoch as number) < 1 ||
-    !Number.isSafeInteger(value.sourceSequence) ||
-    (value.sourceSequence as number) < 1 ||
-    (value.exitCode !== null && !Number.isSafeInteger(value.exitCode))
+    !Number.isSafeInteger(order.sourceEpoch) ||
+    order.sourceEpoch < 1 ||
+    !Number.isSafeInteger(order.sourceSequence) ||
+    order.sourceSequence < 1
   )
     throw new Error("hyperqueue_observation_schema_invalid");
-  const state = value.state as HyperQueueDispatchObservation["schedulerState"];
+  const state = schedulerState(value.state);
+  const exitCode = value.exit_code ?? value.exitCode ?? null;
+  if (exitCode !== null && !Number.isSafeInteger(exitCode))
+    throw new Error("hyperqueue_observation_schema_invalid");
+  const worker = value.worker_id ?? value.worker ?? null;
+  const workerId =
+    worker === null
+      ? null
+      : typeof worker === "number" && Number.isSafeInteger(worker)
+        ? String(worker)
+        : identifier(worker, true);
   const observed =
     state === "waiting"
       ? "accepted"
@@ -131,20 +154,21 @@ export function parseHyperQueueObservation(
   return Object.freeze({
     dispatchEvidence: Object.freeze({
       complete: !["lost", "unknown"].includes(state),
-      digest: `${mapping.mappingFingerprint}:${String(value.sourceEpoch)}:${String(value.sourceSequence)}:${state}`,
+      digest: `sha256:${createHash("sha256").update(output, "utf8").digest("hex")}`,
       kind: "adapter_lookup",
       observed,
       source: "scheduler-hyperqueue",
-      sourceEpoch: value.sourceEpoch as number,
-      sourceSequence: value.sourceSequence as number,
+      sourceEpoch: order.sourceEpoch,
+      sourceSequence: order.sourceSequence,
     }),
-    exitCode: value.exitCode as number | null,
+    exitCode: exitCode as number | null,
     schedulerState: state,
-    workerId: identifier(value.workerId, true),
+    workerId,
   });
 }
 
 export interface HyperQueueDispatchObserver {
+  readonly observationOrderDurability: "restart_durable";
   initialize(): Promise<void>;
   observe(
     mapping: HyperQueueDispatchMapping,
@@ -155,6 +179,7 @@ export function createProvider(
   executor: HyperQueueReadExecutor,
   exactVersion: string,
   limits: HyperQueueReadLimits,
+  order: HyperQueueObservationOrder,
 ): HyperQueueDispatchObserver {
   if (
     !Number.isSafeInteger(limits.maxOutputBytes) ||
@@ -165,24 +190,25 @@ export function createProvider(
     limits.timeoutMs > 60_000
   )
     throw new Error("hyperqueue_read_limits_invalid");
+  if (order.durability !== "restart_durable")
+    throw new Error("hyperqueue_observation_order_not_durable");
   return Object.freeze({
     initialize: () => executor.verifyExactVersion(`hq ${exactVersion}`, limits),
+    observationOrderDurability: "restart_durable" as const,
     async observe(mapping: HyperQueueDispatchMapping) {
       const output = await executor.executeRead(
-        [
-          "job",
-          "info",
-          mapping.jobId,
-          "--task",
-          mapping.taskId,
-          "--output-mode",
-          "json",
-        ],
+        ["job", "info", mapping.jobId, "--output-mode", "json"],
         limits,
       );
       if (Buffer.byteLength(output) > limits.maxOutputBytes)
         throw new Error("hyperqueue_observation_output_limit_exceeded");
-      return parseHyperQueueObservation(output, mapping);
+      return parseHyperQueueObservation(
+        output,
+        mapping,
+        await order.next("dispatch-observation"),
+      );
     },
   });
 }
+
+export { FilesystemHyperQueueObservationOrder } from "./filesystem-observation-order.js";

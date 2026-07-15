@@ -260,7 +260,7 @@ describe(
       const staleCancellation = createHyperQueueCancelMutation({
         acknowledgedInstall: cancelAcknowledgementA,
         dispatchId: "dispatch-cancel-a",
-        jobId: "job-1",
+        jobId: "1",
         mappingFingerprint: "mapping-fingerprint-1",
         mutationFence: cancelFenceA,
         operationId: "cancel-a-after-b",

@@ -93,7 +93,7 @@ if (
 for (const path of allProduction) {
   const source = readFileSync(path, "utf8");
   if (
-    /mutationServerDirectory|--server-directory/u.test(source) &&
+    /mutationServerDirectory|--server-dir/u.test(source) &&
     path !== soleMutationBoundary
   )
     fail(`scheduler mutation credential leaked to ${relative(root, path)}`);
@@ -157,6 +157,7 @@ for (const required of [
   "ambiguousSubmitLookupProven: false",
   "cancellationProcessTreeProven: false",
   "credentialCustodyProven: false",
+  "durableObservationSequenceProven: true",
   "fallbackExecutionTested: false",
   "neverRestartProven: false",
   "productionPolicyProfileApproved: false",

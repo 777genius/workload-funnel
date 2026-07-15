@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/777genius/workload-funnel/schemas/production-readiness-gate-v1.json",
+  "title": "WorkloadFunnel disposable-host production-readiness evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "components",
+    "evidenceDigest",
+    "finishedAt",
+    "host",
+    "overallVerdict",
+    "privilegedStartsEnabled",
+    "productionStartsEnabled",
+    "runId",
+    "schemaVersion",
+    "startedAt",
+    "syntheticEvidenceAcceptedForRealFields"
+  ],
+  "properties": {
+    "components": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/component" }
+    },
+    "evidenceDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "architecture",
+        "bootIdSha256",
+        "hostname",
+        "kernelRelease",
+        "machineIdSha256",
+        "reviewManifestSha256",
+        "sourceTreeDigest"
+      ],
+      "properties": {
+        "architecture": { "type": "string", "minLength": 1 },
+        "bootIdSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "hostname": { "type": "string", "minLength": 1 },
+        "kernelRelease": { "type": "string", "minLength": 1 },
+        "machineIdSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "reviewManifestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sourceTreeDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "overallVerdict": { "enum": ["PASS", "BLOCKED", "UNSUPPORTED"] },
+    "privilegedStartsEnabled": { "const": false },
+    "productionStartsEnabled": { "const": false },
+    "runId": {
+      "type": "string",
+      "pattern": "^wf-production-gate-[a-f0-9]{32}$"
+    },
+    "schemaVersion": {
+      "const": "workload-funnel.production-readiness-gate.v1"
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "syntheticEvidenceAcceptedForRealFields": { "const": false }
+  },
+  "$defs": {
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detail", "id", "passed", "source"],
+      "properties": {
+        "detail": {},
+        "id": { "type": "string", "pattern": "^[a-z0-9_]{1,128}$" },
+        "passed": { "type": "boolean" },
+        "source": { "enum": ["real", "synthetic"] }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence", "id", "reasonCode", "status"],
+      "properties": {
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/record" } },
+        "id": {
+          "enum": [
+            "attestation",
+            "preflight",
+            "postgres_fixture",
+            "postgres_production_adapter",
+            "object_compatibility_fixture",
+            "object_production_provider",
+            "hyperqueue_0_26_2",
+            "systemd_cgroup_v2",
+            "pressure_admission_slo",
+            "cleanup"
+          ]
+        },
+        "reasonCode": { "type": ["string", "null"] },
+        "status": { "enum": ["PASS", "BLOCKED", "UNSUPPORTED"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "PASS" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "minItems": 1,
+                "items": {
+                  "allOf": [
+                    { "$ref": "#/$defs/record" },
+                    {
+                      "properties": {
+                        "passed": { "const": true },
+                        "source": { "const": "real" }
+                      }
+                    }
+                  ]
+                }
+              },
+              "reasonCode": { "const": null }
+            }
+          },
+          "else": {
+            "properties": { "reasonCode": { "type": "string", "minLength": 1 } }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -9,7 +9,10 @@ import {
   HYPERQUEUE_RESEARCH_BASELINE,
 } from "@workload-funnel/scheduler-hyperqueue/capability-discovery";
 import { createProvider as createCancellationProvider } from "@workload-funnel/scheduler-hyperqueue/dispatch-cancellation";
-import { createProvider as createObservationProvider } from "@workload-funnel/scheduler-hyperqueue/dispatch-observation";
+import {
+  createProvider as createObservationProvider,
+  FilesystemHyperQueueObservationOrder,
+} from "@workload-funnel/scheduler-hyperqueue/dispatch-observation";
 import { createProvider as createSubmissionProvider } from "@workload-funnel/scheduler-hyperqueue/dispatch-submission";
 import { reconcileHyperQueueDispatch } from "@workload-funnel/scheduler-hyperqueue/hyperqueue-reconciliation";
 import { createProvider as createWorkerInventoryProvider } from "@workload-funnel/scheduler-hyperqueue/worker-inventory";
@@ -28,6 +31,15 @@ import {
 } from "./gateway-test-fixture.js";
 
 const environments: SyntheticGatewayEnvironment[] = [];
+
+function observationOrder(
+  environment: SyntheticGatewayEnvironment,
+  name: string,
+): FilesystemHyperQueueObservationOrder {
+  return new FilesystemHyperQueueObservationOrder(
+    `${environment.directory}/${name}.wal`,
+  );
+}
 
 afterEach(() => {
   for (const environment of environments.splice(0))
@@ -75,6 +87,7 @@ describe(
         approvedProductionVersion: null,
         ambiguousSubmitLookupProven: false,
         cancellationProcessTreeProven: false,
+        durableObservationSequenceProven: true,
         neverRestartProven: false,
         productionPolicyProfileApproved: false,
         securityReviewApproved: false,
@@ -114,7 +127,7 @@ describe(
       });
       expect(submitted.disposition).toBe("accepted");
       expect(syntheticState(environment).mutationCalls).toBe(1);
-      expect(syntheticState(environment).submissions["job-1"]).toEqual({
+      expect(syntheticState(environment).submissions["1"]).toEqual({
         requestedCpuCount: 1,
         requiredCustomResources: { gpu: 1 },
         restartPolicy: "never",
@@ -132,10 +145,11 @@ describe(
         readExecutor,
         "0.26.2",
         readLimits,
+        observationOrder(environment, "dispatch-order"),
       );
       await observer.initialize();
       const mapping = {
-        jobId: "job-1",
+        jobId: "1",
         mappingFingerprint: "mapping-fingerprint-1",
         taskId: "0",
       };
@@ -146,7 +160,7 @@ describe(
 
       await executeSyntheticRead(environment, [
         "fixture-worker",
-        "job-1",
+        "1",
         "running",
       ]);
       await expect(observer.observe(mapping)).resolves.toMatchObject({
@@ -154,11 +168,7 @@ describe(
         schedulerState: "running",
       });
 
-      await executeSyntheticRead(environment, [
-        "fixture-worker",
-        "job-1",
-        "lost",
-      ]);
+      await executeSyntheticRead(environment, ["fixture-worker", "1", "lost"]);
       const lost = await observer.observe(mapping);
       expect(lost.dispatchEvidence.complete).toBe(false);
       expect(
@@ -193,11 +203,11 @@ describe(
         null,
         "cancel-1",
       );
-      const cancellation = createCancellationProvider(gateway);
+      const cancellation = createCancellationProvider(gateway, observer);
       const canceled = await cancellation.cancelAfterInstall({
         acknowledgedInstall: cancelAck,
         dispatchId: "dispatch-1",
-        jobId: "job-1",
+        jobId: "1",
         mappingFingerprint: "mapping-fingerprint-1",
         mutationFence: cancelFence,
         operationId: "cancel-operation-1",
@@ -217,6 +227,7 @@ describe(
           executeRead: (args) => executeSyntheticRead(environment, args),
         },
         readLimits,
+        observationOrder(environment, "worker-order"),
       );
       await expect(inventory.inventory()).resolves.toMatchObject({
         workers: [{ customResources: { gpu: 1 }, workerId: "worker-1" }],
@@ -270,10 +281,11 @@ describe(
         },
         "0.26.2",
         readLimits,
+        observationOrder(environment, "restart-dispatch-order"),
       );
       await observer.initialize();
       const mapping = {
-        jobId: "job-1",
+        jobId: "1",
         mappingFingerprint: "mapping-fingerprint-restart",
         taskId: "0",
       };
@@ -339,6 +351,8 @@ describe(
     });
 
     it("rejects oversized read-only CLI output before schema decoding", async () => {
+      const environment = createSyntheticGatewayEnvironment();
+      environments.push(environment);
       const oversized = "x".repeat(1_025);
       const limits = { maxOutputBytes: 1_024, timeoutMs: 5_000 };
       const observer = createObservationProvider(
@@ -348,10 +362,11 @@ describe(
         },
         "0.26.2",
         limits,
+        observationOrder(environment, "oversized-dispatch-order"),
       );
       await expect(
         observer.observe({
-          jobId: "job-1",
+          jobId: "1",
           mappingFingerprint: "mapping-fingerprint-1",
           taskId: "0",
         }),
@@ -359,6 +374,7 @@ describe(
       const inventory = createWorkerInventoryProvider(
         { executeRead: () => Promise.resolve(oversized) },
         limits,
+        observationOrder(environment, "oversized-worker-order"),
       );
       await expect(inventory.inventory()).rejects.toThrow(
         "hyperqueue_worker_inventory_output_limit_exceeded",

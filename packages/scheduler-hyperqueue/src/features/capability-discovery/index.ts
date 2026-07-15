@@ -8,6 +8,7 @@ export interface HyperQueueProductionGateEvidence {
   readonly ambiguousSubmitLookupProven: boolean;
   readonly cancellationProcessTreeProven: boolean;
   readonly credentialCustodyProven: boolean;
+  readonly durableObservationSequenceProven: boolean;
   readonly fallbackExecutionTested: boolean;
   readonly neverRestartProven: boolean;
   readonly productionPolicyProfileApproved: boolean;
@@ -23,6 +24,7 @@ export const CHECKED_HYPERQUEUE_PRODUCTION_GATE: HyperQueueProductionGateEvidenc
     ambiguousSubmitLookupProven: false,
     cancellationProcessTreeProven: false,
     credentialCustodyProven: false,
+    durableObservationSequenceProven: true,
     fallbackExecutionTested: false,
     neverRestartProven: false,
     productionPolicyProfileApproved: false,

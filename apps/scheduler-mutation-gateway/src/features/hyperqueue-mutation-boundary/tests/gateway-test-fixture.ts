@@ -300,7 +300,7 @@ export async function executeSyntheticRead(
       fixturePath,
       "--fixture-version",
       "0.26.2",
-      "--server-directory",
+      "--server-dir",
       environment.schedulerDirectory,
       ...args,
     ],

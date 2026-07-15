@@ -3,7 +3,11 @@ import { rmSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { fingerprintMutationFence } from "@workload-funnel/kernel";
-import { createHyperQueueCancelMutation } from "@workload-funnel/scheduler-hyperqueue/dispatch-cancellation";
+import {
+  createHyperQueueCancelMutation,
+  createProvider as createCancellationProvider,
+} from "@workload-funnel/scheduler-hyperqueue/dispatch-cancellation";
+import { createProvider as createSubmissionProvider } from "@workload-funnel/scheduler-hyperqueue/dispatch-submission";
 
 import {
   createSyntheticGateway,
@@ -13,6 +17,7 @@ import {
   schedulerFence,
   scope,
   syntheticState,
+  unusedShimInvocation,
   type SyntheticGatewayEnvironment,
 } from "./gateway-test-fixture.js";
 
@@ -73,7 +78,7 @@ describe(
       const request = createHyperQueueCancelMutation({
         acknowledgedInstall: cancelAcknowledgement,
         dispatchId: "dispatch-cancel-barrier",
-        jobId: "job-1",
+        jobId: "1",
         mappingFingerprint: "mapping-fingerprint-1",
         mutationFence: cancelFence,
         operationId: "cancel-with-open-submit-revocation",
@@ -99,6 +104,103 @@ describe(
         "invalid_gateway_request",
       );
       expect(syntheticState(environment).mutationCalls).toBe(0);
+    });
+
+    it("treats an empty cancel ACK as unknown until exact terminal re-observation", async () => {
+      const environment = createSyntheticGatewayEnvironment();
+      environments.push(environment);
+      const gateway = createSyntheticGateway(environment);
+      await gateway.recovery.recover();
+      const dispatchId = "dispatch-cancel-observation";
+      const submitScope = scope("dispatch_submit", dispatchId);
+      const submitFence = schedulerFence("dispatch_submit", 1, {
+        effectScopeKey: `scheduler-dispatch:${dispatchId}`,
+        supersessionKey: `dispatch:${dispatchId}`,
+      });
+      const submitAcknowledgement = await installAndOpen(
+        gateway,
+        submitScope,
+        submitFence,
+      );
+      await createSubmissionProvider(gateway).submitAfterInstall({
+        acknowledgedInstall: submitAcknowledgement,
+        dispatchId,
+        jobName: "wf-dispatch-cancel-observation",
+        mappingFingerprint: "mapping-fingerprint-1",
+        mutationFence: submitFence,
+        operationId: "cancel-observation-submit",
+        requestedCpuCount: 1,
+        requiredCustomResources: {},
+        scope: submitScope,
+        shimInvocation: {
+          ...unusedShimInvocation(),
+          dispatchId,
+          mappingFingerprint: "mapping-fingerprint-1",
+        },
+      });
+      const revokedSubmitFence = Object.freeze({
+        ...submitFence,
+        expectedDesiredVersion: 2,
+        issuedStartRevocationRevision: 1,
+      });
+      const submitRevocationAcknowledgement = await installAndKeepClosed(
+        gateway,
+        submitScope,
+        revokedSubmitFence,
+        fingerprintMutationFence(submitFence),
+        "cancel-observation-submit-revocation",
+      );
+      const cancelScope = scope("dispatch_cancel", dispatchId);
+      const cancelFence = schedulerFence("dispatch_cancel", 1, {
+        effectScopeKey: `scheduler-dispatch:${dispatchId}`,
+        supersessionKey: `dispatch:${dispatchId}`,
+      });
+      const acknowledgedInstall = await installAndOpen(
+        gateway,
+        cancelScope,
+        cancelFence,
+        null,
+        "cancel-observation-install",
+      );
+      const input = {
+        acknowledgedInstall,
+        dispatchId,
+        jobId: "1",
+        mappingFingerprint: "mapping-fingerprint-1",
+        mutationFence: cancelFence,
+        operationId: "cancel-observation-operation",
+        scope: cancelScope,
+        submitRevocationAcknowledgement,
+        taskId: "0",
+      };
+      expect(() =>
+        createCancellationProvider(gateway, {
+          observationOrderDurability: "volatile",
+          observe: () =>
+            Promise.resolve({ schedulerState: "canceled" as const }),
+        }),
+      ).toThrow("hyperqueue_cancel_observation_order_not_durable");
+      const ambiguous = createCancellationProvider(gateway, {
+        observationOrderDurability: "restart_durable",
+        observe: () => Promise.resolve({ schedulerState: "running" as const }),
+      });
+      await expect(ambiguous.cancelAfterInstall(input)).resolves.toMatchObject({
+        disposition: "unknown",
+        evidence: {
+          outcome: "unknown",
+          reason: "hyperqueue_cancel_terminal_observation_required",
+        },
+      });
+      expect(syntheticState(environment).mutationCalls).toBe(2);
+
+      const exact = createCancellationProvider(gateway, {
+        observationOrderDurability: "restart_durable",
+        observe: () => Promise.resolve({ schedulerState: "canceled" as const }),
+      });
+      await expect(exact.cancelAfterInstall(input)).resolves.toMatchObject({
+        disposition: "accepted",
+      });
+      expect(syntheticState(environment).mutationCalls).toBe(2);
     });
   },
 );
