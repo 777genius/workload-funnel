@@ -4,6 +4,9 @@ import { OWNED_RESOURCE_PATTERN } from "./constants.mjs";
 
 export const MINIO_SUPERVISOR_STATE_FILE =
   "/tmp/workload-funnel-minio-supervisor.state";
+export const MINIO_SIGNAL_SHELL = "/bin/sh";
+export const MINIO_SIGNAL_SCRIPT = 'kill -USR1 "$1"';
+export const MINIO_SIGNAL_ARGV0 = "workload-funnel-minio-signal";
 
 function positiveSafeInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
@@ -129,8 +132,10 @@ export async function restartMinioServerProcessWithDocker({
     [
       "exec",
       identity,
-      "/bin/kill",
-      "-USR1",
+      MINIO_SIGNAL_SHELL,
+      "-c",
+      MINIO_SIGNAL_SCRIPT,
+      MINIO_SIGNAL_ARGV0,
       String(before.state.supervisorPid),
     ],
     5_000,

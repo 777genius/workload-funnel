@@ -379,13 +379,117 @@ describe("live pressure admission", () => {
       },
     });
     expect(result).toMatchObject({
+      acceptedAfterReopen: expect.any(Number),
       observedPause: true,
       observedReopen: true,
       protectedControlFailures: 0,
+      sampleCounts: {
+        cancel: expect.any(Number),
+        health: expect.any(Number),
+        status: expect.any(Number),
+      },
     });
     expect(onPause).toHaveBeenCalledOnce();
-    expect(produce).toHaveBeenCalledTimes(97);
-    expect(protectedControl).toHaveBeenCalledTimes(300);
+    expect(result.acceptedAfterReopen).toBeGreaterThan(0);
+    expect(produce.mock.calls.length).toBeGreaterThanOrEqual(100);
+    expect(produce.mock.calls.length).toBeLessThanOrEqual(256);
+    expect(result.sampleCounts.cancel).toBeGreaterThanOrEqual(100);
+    expect(result.sampleCounts.health).toBeGreaterThanOrEqual(100);
+    expect(result.sampleCounts.status).toBeGreaterThanOrEqual(100);
+    expect(protectedControl).toHaveBeenCalledTimes(
+      result.sampleCounts.cancel +
+        result.sampleCounts.health +
+        result.sampleCounts.status,
+    );
+  });
+
+  it("observes pressure independently of a slow cancellation sample", async () => {
+    let now = 1_000;
+    let observations = 0;
+    let releaseCancellation;
+    const cancel = vi.fn(() => {
+      if (releaseCancellation !== undefined) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        releaseCancellation = resolve;
+      });
+    });
+    const result = await runMixedWorkloadMeasurement({
+      clock: () => now,
+      durationMs: 10_000,
+      maximumIterations: 110,
+      maximumSamples: 100,
+      observe: () => {
+        observations += 1;
+        return Promise.resolve({
+          ...observation,
+          cpuPsiSome: observations <= 2 ? 0.25 : 0.01,
+          nowMs: now,
+          observedAtMs: now,
+        });
+      },
+      onPause: () => Promise.resolve(),
+      preciseClock: () => now,
+      produce: () => Promise.resolve(true),
+      protectedControls: {
+        cancel,
+        health: () => Promise.resolve(true),
+        status: () => Promise.resolve(true),
+      },
+      wait: () => {
+        now += 100;
+        if (observations === 5) releaseCancellation?.(true);
+        return Promise.resolve();
+      },
+    });
+
+    expect(result).toMatchObject({
+      acceptedAfterReopen: expect.any(Number),
+      durationMs: expect.any(Number),
+      observedPause: true,
+      observedReopen: true,
+      sampleCounts: { cancel: 100, health: 100, status: 100 },
+    });
+    expect(result.durationMs).toBeGreaterThanOrEqual(10_000);
+    expect(result.durationMs).toBeLessThanOrEqual(11_000);
+    expect(result.acceptedAfterReopen).toBeGreaterThan(0);
+    expect(cancel).toHaveBeenCalledTimes(100);
+    expect(result.slo.passed).toBe(true);
+  });
+
+  it("keeps the producer closed when the first live observation is critical", async () => {
+    let now = 1_000;
+    const produce = vi.fn(() => Promise.resolve(true));
+    const onAbort = vi.fn(() => Promise.resolve());
+    const result = await runMixedWorkloadMeasurement({
+      clock: () => now,
+      durationMs: 10_000,
+      maximumIterations: 100,
+      maximumSamples: 100,
+      observe: () =>
+        Promise.resolve({
+          ...observation,
+          cpuPsiSome: 0.7,
+          nowMs: now,
+          observedAtMs: now,
+        }),
+      onAbort,
+      preciseClock: () => now,
+      produce,
+      protectedControls: {
+        cancel: () => Promise.resolve(true),
+        health: () => Promise.resolve(true),
+        status: () => Promise.resolve(true),
+      },
+      wait: () => {
+        now += 100;
+        return Promise.resolve();
+      },
+    });
+
+    expect(result.abortedBeforeHostExhaustion).toBe(true);
+    expect(result.slo.passed).toBe(false);
+    expect(onAbort).toHaveBeenCalledOnce();
+    expect(produce).not.toHaveBeenCalled();
   });
 });
 

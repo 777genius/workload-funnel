@@ -67,12 +67,12 @@ write_state() {
 
 stop_server() {
   signal=$1
-  if [ "$server_pid" -gt 1 ] && /bin/kill -0 "$server_pid" 2>/dev/null; then
-    /bin/kill "-$signal" "$server_pid" 2>/dev/null || true
+  if [ "$server_pid" -gt 1 ] && kill -0 "$server_pid" 2>/dev/null; then
+    kill "-$signal" "$server_pid" 2>/dev/null || true
     (
       trap - USR1 TERM INT
       /bin/sleep 5
-      /bin/kill -KILL "$server_pid" 2>/dev/null || true
+      kill -KILL "$server_pid" 2>/dev/null || true
     ) &
     kill_timer_pid=$!
   fi
@@ -106,7 +106,7 @@ while [ "$stop_requested" = false ]; do
       break
     else
       server_status=$?
-      if /bin/kill -0 "$server_pid" 2>/dev/null; then
+      if kill -0 "$server_pid" 2>/dev/null; then
         continue
       fi
       break
@@ -114,7 +114,7 @@ while [ "$stop_requested" = false ]; do
   done
 
   if [ "$kill_timer_pid" -gt 1 ]; then
-    /bin/kill -TERM "$kill_timer_pid" 2>/dev/null || true
+    kill -TERM "$kill_timer_pid" 2>/dev/null || true
     wait "$kill_timer_pid" 2>/dev/null || true
     kill_timer_pid=0
   fi

@@ -319,6 +319,7 @@ export function boundedHostSystemdArguments(config, input) {
 
 export function createBoundedHostProcessManager(config) {
   const units = new Map();
+  const cancellations = new Map();
   const observeStarted = async (
     plan,
     requireControlGroup = true,
@@ -520,12 +521,79 @@ export function createBoundedHostProcessManager(config) {
       await finalize(recordId, plan, values);
       const process = Object.freeze({
         controlGroup: values.ControlGroup,
+        description: plan.description,
         invocationId: values.InvocationID,
         role,
         unit: plan.unit,
       });
       units.set(role, process);
       return process;
+    },
+    async cancel(process) {
+      const expected = units.get(process.role);
+      if (
+        expected === undefined ||
+        expected.unit !== process.unit ||
+        expected.invocationId !== process.invocationId ||
+        expected.controlGroup !== process.controlGroup
+      )
+        throw new Error("bounded_host_process_not_owned");
+      const prior = cancellations.get(process.role);
+      if (prior === undefined) {
+        const before = await showUnit(config, process.unit, [
+          "ActiveState",
+          "ControlGroup",
+          "Description",
+          "InvocationID",
+          "LoadState",
+        ]);
+        if (before.code !== 0 || unitAbsent(before))
+          throw new Error("bounded_host_process_cancel_identity_unproven");
+        const values = parseShow(before.stdout);
+        if (
+          values.ActiveState !== "active" ||
+          values.ControlGroup !== process.controlGroup ||
+          values.Description !== process.description ||
+          values.InvocationID !== process.invocationId ||
+          values.LoadState !== "loaded"
+        )
+          throw new Error("bounded_host_process_cancel_identity_unproven");
+        const stopped = await config.runner.run(
+          config.systemctlExecutable,
+          ["stop", process.unit],
+          { timeoutMs: 2_000 },
+        );
+        if (stopped.code !== 0)
+          throw new Error("bounded_host_process_stop_uncertain");
+        const after = await showUnit(config, process.unit, [
+          "ActiveState",
+          "ControlGroup",
+          "LoadState",
+        ]);
+        if (!unitInactiveOrAbsent(after))
+          throw new Error("bounded_host_process_stop_uncertain");
+        const evidence = Object.freeze({
+          cancellationObserved: true,
+          confinedCancellationPerformed: true,
+          controlGroup: process.controlGroup,
+          invocationId: process.invocationId,
+          killMode: "control-group",
+          unit: process.unit,
+        });
+        cancellations.set(process.role, evidence);
+        return evidence;
+      }
+      const observed = await showUnit(config, process.unit, [
+        "ActiveState",
+        "ControlGroup",
+        "LoadState",
+      ]);
+      if (!unitInactiveOrAbsent(observed))
+        throw new Error("bounded_host_process_cancellation_regressed");
+      return Object.freeze({
+        ...prior,
+        confinedCancellationPerformed: false,
+      });
     },
     async stop(process) {
       const expected = units.get(process.role);
@@ -543,6 +611,7 @@ export function createBoundedHostProcessManager(config) {
       if (result.code !== 0)
         throw new Error("bounded_host_process_stop_uncertain");
       units.delete(process.role);
+      cancellations.delete(process.role);
     },
   });
 }

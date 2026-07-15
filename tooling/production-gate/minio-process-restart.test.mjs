@@ -12,6 +12,9 @@ import { describe, expect, it, vi } from "vitest";
 import { objectContainerArguments } from "./docker-plan.mjs";
 import { GateDockerRuntime } from "./docker-runtime.mjs";
 import {
+  MINIO_SIGNAL_ARGV0,
+  MINIO_SIGNAL_SCRIPT,
+  MINIO_SIGNAL_SHELL,
   assertMinioRestartEvidence,
   parseMinioSupervisorState,
   proveMinioProcessRestart,
@@ -25,6 +28,18 @@ const executeFile = promisify(execFile);
 
 function state(generation, serverPid, supervisorPid = 7) {
   return `workload-funnel.minio-supervisor.v1|${String(supervisorPid)}|${String(generation)}|${String(serverPid)}`;
+}
+
+function signalCommand(supervisorPid) {
+  return [
+    "exec",
+    identity,
+    MINIO_SIGNAL_SHELL,
+    "-c",
+    MINIO_SIGNAL_SCRIPT,
+    MINIO_SIGNAL_ARGV0,
+    String(supervisorPid),
+  ];
 }
 
 function processObservation(overrides = {}) {
@@ -118,7 +133,7 @@ function renderSyntheticSupervisor(source, paths) {
 }
 
 describe("confined MinIO server-process restart", () => {
-  it("keeps the container and supervisor stable while changing server generation and PID", async () => {
+  it("passes the exact positive supervisor PID as a positional argument while preserving the boundary", async () => {
     const supervisorStates = [state(1, 11), state(1, 11), state(2, 12)];
     const calls = [];
     const runtime = new GateDockerRuntime({
@@ -140,7 +155,7 @@ describe("confined MinIO server-process restart", () => {
               stderr: "",
               stdout: `${supervisorStates.shift()}\n`,
             };
-          if (args[0] === "exec" && args[2] === "/bin/kill")
+          if (args[0] === "exec" && args[2] === MINIO_SIGNAL_SHELL)
             return { code: 0, stderr: "", stdout: "" };
           throw new Error("unexpected_test_command");
         }),
@@ -166,7 +181,11 @@ describe("confined MinIO server-process restart", () => {
       supervisorBoundaryStable: true,
       supervisorPid: 7,
     });
-    expect(calls).toContainEqual(["exec", identity, "/bin/kill", "-USR1", "7"]);
+    expect(
+      calls.filter((args) => args[0] === "exec" && args[2] === "/bin/sh"),
+    ).toEqual([signalCommand(7)]);
+    expect(MINIO_SIGNAL_SCRIPT).toBe('kill -USR1 "$1"');
+    expect(MINIO_SIGNAL_SCRIPT).not.toContain("7");
     expect(calls.some((args) => args[0] === "kill")).toBe(false);
     expect(calls.flat()).not.toContain("restart");
     expect(calls.flat()).not.toContain("start");
@@ -193,7 +212,7 @@ describe("confined MinIO server-process restart", () => {
             };
           if (args[0] === "exec" && args[2] === "/bin/cat")
             return { code: 0, stderr: "", stdout: `${state(1, 11)}\n` };
-          if (args[0] === "exec" && args[2] === "/bin/kill") {
+          if (args[0] === "exec" && args[2] === MINIO_SIGNAL_SHELL) {
             stopped = true;
             return { code: 0, stderr: "", stdout: "" };
           }
@@ -206,12 +225,55 @@ describe("confined MinIO server-process restart", () => {
     await expect(
       runtime.restartMinioServerProcess(name, identity),
     ).rejects.toThrow("minio_restart_container_boundary_unproven");
-    expect(calls).toContainEqual(["exec", identity, "/bin/kill", "-USR1", "7"]);
+    expect(calls).toContainEqual(signalCommand(7));
     expect(calls.some((args) => args[0] === "kill")).toBe(false);
     expect(
       calls.filter((args) => args[0] === "exec" && args[2] === "/bin/cat"),
     ).toHaveLength(1);
   });
+
+  it.each([
+    "7;exit 0",
+    "$(exit 0)",
+    "7\nexit 0",
+    "-7",
+    "0",
+    "9007199254740992",
+  ])(
+    "rejects supervisor PID injection before invoking the signal shell: %s",
+    async (supervisorPid) => {
+      const calls = [];
+      const runtime = new GateDockerRuntime({
+        executable: "/usr/bin/docker",
+        ioDevice: "/dev/vda",
+        runId,
+        runner: {
+          run: vi.fn(async (_executable, args) => {
+            calls.push(args);
+            if (args[0] === "container")
+              return {
+                code: 0,
+                stderr: "",
+                stdout: `running|401|${identity}|/${name}|${name}\n`,
+              };
+            if (args[0] === "exec" && args[2] === "/bin/cat")
+              return {
+                code: 0,
+                stderr: "",
+                stdout: `workload-funnel.minio-supervisor.v1|${supervisorPid}|1|11\n`,
+              };
+            throw new Error("unexpected_test_command");
+          }),
+        },
+        sandboxRoot: `/tmp/${runId}`,
+      });
+
+      await expect(
+        runtime.restartMinioServerProcess(name, identity),
+      ).rejects.toThrow("minio_restart_evidence_malformed");
+      expect(calls.some((args) => args[2] === MINIO_SIGNAL_SHELL)).toBe(false);
+    },
+  );
 
   it.each([
     ["", "empty"],
@@ -298,6 +360,24 @@ describe("confined MinIO server-process restart", () => {
     await expect(
       executeFile("/bin/sh", ["-n", supervisor]),
     ).resolves.toMatchObject({ stderr: "", stdout: "" });
+  });
+
+  it("forbids both absolute kill paths in production signaling sources", async () => {
+    const productionSources = await Promise.all([
+      readFile(
+        fileURLToPath(new URL("./minio-process-restart.mjs", import.meta.url)),
+        "utf8",
+      ),
+      readFile(
+        fileURLToPath(
+          new URL("./fixtures/minio-supervisor.sh", import.meta.url),
+        ),
+        "utf8",
+      ),
+    ]);
+    for (const forbidden of ["/bin/kill", "/usr/bin/kill"])
+      for (const source of productionSources)
+        expect(source).not.toContain(forbidden);
   });
 
   it("keeps the synthetic POSIX supervisor alive across an interrupted wait and racing USR1", async () => {

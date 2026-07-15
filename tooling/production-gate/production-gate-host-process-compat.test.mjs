@@ -17,11 +17,12 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
   const unit = systemdArguments
     .find((argument) => argument.startsWith("--unit="))
     .slice("--unit=".length);
-  const execStopPost = systemdArguments
-    .find((argument) => argument.startsWith("--property=ExecStopPost="))
-    .slice("--property=ExecStopPost=".length);
+  const execStopPost =
+    systemdArguments
+      .find((argument) => argument.startsWith("--property=ExecStopPost="))
+      ?.slice("--property=ExecStopPost=".length) ?? "";
   const values = {
-    ActiveState: "deactivating",
+    ActiveState: execStopPost === "" ? "active" : "deactivating",
     AmbientCapabilities: "",
     CapabilityBoundingSet: "",
     ControlGroup: `/wf.slice/wf-production.slice/wf-production-gate.slice/${runId}.slice/${unit}`,
@@ -31,7 +32,10 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     DevicePolicy: "closed",
     Environment:
       "HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC",
-    ExecStopPost: `{ path=/usr/bin/node ; argv[]=${execStopPost} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=1 ; code=(null) ; status=0/0 }`,
+    ExecStopPost:
+      execStopPost === ""
+        ? ""
+        : `{ path=/usr/bin/node ; argv[]=${execStopPost} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=1 ; code=(null) ; status=0/0 }`,
     FinalKillSignal: "SIGKILL",
     Group: "workload-funnel-synthetic",
     IOReadBandwidthMax: "/dev/vda 16M",
@@ -108,6 +112,11 @@ function processManagerHarness(completionResult, propertyOverrides = {}) {
   };
   const runner = {
     run: vi.fn((_executable, args) => {
+      if (args[0]?.startsWith("--unit=")) {
+        systemdArguments = args;
+        events.push("run-start");
+        return Promise.resolve({ code: 0, stderr: "", stdout: "" });
+      }
       if (args[0] === "stop") {
         stopped = true;
         events.push("stop");
@@ -186,6 +195,43 @@ function processManagerHarness(completionResult, propertyOverrides = {}) {
 }
 
 describe("systemd 255 bounded synchronous execution compatibility", () => {
+  it("measures repeated cancellation convergence around one confined process stop", async () => {
+    const harness = processManagerHarness({
+      code: 0,
+      stderr: "",
+      stdout: "",
+    });
+    const process = await harness.manager.start(
+      "/usr/bin/node",
+      ["-e", "setInterval(() => {}, 1000)"],
+      "cancel-probe",
+    );
+
+    await expect(harness.manager.cancel(process)).resolves.toMatchObject({
+      cancellationObserved: true,
+      confinedCancellationPerformed: true,
+      controlGroup: expect.stringMatching(/^\//u),
+      invocationId: expect.stringMatching(/^[a-f0-9]{32}$/u),
+      killMode: "control-group",
+      unit: `${runId}-cancel-probe.service`,
+    });
+    await expect(harness.manager.cancel(process)).resolves.toMatchObject({
+      cancellationObserved: true,
+      confinedCancellationPerformed: false,
+    });
+    expect(
+      harness.runner.run.mock.calls.filter(([, args]) => args[0] === "stop"),
+    ).toHaveLength(1);
+    expect(harness.events).toEqual([
+      "prepare",
+      "admit",
+      "run-start",
+      "finalize",
+      "register",
+      "stop",
+    ]);
+  });
+
   it.each([
     ["fast success", { code: 0, stderr: "", stdout: "hq-output\n" }],
     ["nonzero", { code: 7, stderr: "hq-error\n", stdout: "partial\n" }],

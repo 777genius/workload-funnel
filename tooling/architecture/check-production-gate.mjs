@@ -167,6 +167,8 @@ for (const token of [
   "ProtectSystem=strict",
   "workload-funnel-synthetic",
   "exactBoundedHostPropertiesObserved",
+  "bounded_host_process_cancel_identity_unproven",
+  "confinedCancellationPerformed: true",
 ])
   if (!bounded.includes(token))
     failures.push(`bounded host unit is missing ${token}`);
@@ -295,6 +297,7 @@ for (const token of [
   "IFS= read -r root_password",
   'MINIO_ROOT_USER="$root_user" MINIO_ROOT_PASSWORD="$root_password"',
   '[ "$restart_requested" = true ] || [ "$stop_requested" = true ]',
+  'kill -0 "$server_pid"',
 ])
   if (!minioSupervisor.includes(token))
     failures.push(`MinIO process supervisor is missing ${token}`);
@@ -308,6 +311,8 @@ if (
   minioSupervisor.includes("stop_requested=true\n  stop_server")
 )
   failures.push("MinIO signal handler performs a racy child transition");
+if (/(?:^|[ \t])\/(?:usr\/)?bin\/kill\b/mu.test(minioSupervisor))
+  failures.push("MinIO supervisor uses a forbidden absolute kill executable");
 
 const minioSupervisorRegression = await source(
   "tooling/production-gate/minio-process-restart.test.mjs",
@@ -322,6 +327,9 @@ for (const token of [
   "generation: 2",
   "interrupted wait and racing USR1",
   "never accepts a container stop",
+  "forbids both absolute kill paths",
+  "passes the exact positive supervisor PID",
+  "rejects supervisor PID injection",
 ])
   if (!minioSupervisorRegression.includes(token))
     failures.push(`MinIO credential regression is missing ${token}`);
@@ -337,13 +345,19 @@ for (const token of [
   "readinessAfterRestart",
   "containerConfinementStable",
   '"exec"',
-  '"/bin/kill"',
-  '"-USR1"',
+  'MINIO_SIGNAL_SHELL = "/bin/sh"',
+  "MINIO_SIGNAL_SCRIPT = 'kill -USR1 \"$1\"'",
+  "MINIO_SIGNAL_SCRIPT,",
+  "MINIO_SIGNAL_ARGV0,",
 ])
   if (!minioRestart.includes(token))
     failures.push(`MinIO process restart proof is missing ${token}`);
 if (minioRestart.includes('"kill", "--signal=USR1"'))
   failures.push("MinIO restart signals the container boundary");
+if (/\/(?:usr\/)?bin\/kill\b/u.test(minioRestart))
+  failures.push("MinIO restart uses a forbidden absolute kill executable");
+if (minioRestart.includes("executableProbe"))
+  failures.push("MinIO restart performs an unnecessary executable probe");
 if (
   !gate.includes("restartConfinedMinio") ||
   gate.includes("docker.restart(objectName)")
@@ -367,6 +381,36 @@ const pressureFixture = await source(
 for (const token of ['"cpu"', '"memory"', '"io"', '"disk"', '"inodes"'])
   if (!pressureFixture.includes(token))
     failures.push(`mixed pressure fixture is missing ${token}`);
+
+const mixedLoad = await source("tooling/production-gate/mixed-load.mjs");
+for (const token of [
+  "produceAcceptedWork",
+  "measureProtectedControl",
+  "Promise.allSettled(workers)",
+  "acceptedAfterReopen",
+  "sampleCounts",
+])
+  if (!mixedLoad.includes(token))
+    failures.push(`mixed pressure measurement is missing ${token}`);
+
+const pressureStage = await source(
+  "tooling/production-gate/pressure-stage.mjs",
+);
+for (const token of [
+  '"cancel-probe"',
+  "processManager.cancel(cancellationProbe)",
+  "pressureQuiescedAfterPause",
+  "realConfinedCancellationObserved",
+  "evidence.sampleCounts.cancel >= 100",
+  "evidence.sampleCounts.health >= 100",
+  "evidence.sampleCounts.status >= 100",
+  "evidence.acceptedAfterReopen > 0",
+  "maximumIterations: 900",
+])
+  if (!pressureStage.includes(token))
+    failures.push(`real pressure stage is missing ${token}`);
+if (/`cancel-\$\{String\(/u.test(pressureStage))
+  failures.push("real pressure stage creates one systemd unit per sample");
 
 const order = await source(
   "packages/scheduler-hyperqueue/src/features/dispatch-observation/filesystem-observation-order.ts",

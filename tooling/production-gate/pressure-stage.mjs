@@ -42,7 +42,8 @@ export async function runPressureAdmissionStage({
   const pressureRoot = `${allocation.root}/pressure`;
   await mkdir(pressureRoot, { mode: 0o700 });
   await chown(pressureRoot, allocation.uid, allocation.gid);
-  let cancelSequence = 0;
+  let cancellationProbe;
+  let confinedCancellationEvidence;
   const pressureProcesses = [];
   const pressureModes = Object.freeze([
     "cpu",
@@ -52,6 +53,7 @@ export async function runPressureAdmissionStage({
     "inodes",
   ]);
   let pressureStopped = false;
+  let pressureQuiescedAfterPause = false;
   const stopPressure = async () => {
     if (pressureStopped) return;
     pressureStopped = true;
@@ -62,6 +64,11 @@ export async function runPressureAdmissionStage({
   };
   let measurement;
   try {
+    cancellationProbe = await processManager.start(
+      config.nodeExecutable,
+      ["-e", "setInterval(() => {}, 1000)"],
+      "cancel-probe",
+    );
     for (const mode of pressureModes)
       pressureProcesses.push(
         await processManager.start(
@@ -73,9 +80,13 @@ export async function runPressureAdmissionStage({
     measurement = await runMixedWorkloadMeasurement({
       clock: Date.now,
       durationMs: 30_000,
-      maximumIterations: 256,
+      maximumIterations: 900,
+      maximumSamples: 256,
       onAbort: stopPressure,
-      onPause: stopPressure,
+      onPause: async () => {
+        await stopPressure();
+        pressureQuiescedAfterPause = true;
+      },
       policy: Object.freeze({
         ...DEFAULT_PRESSURE_POLICY,
         highObservationsToPause: 20,
@@ -110,14 +121,10 @@ export async function runPressureAdmissionStage({
       },
       protectedControls: {
         cancel: async () => {
-          cancelSequence += 1;
-          const process = await processManager.start(
-            config.nodeExecutable,
-            ["-e", "setInterval(() => {}, 1000)"],
-            `cancel-${String(cancelSequence)}`,
-          );
-          await processManager.stop(process);
-          return true;
+          const evidence = await processManager.cancel(cancellationProbe);
+          if (evidence.confinedCancellationPerformed)
+            confinedCancellationEvidence = evidence;
+          return evidence.cancellationObserved;
         },
         health: async () =>
           (await psql(runner, postgres, "SELECT 1;")).code === 0,
@@ -134,19 +141,34 @@ export async function runPressureAdmissionStage({
     });
   } finally {
     await stopPressure();
+    if (cancellationProbe !== undefined) {
+      const evidence = await processManager.cancel(cancellationProbe);
+      if (evidence.confinedCancellationPerformed)
+        confinedCancellationEvidence = evidence;
+    }
   }
   const evidence = Object.freeze({
     ...measurement,
     boundedSystemdConfinementObserved: true,
+    confinedCancellationEvidence: confinedCancellationEvidence ?? null,
     pressureModes,
+    pressureQuiescedAfterPause,
+    realConfinedCancellationObserved:
+      confinedCancellationEvidence?.confinedCancellationPerformed === true,
     systemdCapabilityEvidence,
     systemdResourceProbe: systemdEvidence ?? null,
   });
   return Object.freeze({
     complete:
       evidence.slo.passed &&
+      evidence.acceptedAfterReopen > 0 &&
       evidence.observedPause &&
       evidence.observedReopen &&
+      evidence.pressureQuiescedAfterPause &&
+      evidence.realConfinedCancellationObserved &&
+      evidence.sampleCounts.cancel >= 100 &&
+      evidence.sampleCounts.health >= 100 &&
+      evidence.sampleCounts.status >= 100 &&
       !evidence.abortedBeforeHostExhaustion &&
       evidence.maximumObserved.gateDiskUsedRatio >= 0.7 &&
       evidence.maximumObserved.gateInodeUsedRatio >= 0.7 &&
