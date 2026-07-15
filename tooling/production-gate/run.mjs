@@ -573,14 +573,31 @@ async function main() {
       components.set(
         "object_compatibility_fixture",
         evidence.scopeComplete &&
-          evidence.credentialEnforcedImmutability &&
-          !evidence.uploadCredentialCanOverwrite
-          ? passed("object_compatibility_fixture", recordedEvidence)
+          evidence.adapterConditionalCreate === true &&
+          evidence.credentialEnforcedImmutability === false &&
+          evidence.deleteIdentityDistinct === true &&
+          evidence.exactProviderIdentity.compatibilityOnly === true &&
+          evidence.exactProviderIdentity.productionProviderApproved === false &&
+          evidence.networkPartitionReconciled === true &&
+          evidence.overwriteChangedServerChecksum === true &&
+          evidence.overwriteUsedOriginalCredential === true &&
+          evidence.restartReconciled === true &&
+          evidence.uploadCredentialCanOverwrite === true &&
+          evidence.verificationIdentityDistinct === true
+          ? blocked(
+              "object_compatibility_fixture",
+              "object_provider_create_only_credential_unsupported",
+              [
+                evidenceRecord(
+                  "object_compatibility_real_evidence",
+                  true,
+                  recordedEvidence,
+                ),
+              ],
+            )
           : blocked(
               "object_compatibility_fixture",
-              evidence.uploadCredentialCanOverwrite
-                ? "object_upload_credential_can_overwrite"
-                : "object_credential_immutability_not_proven",
+              "object_compatibility_evidence_incomplete",
               [
                 evidenceRecord(
                   "object_compatibility_real_evidence",
@@ -600,7 +617,7 @@ async function main() {
       "object_production_provider",
       blocked(
         "object_production_provider",
-        "compatibility_fixture_is_not_production_provider_approval",
+        "object_provider_create_only_credential_unsupported",
       ),
     );
 

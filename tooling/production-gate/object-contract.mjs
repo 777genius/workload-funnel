@@ -31,14 +31,14 @@ export function createAwsCliScopedObjectClient(config) {
     config.scope.permissions.join() !== "put" ||
     config.scope.canList !== false ||
     config.scope.canRead !== false ||
-    config.scope.canOverwrite !== false ||
+    config.scope.canOverwrite !== true ||
     config.scope.canDelete !== false
   )
     throw new Error("object_gate_upload_scope_invalid");
   return Object.freeze({
     capabilities: Object.freeze({
       conditionalCreate: true,
-      credentialEnforcedImmutability: true,
+      credentialEnforcedImmutability: false,
       finalMutationFencing: true,
       scopedCredentials: true,
       serverChecksum: true,
@@ -138,11 +138,6 @@ export function objectPolicyDocuments({ bucket, key, prefix }) {
       Statement: Object.freeze([
         Object.freeze({
           Action: ["s3:PutObject"],
-          Condition: Object.freeze({
-            StringEquals: Object.freeze({
-              "s3:if-none-match": "*",
-            }),
-          }),
           Effect: "Allow",
           Resource: [uploadResource],
         }),
@@ -231,6 +226,23 @@ function parseHeadChecksum(output) {
   return head.ChecksumSHA256;
 }
 
+function assertCredentialSeparation(config) {
+  const accessKeys = [
+    config.uploadEnvironment?.AWS_ACCESS_KEY_ID,
+    config.verifyEnvironment?.AWS_ACCESS_KEY_ID,
+    config.deleteEnvironment?.AWS_ACCESS_KEY_ID,
+  ];
+  if (
+    accessKeys.some(
+      (accessKey) =>
+        typeof accessKey !== "string" ||
+        !/^[A-Za-z0-9]{8,64}$/u.test(accessKey),
+    ) ||
+    new Set(accessKeys).size !== accessKeys.length
+  )
+    throw new Error("object_gate_credential_identity_collision");
+}
+
 export async function runObjectCompatibilityProbe(config) {
   if (
     !safeObjectKey(config.key, config.prefix) ||
@@ -241,17 +253,25 @@ export async function runObjectCompatibilityProbe(config) {
     !config.overwriteBodyPath.startsWith("/")
   )
     throw new Error("object_gate_probe_input_invalid");
+  const uploadEnvironment = Object.freeze({ ...config.uploadEnvironment });
+  const verifyEnvironment = Object.freeze({ ...config.verifyEnvironment });
+  const deleteEnvironment = Object.freeze({ ...config.deleteEnvironment });
+  assertCredentialSeparation({
+    deleteEnvironment,
+    uploadEnvironment,
+    verifyEnvironment,
+  });
   const client = createAwsCliScopedObjectClient({
     awsExecutable: config.awsExecutable,
     bucket: config.bucket,
-    credentialEnvironment: config.uploadEnvironment,
+    credentialEnvironment: uploadEnvironment,
     endpoint: config.endpoint,
     runId: config.runId,
     runner: config.runner,
     scope: Object.freeze({
       canDelete: false,
       canList: false,
-      canOverwrite: false,
+      canOverwrite: true,
       canRead: false,
       permissions: Object.freeze(["put"]),
       prefix: config.prefix,
@@ -264,35 +284,33 @@ export async function runObjectCompatibilityProbe(config) {
     sizeBytes: config.sizeBytes,
   });
   const created = await client.putIfAbsent(input);
-  const duplicate = await client.putIfAbsent(input);
-  if (!created.created || duplicate.created)
-    throw new Error("object_gate_create_only_not_proven");
+  if (!created.created) throw new Error("object_gate_create_only_not_proven");
   const common = ["--bucket", config.bucket, "--key", config.key];
   const scopeDenials = Object.freeze({
     deleteCannotList: await denied(
       config,
       ["list-objects-v2", "--bucket", config.bucket],
-      config.deleteEnvironment,
+      deleteEnvironment,
     ),
     deleteCannotRead: await denied(
       config,
       ["head-object", ...common],
-      config.deleteEnvironment,
+      deleteEnvironment,
     ),
     uploadCannotDelete: await denied(
       config,
       ["delete-object", ...common],
-      config.uploadEnvironment,
+      uploadEnvironment,
     ),
     uploadCannotList: await denied(
       config,
       ["list-objects-v2", "--bucket", config.bucket],
-      config.uploadEnvironment,
+      uploadEnvironment,
     ),
     uploadCannotRead: await denied(
       config,
       ["head-object", ...common],
-      config.uploadEnvironment,
+      uploadEnvironment,
     ),
   });
   const overwriteBypass = await awsRequest(
@@ -307,40 +325,30 @@ export async function runObjectCompatibilityProbe(config) {
       "--checksum-sha256",
       Buffer.from(config.overwriteChecksum.slice(7), "hex").toString("base64"),
     ],
-    config.uploadEnvironment,
+    uploadEnvironment,
   );
 
   const beforeRestart = await awsRequest(
     config,
     ["head-object", ...common, "--checksum-mode", "ENABLED"],
-    config.verifyEnvironment,
+    verifyEnvironment,
   );
   if (beforeRestart.code !== 0) throw new Error("object_gate_verify_failed");
   const checksum = parseHeadChecksum(beforeRestart.stdout);
   const uploadCredentialCanOverwrite = overwriteBypass.code === 0;
-  if (
-    overwriteBypass.code !== 0 &&
-    !/AccessDenied|Forbidden|\b403\b/u.test(overwriteBypass.stderr)
-  )
-    throw new Error("object_gate_overwrite_probe_unknown");
-  const originalChecksum = Buffer.from(
-    config.checksum.slice(7),
-    "hex",
-  ).toString("base64");
+  if (!uploadCredentialCanOverwrite)
+    throw new Error("object_gate_unconditional_overwrite_failed");
   const overwrittenChecksum = Buffer.from(
     config.overwriteChecksum.slice(7),
     "hex",
   ).toString("base64");
-  const expectedChecksum = uploadCredentialCanOverwrite
-    ? overwrittenChecksum
-    : originalChecksum;
-  if (checksum !== expectedChecksum)
+  if (checksum !== overwrittenChecksum)
     throw new Error("object_gate_server_checksum_mismatch");
   const processRestart = assertMinioRestartEvidence(await config.restart());
   const afterRestart = await awsRequest(
     config,
     ["head-object", ...common, "--checksum-mode", "ENABLED"],
-    config.verifyEnvironment,
+    verifyEnvironment,
   );
   if (
     afterRestart.code !== 0 ||
@@ -354,7 +362,7 @@ export async function runObjectCompatibilityProbe(config) {
     partitioned = await awsRequest(
       config,
       ["head-object", ...common],
-      config.verifyEnvironment,
+      verifyEnvironment,
       2_000,
     );
     if (partitioned.code === 0)
@@ -365,7 +373,7 @@ export async function runObjectCompatibilityProbe(config) {
   const reconciled = await awsRequest(
     config,
     ["head-object", ...common, "--checksum-mode", "ENABLED"],
-    config.verifyEnvironment,
+    verifyEnvironment,
   );
   if (
     reconciled.code !== 0 ||
@@ -375,13 +383,12 @@ export async function runObjectCompatibilityProbe(config) {
   const removed = await awsRequest(
     config,
     ["delete-object", ...common],
-    config.deleteEnvironment,
+    deleteEnvironment,
   );
   if (removed.code !== 0) throw new Error("object_gate_prefix_delete_failed");
   return Object.freeze({
     adapterConditionalCreate: true,
-    credentialEnforcedImmutability:
-      !uploadCredentialCanOverwrite && checksum === originalChecksum,
+    credentialEnforcedImmutability: false,
     deleteIdentityDistinct: true,
     exactProviderIdentity: config.provider,
     networkPartitionReconciled: true,
@@ -390,8 +397,9 @@ export async function runObjectCompatibilityProbe(config) {
     serverChecksum: checksum,
     scopeComplete: Object.values(scopeDenials).every(Boolean),
     scopeDenials,
-    uploadCredentialCanOverwrite,
-    overwriteChangedServerChecksum:
-      uploadCredentialCanOverwrite && checksum === overwrittenChecksum,
+    uploadCredentialCanOverwrite: true,
+    verificationIdentityDistinct: true,
+    overwriteChangedServerChecksum: true,
+    overwriteUsedOriginalCredential: true,
   });
 }

@@ -90,7 +90,7 @@ if (/writeFile\([^)]*\/sys\/fs\/cgroup/u.test(gate))
   failures.push("manual gate writes cgroupfs directly");
 for (const blocker of [
   "ambiguous_submit_lookup_unsupported",
-  "compatibility_fixture_is_not_production_provider_approval",
+  "object_provider_create_only_credential_unsupported",
   "project_quota_application_adapter_missing",
   "real_async_postgres_lifecycle_adapter_missing",
 ])
@@ -276,16 +276,98 @@ if (
 
 const object = await source("tooling/production-gate/object-contract.mjs");
 for (const token of [
-  "credentialEnforcedImmutability: true",
-  "uploadCredentialCanOverwrite",
-  "overwriteChangedServerChecksum",
-  "canOverwrite: false",
-  '"s3:if-none-match": "*"',
+  "credentialEnforcedImmutability: false",
+  "uploadCredentialCanOverwrite: true",
+  "overwriteChangedServerChecksum: true",
+  "overwriteUsedOriginalCredential: true",
+  "canOverwrite: true",
+  'Action: ["s3:PutObject"]',
+  "Resource: [uploadResource]",
+  '"--if-none-match"',
+  '"object_gate_unconditional_overwrite_failed"',
 ])
   if (!object.includes(token))
     failures.push(`object-store truthfulness is missing ${token}`);
-if (object.includes("credentialEnforcedImmutability: false"))
-  failures.push("object-store credential immutability remains disabled");
+for (const token of [
+  "credentialEnforcedImmutability: true",
+  '"s3:if-none-match"',
+  '"x-amz-content-sha256"',
+  "ExistingObjectTag",
+  "dropUploadAuthority",
+  "uploadAuthorityDrop",
+  "minio-admin-policy-detach",
+])
+  if (object.includes(token))
+    failures.push(
+      `object-store probe retains rejected claim or policy ${token}`,
+    );
+if ((object.match(/client\.putIfAbsent\(/gu) ?? []).length !== 1)
+  failures.push(
+    "object-store probe does not perform exactly one conditional upload",
+  );
+
+const objectFixtureBootstrap = await source(
+  "tooling/production-gate/object-fixture-bootstrap.mjs",
+);
+for (const token of [
+  "dropObjectUploadAuthority",
+  '"detach-policy"',
+  '"verify-policy-detached"',
+  "minio-admin-policy-detach",
+])
+  if (objectFixtureBootstrap.includes(token) || objectBootstrap.includes(token))
+    failures.push(`rejected object upload revocation remains: ${token}`);
+for (const token of [
+  "object_provider_create_only_credential_unsupported",
+  "evidence.credentialEnforcedImmutability === false",
+  "evidence.deleteIdentityDistinct === true",
+  "evidence.uploadCredentialCanOverwrite === true",
+  "evidence.overwriteChangedServerChecksum === true",
+  "evidence.overwriteUsedOriginalCredential === true",
+  "evidence.exactProviderIdentity.compatibilityOnly === true",
+  "evidence.exactProviderIdentity.productionProviderApproved === false",
+])
+  if (!gate.includes(token))
+    failures.push(`manual gate create-only blocker is missing ${token}`);
+for (const token of [
+  "adminAuthorityAccessKeyId: rootAccess",
+  "dropUploadAuthority:",
+  "dropObjectUploadAuthority",
+  "evidence.uploadAuthorityDrop",
+])
+  if (gate.includes(token))
+    failures.push(`manual gate retains rejected upload revocation: ${token}`);
+
+const objectRegression = await source(
+  "tooling/production-gate/production-gate-object.test.mjs",
+);
+for (const token of [
+  "credentialEnforcedImmutability: false",
+  "uploadCredentialCanOverwrite: true",
+  "overwriteChangedServerChecksum: true",
+  "same credential can unconditionally overwrite the exact key",
+  "object_gate_unconditional_overwrite_failed",
+  "object_gate_server_checksum_mismatch",
+  "puts[0][2].environment).toBe(puts[1][2].environment",
+])
+  if (!objectRegression.includes(token))
+    failures.push(
+      `object overwrite truthfulness regression is missing ${token}`,
+    );
+
+const productionGateRunbook = await source(
+  "docs/operations/disposable-host-production-readiness-gate.md",
+);
+for (const token of [
+  "s3:if-none-match",
+  "x-amz-content-sha256",
+  "ExistingObjectTag",
+  "object_provider_create_only_credential_unsupported",
+])
+  if (!productionGateRunbook.includes(token))
+    failures.push(
+      `object provider limitation documentation is missing ${token}`,
+    );
 
 const minioSupervisor = await source(
   "tooling/production-gate/fixtures/minio-supervisor.sh",

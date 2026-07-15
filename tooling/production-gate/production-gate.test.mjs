@@ -671,7 +671,7 @@ describe("Postgres transaction contract", () => {
 });
 
 describe("S3-compatible contract", () => {
-  it("uses conditional PUT with a credential that requires conditional create", async () => {
+  it("uses conditional PUT without claiming credential immutability", async () => {
     const checksum = `sha256:${"b".repeat(64)}`;
     const checksumBase64 = Buffer.from(checksum.slice(7), "hex").toString(
       "base64",
@@ -692,7 +692,7 @@ describe("S3-compatible contract", () => {
       scope: {
         canDelete: false,
         canList: false,
-        canOverwrite: false,
+        canOverwrite: true,
         canRead: false,
         permissions: ["put"],
         prefix: `${runId}/uploads/`,
@@ -708,7 +708,7 @@ describe("S3-compatible contract", () => {
     ).resolves.toMatchObject({ created: true });
     expect(client.capabilities).toMatchObject({
       conditionalCreate: true,
-      credentialEnforcedImmutability: true,
+      credentialEnforcedImmutability: false,
     });
     expect(run.mock.calls[0][1]).toEqual(
       expect.arrayContaining([
@@ -737,11 +737,11 @@ describe("S3-compatible contract", () => {
     });
     expect(policies.upload.Statement[0].Action).toEqual(["s3:PutObject"]);
     expect(policies.upload.Statement[0]).toMatchObject({
-      Condition: { StringEquals: { "s3:if-none-match": "*" } },
       Resource: [
         `arn:aws:s3:::${runId}-artifacts/${runId}/uploads/artifact.bin`,
       ],
     });
+    expect(policies.upload.Statement[0]).not.toHaveProperty("Condition");
     expect(policies.delete.Statement[0].Action).toEqual(["s3:DeleteObject"]);
     expect(policies.verify.Statement[0].Action).toEqual(["s3:GetObject"]);
   });

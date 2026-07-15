@@ -193,10 +193,17 @@ Current repository closure is intentionally fail-closed:
   sandbox-owned storage, but no real asynchronous Postgres lifecycle adapter
   exists;
 - the MinIO fixture preserves its checksum across an evidenced server-process
-  restart inside the stable container/tmpfs boundary, and its key-scoped upload
-  policy requires `If-None-Match: *`; a direct same-key PUT with distinct bytes
-  and checksum is denied while separate read/list/delete identities remain
-  disjoint. This compatibility evidence is not production provider approval;
+  restart inside the stable container/tmpfs boundary and proves network recovery
+  plus disjoint upload, verify, and delete identities. The upload policy grants
+  only `s3:PutObject` on one exact key, and the adapter sends
+  `If-None-Match: *`, but the credential itself is not create-only. Exact probes
+  against the pinned MinIO KVM fixture found `s3:if-none-match`,
+  `x-amz-content-sha256`, and `ExistingObjectTag` conditions unsupported for
+  `PutObject`. An unconditional PUT of distinct bytes to the same key with the
+  same upload credential succeeds and changes the server checksum. The gate
+  therefore emits `object_provider_create_only_credential_unsupported`; MinIO
+  remains compatibility-only and is not an approved production provider. The
+  probe does not revoke or detach the upload policy after the first PUT;
 - HyperQueue uses restart-durable fsynced ordering and exact post-cancel
   observation, but 0.26.2 lacks operation-ID lookup for ambiguous submit;
 - the running systemd manager, cgroup controllers, and required unit properties
