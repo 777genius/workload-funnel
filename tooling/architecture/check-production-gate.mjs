@@ -276,13 +276,16 @@ if (
 
 const object = await source("tooling/production-gate/object-contract.mjs");
 for (const token of [
-  "credentialEnforcedImmutability: false",
+  "credentialEnforcedImmutability: true",
   "uploadCredentialCanOverwrite",
   "overwriteChangedServerChecksum",
-  "canOverwrite: true",
+  "canOverwrite: false",
+  '"s3:if-none-match": "*"',
 ])
   if (!object.includes(token))
     failures.push(`object-store truthfulness is missing ${token}`);
+if (object.includes("credentialEnforcedImmutability: false"))
+  failures.push("object-store credential immutability remains disabled");
 
 const minioSupervisor = await source(
   "tooling/production-gate/fixtures/minio-supervisor.sh",
@@ -406,11 +409,16 @@ for (const token of [
   "evidence.sampleCounts.status >= 100",
   "evidence.acceptedAfterReopen > 0",
   "maximumIterations: 900",
+  "waitForPressureFixtureReadiness",
+  "pressureReadiness?.allModesReady === true",
 ])
   if (!pressureStage.includes(token))
     failures.push(`real pressure stage is missing ${token}`);
 if (/`cancel-\$\{String\(/u.test(pressureStage))
   failures.push("real pressure stage creates one systemd unit per sample");
+for (const token of [".ready-${mode}", 'if (mode !== "io") await ready()'])
+  if (!pressureFixture.includes(token))
+    failures.push(`pressure fixture readiness is missing ${token}`);
 
 const order = await source(
   "packages/scheduler-hyperqueue/src/features/dispatch-observation/filesystem-observation-order.ts",

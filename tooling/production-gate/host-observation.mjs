@@ -68,6 +68,7 @@ export async function observeHost({
     gateStorage === undefined
       ? { gateDiskUsedRatio: 0, gateInodeUsedRatio: 0 }
       : await observeGateStorage(gateStorage);
+  const nowMs = clock();
   return Object.freeze({
     cpuPsiSome: Math.max(cpuPressure.some.avg10, workloadPressure.cpuPsiSome),
     diskFreeBytes,
@@ -85,7 +86,8 @@ export async function observeHost({
       memoryPressure.some.avg10,
       workloadPressure.memoryPsiSome,
     ),
-    nowMs: clock(),
+    nowMs,
+    observationCollectionMs: nowMs - observedAtMs,
     observedAtMs,
     workloadCpuPsiSome: workloadPressure.cpuPsiSome,
     workloadIoPsiSome: workloadPressure.ioPsiSome,
@@ -123,6 +125,8 @@ async function observeCgroupPressure(controlGroups, read) {
 }
 
 export async function observeGateStorage({
+  inspect = lstat,
+  list = readdir,
   maximumBytes,
   maximumInodes,
   root,
@@ -140,24 +144,33 @@ export async function observeGateStorage({
   const visit = async (path) => {
     let entries;
     try {
-      entries = await readdir(path, { withFileTypes: true });
+      entries = await list(path, { withFileTypes: true });
     } catch (error) {
       if (error?.code === "ENOENT") return;
       throw error;
     }
-    for (const entry of entries) {
-      if (inodes >= maximumInodes * 2)
+    for (let offset = 0; offset < entries.length; offset += 64) {
+      const batch = entries.slice(offset, offset + 64);
+      if (inodes + batch.length > maximumInodes * 2)
         throw new Error("gate_storage_inode_bound_exceeded");
-      const child = `${path}/${entry.name}`;
-      const identity = await lstat(child);
-      if (identity.isSymbolicLink())
-        throw new Error("gate_storage_symlink_refused");
-      inodes += 1;
-      if (identity.isDirectory()) await visit(child);
-      else if (identity.isFile()) bytes += identity.size;
-      else throw new Error("gate_storage_entry_invalid");
-      if (bytes > maximumBytes * 2)
-        throw new Error("gate_storage_byte_bound_exceeded");
+      const identities = await Promise.all(
+        batch.map(async (entry) => ({
+          child: `${path}/${entry.name}`,
+          identity: await inspect(`${path}/${entry.name}`),
+        })),
+      );
+      const directories = [];
+      for (const { child, identity } of identities) {
+        if (identity.isSymbolicLink())
+          throw new Error("gate_storage_symlink_refused");
+        inodes += 1;
+        if (identity.isDirectory()) directories.push(child);
+        else if (identity.isFile()) bytes += identity.size;
+        else throw new Error("gate_storage_entry_invalid");
+        if (bytes > maximumBytes * 2)
+          throw new Error("gate_storage_byte_bound_exceeded");
+      }
+      for (const directory of directories) await visit(directory);
     }
   };
   await visit(root);

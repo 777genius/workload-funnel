@@ -1,4 +1,4 @@
-import { chown, mkdir, rm } from "node:fs/promises";
+import { access, chown, mkdir, rm } from "node:fs/promises";
 import { fileURLToPath, URL } from "node:url";
 
 import { observeHost } from "./host-observation.mjs";
@@ -18,6 +18,53 @@ async function psql(runner, config, sql, timeoutMs = 5_000) {
     environment: { PGPASSWORD: config.password },
     timeoutMs,
   });
+}
+
+export async function waitForPressureFixtureReadiness({
+  clock = Date.now,
+  modes,
+  ready = access,
+  root,
+  timeoutMs = 25_000,
+  wait,
+}) {
+  if (
+    !/^\/[A-Za-z0-9_./-]+$/u.test(root) ||
+    !Array.isArray(modes) ||
+    modes.length === 0 ||
+    new Set(modes).size !== modes.length ||
+    modes.some((mode) => !/^[a-z]+$/u.test(mode)) ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 10_000 ||
+    timeoutMs > 30_000 ||
+    typeof ready !== "function" ||
+    typeof wait !== "function"
+  )
+    throw new Error("pressure_fixture_readiness_input_invalid");
+  const startedAtMs = clock();
+  const paths = modes.map((mode) => `${root}/.ready-${mode}`);
+  for (;;) {
+    const results = await Promise.all(
+      paths.map(async (path) => {
+        try {
+          await ready(path);
+          return true;
+        } catch (error) {
+          if (error?.code === "ENOENT") return false;
+          throw error;
+        }
+      }),
+    );
+    if (results.every(Boolean))
+      return Object.freeze({
+        allModesReady: true,
+        durationMs: clock() - startedAtMs,
+        modes: Object.freeze([...modes]),
+      });
+    if (clock() - startedAtMs >= timeoutMs)
+      throw new Error("pressure_fixture_readiness_timeout");
+    await wait(50);
+  }
 }
 
 export async function runPressureAdmissionStage({
@@ -44,6 +91,7 @@ export async function runPressureAdmissionStage({
   await chown(pressureRoot, allocation.uid, allocation.gid);
   let cancellationProbe;
   let confinedCancellationEvidence;
+  let pressureReadiness;
   const pressureProcesses = [];
   const pressureModes = Object.freeze([
     "cpu",
@@ -64,11 +112,6 @@ export async function runPressureAdmissionStage({
   };
   let measurement;
   try {
-    cancellationProbe = await processManager.start(
-      config.nodeExecutable,
-      ["-e", "setInterval(() => {}, 1000)"],
-      "cancel-probe",
-    );
     for (const mode of pressureModes)
       pressureProcesses.push(
         await processManager.start(
@@ -91,6 +134,18 @@ export async function runPressureAdmissionStage({
         ...DEFAULT_PRESSURE_POLICY,
         highObservationsToPause: 20,
       }),
+      prepare: async () => {
+        pressureReadiness = await waitForPressureFixtureReadiness({
+          modes: pressureModes,
+          root: pressureRoot,
+          wait,
+        });
+        cancellationProbe = await processManager.start(
+          config.nodeExecutable,
+          ["-e", "setInterval(() => {}, 1000)"],
+          "cancel-probe",
+        );
+      },
       observe: () =>
         observeHost({
           gateStorage: {
@@ -152,6 +207,7 @@ export async function runPressureAdmissionStage({
     boundedSystemdConfinementObserved: true,
     confinedCancellationEvidence: confinedCancellationEvidence ?? null,
     pressureModes,
+    pressureReadiness,
     pressureQuiescedAfterPause,
     realConfinedCancellationObserved:
       confinedCancellationEvidence?.confinedCancellationPerformed === true,
@@ -166,6 +222,7 @@ export async function runPressureAdmissionStage({
       evidence.observedReopen &&
       evidence.pressureQuiescedAfterPause &&
       evidence.realConfinedCancellationObserved &&
+      evidence.pressureReadiness?.allModesReady === true &&
       evidence.sampleCounts.cancel >= 100 &&
       evidence.sampleCounts.health >= 100 &&
       evidence.sampleCounts.status >= 100 &&

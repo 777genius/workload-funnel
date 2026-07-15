@@ -37,7 +37,7 @@ import {
   parseOfficialSubmit,
 } from "./hyperqueue-contract.mjs";
 import { runMixedWorkloadMeasurement } from "./mixed-load.mjs";
-import { parseLoadAverage } from "./host-observation.mjs";
+import { observeGateStorage, parseLoadAverage } from "./host-observation.mjs";
 import {
   createAwsCliScopedObjectClient,
   objectPolicyDocuments,
@@ -56,6 +56,7 @@ import {
   postgresAtomicityProven,
   postgresSchemaSql,
 } from "./postgres-probe.mjs";
+import { waitForPressureFixtureReadiness } from "./pressure-stage.mjs";
 import { OwnedResourceLedger } from "./resource-ledger.mjs";
 import { evaluateMixedWorkloadSlo, percentile99 } from "./slo.mjs";
 import {
@@ -323,6 +324,41 @@ describe("live pressure admission", () => {
     expect(parseLoadAverage("4.0 1.0 1.0 1/1 1", 8)).toBe(0.5);
   });
 
+  it("bounds concurrent gate-storage inspection without serializing every inode", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const result = await observeGateStorage({
+      inspect: async () => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await Promise.resolve();
+        active -= 1;
+        return {
+          isDirectory: () => false,
+          isFile: () => true,
+          isSymbolicLink: () => false,
+          size: 1,
+        };
+      },
+      list: () =>
+        Promise.resolve(
+          Array.from({ length: 128 }, (_, index) => ({
+            name: String(index),
+          })),
+        ),
+      maximumBytes: 256,
+      maximumInodes: 256,
+      root: "/synthetic/pressure",
+    });
+    expect(result).toEqual({
+      gateDiskUsedRatio: 0.5,
+      gateInodeUsedRatio: 0.5,
+      gateStorageBytes: 128,
+      gateStorageInodes: 128,
+    });
+    expect(maximumActive).toBe(64);
+  });
+
   it("fails stale preflight closed and preserves protected control availability", () => {
     expect(admitPreflight({ ...observation, nowMs: 10_000 })).toMatchObject({
       producerAdmission: "paused",
@@ -456,6 +492,86 @@ describe("live pressure admission", () => {
     expect(result.slo.passed).toBe(true);
   });
 
+  it("starts the full measurement after the observed 9631ms fixture ramp", async () => {
+    const initialNow = 1_000;
+    const rampDurationMs = 9_631;
+    let now = initialNow;
+    let observations = 0;
+    let pressureQuiesced = false;
+    let readiness;
+    const modes = ["cpu", "memory", "io", "disk", "inodes"];
+    const result = await runMixedWorkloadMeasurement({
+      clock: () => now,
+      durationMs: 30_000,
+      maximumIterations: 600,
+      maximumSamples: 256,
+      observe: () => {
+        observations += 1;
+        return Promise.resolve({
+          ...observation,
+          cpuPsiSome: observations <= 20 ? 0.25 : 0.01,
+          nowMs: now,
+          observedAtMs: now,
+        });
+      },
+      onPause: () => {
+        pressureQuiesced = true;
+        return Promise.resolve();
+      },
+      policy: {
+        ...new ProducerPressureGate().policy,
+        highObservationsToPause: 20,
+      },
+      preciseClock: () => now,
+      prepare: async () => {
+        const readyAt = now + rampDurationMs;
+        readiness = await waitForPressureFixtureReadiness({
+          clock: () => now,
+          modes,
+          ready: () => {
+            if (now >= readyAt) return Promise.resolve();
+            return Promise.reject(
+              Object.assign(new Error("not ready"), {
+                code: "ENOENT",
+              }),
+            );
+          },
+          root: "/synthetic/pressure",
+          wait: (milliseconds) => {
+            now += Math.min(milliseconds, readyAt - now);
+            return Promise.resolve();
+          },
+        });
+      },
+      produce: () => Promise.resolve(true),
+      protectedControls: {
+        cancel: () => Promise.resolve(true),
+        health: () => Promise.resolve(true),
+        status: () => Promise.resolve(true),
+      },
+      wait: (milliseconds) => {
+        now += milliseconds;
+        return Promise.resolve();
+      },
+    });
+    expect(readiness).toEqual({
+      allModesReady: true,
+      durationMs: rampDurationMs,
+      modes,
+    });
+    expect(result).toMatchObject({
+      acceptedAfterReopen: expect.any(Number),
+      durationMs: 30_000,
+      observedPause: true,
+      observedReopen: true,
+      sampleCounts: { cancel: 256, health: 256, status: 256 },
+      slo: { passed: true },
+    });
+    expect(result.acceptedAfterReopen).toBeGreaterThan(0);
+    expect(pressureQuiesced).toBe(true);
+    expect(now - initialNow).toBe(rampDurationMs + 30_000);
+  });
+
   it("keeps the producer closed when the first live observation is critical", async () => {
     let now = 1_000;
     const produce = vi.fn(() => Promise.resolve(true));
@@ -555,7 +671,7 @@ describe("Postgres transaction contract", () => {
 });
 
 describe("S3-compatible contract", () => {
-  it("uses conditional PUT while truthfully reporting overwrite-capable credentials", async () => {
+  it("uses conditional PUT with a credential that requires conditional create", async () => {
     const checksum = `sha256:${"b".repeat(64)}`;
     const checksumBase64 = Buffer.from(checksum.slice(7), "hex").toString(
       "base64",
@@ -576,7 +692,7 @@ describe("S3-compatible contract", () => {
       scope: {
         canDelete: false,
         canList: false,
-        canOverwrite: true,
+        canOverwrite: false,
         canRead: false,
         permissions: ["put"],
         prefix: `${runId}/uploads/`,
@@ -592,7 +708,7 @@ describe("S3-compatible contract", () => {
     ).resolves.toMatchObject({ created: true });
     expect(client.capabilities).toMatchObject({
       conditionalCreate: true,
-      credentialEnforcedImmutability: false,
+      credentialEnforcedImmutability: true,
     });
     expect(run.mock.calls[0][1]).toEqual(
       expect.arrayContaining([
@@ -616,9 +732,16 @@ describe("S3-compatible contract", () => {
   it("keeps upload, delete, and verification policies disjoint", () => {
     const policies = objectPolicyDocuments({
       bucket: `${runId}-artifacts`,
+      key: `${runId}/uploads/artifact.bin`,
       prefix: `${runId}/uploads/`,
     });
     expect(policies.upload.Statement[0].Action).toEqual(["s3:PutObject"]);
+    expect(policies.upload.Statement[0]).toMatchObject({
+      Condition: { StringEquals: { "s3:if-none-match": "*" } },
+      Resource: [
+        `arn:aws:s3:::${runId}-artifacts/${runId}/uploads/artifact.bin`,
+      ],
+    });
     expect(policies.delete.Statement[0].Action).toEqual(["s3:DeleteObject"]);
     expect(policies.verify.Statement[0].Action).toEqual(["s3:GetObject"]);
   });

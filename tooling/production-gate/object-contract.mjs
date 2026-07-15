@@ -31,14 +31,14 @@ export function createAwsCliScopedObjectClient(config) {
     config.scope.permissions.join() !== "put" ||
     config.scope.canList !== false ||
     config.scope.canRead !== false ||
-    config.scope.canOverwrite !== true ||
+    config.scope.canOverwrite !== false ||
     config.scope.canDelete !== false
   )
     throw new Error("object_gate_upload_scope_invalid");
   return Object.freeze({
     capabilities: Object.freeze({
       conditionalCreate: true,
-      credentialEnforcedImmutability: false,
+      credentialEnforcedImmutability: true,
       finalMutationFencing: true,
       scopedCredentials: true,
       serverChecksum: true,
@@ -114,20 +114,22 @@ export function createAwsCliScopedObjectClient(config) {
   });
 }
 
-export function objectPolicyDocuments({ bucket, prefix }) {
+export function objectPolicyDocuments({ bucket, key, prefix }) {
   if (
     !OWNED_RESOURCE_PATTERN.test(bucket) ||
-    !prefix.startsWith("wf-production-gate-")
+    !prefix.startsWith("wf-production-gate-") ||
+    !safeObjectKey(key, prefix)
   )
     throw new Error("unsafe_object_policy_scope");
-  const resource = `arn:aws:s3:::${bucket}/${prefix}*`;
+  const prefixResource = `arn:aws:s3:::${bucket}/${prefix}*`;
+  const uploadResource = `arn:aws:s3:::${bucket}/${key}`;
   return Object.freeze({
     delete: Object.freeze({
       Statement: Object.freeze([
         Object.freeze({
           Action: ["s3:DeleteObject"],
           Effect: "Allow",
-          Resource: [resource],
+          Resource: [prefixResource],
         }),
       ]),
       Version: "2012-10-17",
@@ -136,8 +138,13 @@ export function objectPolicyDocuments({ bucket, prefix }) {
       Statement: Object.freeze([
         Object.freeze({
           Action: ["s3:PutObject"],
+          Condition: Object.freeze({
+            StringEquals: Object.freeze({
+              "s3:if-none-match": "*",
+            }),
+          }),
           Effect: "Allow",
-          Resource: [resource],
+          Resource: [uploadResource],
         }),
       ]),
       Version: "2012-10-17",
@@ -147,7 +154,7 @@ export function objectPolicyDocuments({ bucket, prefix }) {
         Object.freeze({
           Action: ["s3:GetObject"],
           Effect: "Allow",
-          Resource: [resource],
+          Resource: [prefixResource],
         }),
       ]),
       Version: "2012-10-17",
@@ -244,7 +251,7 @@ export async function runObjectCompatibilityProbe(config) {
     scope: Object.freeze({
       canDelete: false,
       canList: false,
-      canOverwrite: true,
+      canOverwrite: false,
       canRead: false,
       permissions: Object.freeze(["put"]),
       prefix: config.prefix,
@@ -316,13 +323,17 @@ export async function runObjectCompatibilityProbe(config) {
     !/AccessDenied|Forbidden|\b403\b/u.test(overwriteBypass.stderr)
   )
     throw new Error("object_gate_overwrite_probe_unknown");
-  const expectedChecksum = Buffer.from(
-    (uploadCredentialCanOverwrite
-      ? config.overwriteChecksum
-      : config.checksum
-    ).slice(7),
+  const originalChecksum = Buffer.from(
+    config.checksum.slice(7),
     "hex",
   ).toString("base64");
+  const overwrittenChecksum = Buffer.from(
+    config.overwriteChecksum.slice(7),
+    "hex",
+  ).toString("base64");
+  const expectedChecksum = uploadCredentialCanOverwrite
+    ? overwrittenChecksum
+    : originalChecksum;
   if (checksum !== expectedChecksum)
     throw new Error("object_gate_server_checksum_mismatch");
   const processRestart = assertMinioRestartEvidence(await config.restart());
@@ -369,7 +380,8 @@ export async function runObjectCompatibilityProbe(config) {
   if (removed.code !== 0) throw new Error("object_gate_prefix_delete_failed");
   return Object.freeze({
     adapterConditionalCreate: true,
-    credentialEnforcedImmutability: false,
+    credentialEnforcedImmutability:
+      !uploadCredentialCanOverwrite && checksum === originalChecksum,
     deleteIdentityDistinct: true,
     exactProviderIdentity: config.provider,
     networkPartitionReconciled: true,
@@ -380,6 +392,6 @@ export async function runObjectCompatibilityProbe(config) {
     scopeDenials,
     uploadCredentialCanOverwrite,
     overwriteChangedServerChecksum:
-      uploadCredentialCanOverwrite && checksum === expectedChecksum,
+      uploadCredentialCanOverwrite && checksum === overwrittenChecksum,
   });
 }

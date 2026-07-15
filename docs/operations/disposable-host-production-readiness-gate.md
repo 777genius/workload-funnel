@@ -193,10 +193,10 @@ Current repository closure is intentionally fail-closed:
   sandbox-owned storage, but no real asynchronous Postgres lifecycle adapter
   exists;
 - the MinIO fixture preserves its checksum across an evidenced server-process
-  restart inside the stable container/tmpfs boundary, and uses distinct bytes
-  and a distinct checksum to prove that its upload credential can overwrite
-  without the adapter's conditional request, so credential-level immutability
-  is not claimed and production provider approval remains absent;
+  restart inside the stable container/tmpfs boundary, and its key-scoped upload
+  policy requires `If-None-Match: *`; a direct same-key PUT with distinct bytes
+  and checksum is denied while separate read/list/delete identities remain
+  disjoint. This compatibility evidence is not production provider approval;
 - HyperQueue uses restart-durable fsynced ordering and exact post-cancel
   observation, but 0.26.2 lacks operation-ID lookup for ambiguous submit;
 - the running systemd manager, cgroup controllers, and required unit properties

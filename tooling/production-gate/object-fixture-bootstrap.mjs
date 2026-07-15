@@ -37,6 +37,7 @@ async function installIdentity(config, { credentialFile, policy, user }) {
 export async function bootstrapObjectFixture(config) {
   const documents = objectPolicyDocuments({
     bucket: config.bucket,
+    key: config.key,
     prefix: config.prefix,
   });
   await bootstrap(config, "ready");

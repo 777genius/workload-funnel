@@ -469,17 +469,7 @@ async function main() {
       );
       const bucket = `${config.runId}-artifacts`;
       const prefix = `${config.runId}/uploads/`;
-      await bootstrapObjectFixture({
-        adminConfigFile,
-        bucket,
-        bootstrapScript,
-        clientImage: config.objectClientImage,
-        docker,
-        identityFiles,
-        prefix,
-        runId: config.runId,
-        sandboxRoot: config.sandboxRoot,
-      });
+      const key = `${prefix}artifact.bin`;
       const bodyPath = `${config.sandboxRoot}/object-body.bin`;
       const body = Buffer.from("workload-funnel production gate object\n");
       await writeFile(bodyPath, body, { flag: "wx", mode: 0o600 });
@@ -488,6 +478,18 @@ async function main() {
       await writeFile(overwriteBodyPath, overwriteBody, {
         flag: "wx",
         mode: 0o600,
+      });
+      await bootstrapObjectFixture({
+        adminConfigFile,
+        bucket,
+        bootstrapScript,
+        clientImage: config.objectClientImage,
+        docker,
+        identityFiles,
+        key,
+        prefix,
+        runId: config.runId,
+        sandboxRoot: config.sandboxRoot,
       });
       const endpoint = `http://${objectDockerConfinement.internalNetworkEndpoint.ipv4Address}:${String(objectDockerConfinement.internalNetworkEndpoint.port)}`;
       const awsEnvironment = (identity) => ({
@@ -529,7 +531,7 @@ async function main() {
           )
             throw new Error("docker_internal_endpoint_identity_changed");
         },
-        key: `${prefix}artifact.bin`,
+        key,
         overwriteBodyPath,
         overwriteChecksum: `sha256:${createHash("sha256").update(overwriteBody).digest("hex")}`,
         partition: () => docker.partition(objectName),

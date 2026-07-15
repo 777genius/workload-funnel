@@ -33,9 +33,11 @@ export async function runMixedWorkloadMeasurement(config) {
     typeof config.protectedControls !== "object" ||
     !["cancel", "health", "status"].every(
       (name) => typeof config.protectedControls[name] === "function",
-    )
+    ) ||
+    (config.prepare !== undefined && typeof config.prepare !== "function")
   )
     throw new Error("mixed_workload_duration_invalid");
+  await config.prepare?.();
   const gate = new ProducerPressureGate(config.policy);
   const started = config.clock();
   const latencies = { cancel: [], health: [], status: [] };
@@ -63,6 +65,7 @@ export async function runMixedWorkloadMeasurement(config) {
     workloadCpuPsiSome: 0,
     workloadIoPsiSome: 0,
     workloadMemoryPsiSome: 0,
+    observationCollectionMs: 0,
   };
   const observePressure = async () => {
     const minimumSamplesCaptured = () =>
