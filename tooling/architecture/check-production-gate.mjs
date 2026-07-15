@@ -133,6 +133,8 @@ for (const token of [
   "POSTGRES_PASSWORD_FILE",
   "size=536870912",
   "bind-propagation=rprivate",
+  "POSTGRES_SOCKET_TMPFS_OPTIONS",
+  "unix_socket_directories=",
   "temp_file_limit=16MB",
   "--internal",
 ])
@@ -210,6 +212,36 @@ for (const token of [
 ])
   if (!object.includes(token))
     failures.push(`object-store truthfulness is missing ${token}`);
+
+const minioSupervisor = await source(
+  "tooling/production-gate/fixtures/minio-supervisor.sh",
+);
+for (const token of [
+  "workload-funnel.minio-supervisor.v1",
+  "trap request_restart USR1",
+  "/usr/bin/minio",
+])
+  if (!minioSupervisor.includes(token))
+    failures.push(`MinIO process supervisor is missing ${token}`);
+
+const minioRestart = await source(
+  "tooling/production-gate/minio-process-restart.mjs",
+);
+for (const token of [
+  "restartMinioServerProcess",
+  "containerBoundaryStable",
+  "serverProcessGenerationChanged",
+  "serverProcessPidChanged",
+  "readinessAfterRestart",
+  "containerConfinementStable",
+])
+  if (!minioRestart.includes(token))
+    failures.push(`MinIO process restart proof is missing ${token}`);
+if (
+  !gate.includes("restartConfinedMinio") ||
+  gate.includes("docker.restart(objectName)")
+)
+  failures.push("manual gate does not use the confined MinIO process restart");
 
 const systemdProbe = await source(
   "tooling/production-gate/systemd-capability-probe.mjs",

@@ -3,8 +3,13 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
+  MINIO_DATA_TMPFS_OPTIONS,
+  MINIO_IMAGE_ENTRYPOINT,
+  MINIO_SUPERVISOR_COMMAND,
   POSTGRES_PARENT_TMPFS_DESTINATION,
   POSTGRES_PARENT_TMPFS_OPTIONS,
+  POSTGRES_SOCKET_TMPFS_DESTINATION,
+  POSTGRES_SOCKET_TMPFS_OPTIONS,
   assertSafeDockerArguments,
   isolatedNetworkArguments,
 } from "./docker-plan.mjs";
@@ -21,9 +26,22 @@ import {
   exactClientConfinement,
 } from "./docker-client-confinement.mjs";
 import { OWNED_RESOURCE_PATTERN } from "./constants.mjs";
+import { restartMinioServerProcessWithDocker } from "./minio-process-restart.mjs";
 
 const ENDPOINT_CONVERGENCE_ATTEMPTS = 5;
 const ENDPOINT_CONVERGENCE_DELAY_MS = 50;
+
+function boundedScratchTmpfs(options) {
+  if (typeof options !== "string") return false;
+  const fields = options.split(",");
+  return (
+    fields.length === new Set(fields).size &&
+    fields.includes("rw") &&
+    fields.includes("size=67108864") &&
+    !fields.includes("ro") &&
+    !fields.some((field) => /^size=/u.test(field) && field !== "size=67108864")
+  );
+}
 
 function exactContainerTmpfs(tmpfs, expectedWritableStorage) {
   if (tmpfs === null || typeof tmpfs !== "object" || Array.isArray(tmpfs))
@@ -37,6 +55,7 @@ function exactContainerTmpfs(tmpfs, expectedWritableStorage) {
       ? [expectedWritableStorage.destination]
       : []),
     ...(postgresParentRequired ? [POSTGRES_PARENT_TMPFS_DESTINATION] : []),
+    ...(postgresParentRequired ? [POSTGRES_SOCKET_TMPFS_DESTINATION] : []),
   ]);
   const destinations = Object.keys(tmpfs);
   return (
@@ -44,12 +63,16 @@ function exactContainerTmpfs(tmpfs, expectedWritableStorage) {
     destinations.every((destination) =>
       expectedDestinations.has(destination),
     ) &&
-    destinations.every(
-      (destination) => typeof tmpfs[destination] === "string",
-    ) &&
+    boundedScratchTmpfs(tmpfs["/tmp"]) &&
+    (expectedWritableStorage?.kind !== "tmpfs" ||
+      tmpfs[expectedWritableStorage.destination] ===
+        MINIO_DATA_TMPFS_OPTIONS) &&
     (!postgresParentRequired ||
       tmpfs[POSTGRES_PARENT_TMPFS_DESTINATION] ===
-        POSTGRES_PARENT_TMPFS_OPTIONS)
+        POSTGRES_PARENT_TMPFS_OPTIONS) &&
+    (!postgresParentRequired ||
+      tmpfs[POSTGRES_SOCKET_TMPFS_DESTINATION] ===
+        POSTGRES_SOCKET_TMPFS_OPTIONS)
   );
 }
 
@@ -262,6 +285,7 @@ export class GateDockerRuntime {
     expectedContainerPort,
     expectedImage,
     expectedSecretMounts,
+    expectedProcess,
   ) {
     for (
       let attempt = 1;
@@ -277,6 +301,7 @@ export class GateDockerRuntime {
         expectedContainerPort,
         expectedImage,
         expectedSecretMounts,
+        expectedProcess,
       );
       if (evidence !== undefined) return evidence;
       if (attempt === ENDPOINT_CONVERGENCE_ATTEMPTS)
@@ -295,6 +320,7 @@ export class GateDockerRuntime {
     expectedContainerPort,
     expectedImage,
     expectedSecretMounts,
+    expectedProcess,
   ) {
     const [output, networkOutput, publishedPorts] = await Promise.all([
       this.command(["container", "inspect", name]),
@@ -337,6 +363,31 @@ export class GateDockerRuntime {
       host?.Tmpfs,
       expectedWritableStorage,
     );
+    const processProven =
+      expectedProcess === undefined ||
+      (Array.isArray(expectedProcess.readOnlyMounts) &&
+        expectedProcess.readOnlyMounts.length === 1 &&
+        expectedProcess.readOnlyMounts[0].destination ===
+          MINIO_SUPERVISOR_COMMAND[1] &&
+        this.allowedReadOnlyMounts.has(
+          expectedProcess.readOnlyMounts[0].source,
+        ) &&
+        Array.isArray(container?.Entrypoint) &&
+        container.Entrypoint.length === MINIO_IMAGE_ENTRYPOINT.length &&
+        container.Entrypoint.every(
+          (argument, index) => argument === MINIO_IMAGE_ENTRYPOINT[index],
+        ) &&
+        Array.isArray(container?.Cmd) &&
+        container.Cmd.length === MINIO_SUPERVISOR_COMMAND.length &&
+        container.Cmd.every(
+          (argument, index) => argument === MINIO_SUPERVISOR_COMMAND[index],
+        ));
+    const expectedReadOnlyMounts = [
+      ...(Array.isArray(expectedSecretMounts) ? expectedSecretMounts : []),
+      ...(Array.isArray(expectedProcess?.readOnlyMounts)
+        ? expectedProcess.readOnlyMounts
+        : []),
+    ];
     if (
       !Array.isArray(decoded) ||
       decoded.length !== 1 ||
@@ -358,15 +409,22 @@ export class GateDockerRuntime {
       host?.NanoCpus !== 2_000_000_000 ||
       host?.PidsLimit !== 256 ||
       host?.RestartPolicy?.Name !== "no" ||
-      !host?.CapDrop?.includes("ALL") ||
+      !(
+        host?.CapAdd === null ||
+        (Array.isArray(host?.CapAdd) && host.CapAdd.length === 0)
+      ) ||
+      !Array.isArray(host?.CapDrop) ||
+      host.CapDrop.length !== 1 ||
+      host.CapDrop[0] !== "ALL" ||
       !host?.SecurityOpt?.some((value) =>
         value.startsWith("no-new-privileges"),
       ) ||
       !writableStorageProven ||
+      !processProven ||
       !exactBindMounts(
         inspected?.Mounts,
         expectedWritableStorage,
-        expectedSecretMounts,
+        expectedReadOnlyMounts,
       ) ||
       !Number.isSafeInteger(expectedContainerPort) ||
       expectedContainerPort < 1 ||
@@ -417,6 +475,10 @@ export class GateDockerRuntime {
                 destination: POSTGRES_PARENT_TMPFS_DESTINATION,
                 options: POSTGRES_PARENT_TMPFS_OPTIONS,
               }),
+              socketTmpfs: Object.freeze({
+                destination: POSTGRES_SOCKET_TMPFS_DESTINATION,
+                options: POSTGRES_SOCKET_TMPFS_OPTIONS,
+              }),
             }
           : {}),
       }),
@@ -425,11 +487,25 @@ export class GateDockerRuntime {
         pids: host.PidsLimit,
         virtualCpus: host.NanoCpus / 1_000_000_000,
       }),
+      ...(expectedProcess === undefined
+        ? {}
+        : {
+            processSupervisor: Object.freeze({
+              command: Object.freeze([...MINIO_SUPERVISOR_COMMAND]),
+              readOnlyMount: Object.freeze({
+                ...expectedProcess.readOnlyMounts[0],
+              }),
+            }),
+          }),
     });
   }
 
-  restart(name) {
-    return this.command(["restart", "--time", "5", name], 15_000);
+  async restartMinioServerProcess(name, identity) {
+    return restartMinioServerProcessWithDocker({
+      identity,
+      name,
+      runtime: this,
+    });
   }
 
   async crashAndRestart(name, identity, afterCrash = () => Promise.resolve()) {

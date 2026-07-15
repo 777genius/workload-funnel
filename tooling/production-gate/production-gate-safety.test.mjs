@@ -268,6 +268,7 @@ describe("production gate host safety", () => {
       network: `${runId}-network`,
       rootPasswordFile: `/tmp/${runId}/root-password-file`,
       rootUserFile: `/tmp/${runId}/root-user-file`,
+      supervisorFile: "/reviewed/tooling/minio-supervisor.sh",
     });
     for (const args of [postgres, object]) {
       expect(args.join("\n")).not.toContain(fakeCredential);
@@ -291,6 +292,14 @@ describe("production gate host safety", () => {
     expect(postgres.join("\n")).not.toContain(",rw,");
     expect(postgres.join("\n")).toContain("POSTGRES_PASSWORD_FILE=");
     expect(object.join("\n")).toContain("MINIO_ROOT_PASSWORD_FILE=");
+    expect(object).toEqual(
+      expect.arrayContaining([
+        "/bin/sh",
+        "/gate/minio-supervisor.sh",
+        "server",
+        "/data",
+      ]),
+    );
     expect(() =>
       assertSafeDockerArguments(["create", "--env-file", "/tmp/secret"]),
     ).toThrow("unsafe_docker_gate_arguments");

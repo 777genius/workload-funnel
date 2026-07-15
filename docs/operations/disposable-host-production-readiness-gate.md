@@ -145,10 +145,17 @@ Docker uses an internal bridge with no host port publication, read-only
 filesystems, private IPC/UTS, init, no-new-privileges, all
 capabilities dropped, non-root users, exact platform, `--pull=never`, and
 fixed CPU, memory, swap, PID, file-size, file-descriptor, IO, command, and data
-budgets. Object data uses bounded tmpfs. PostgreSQL uses an exact-identity,
+budgets. Object data uses bounded tmpfs. A reviewed, read-only-mounted
+supervisor restarts only the MinIO server process, leaving the owned container
+and its data tmpfs alive; the gate requires a stable container/supervisor
+boundary, a new server generation and PID, renewed readiness, unchanged
+confinement, and the same server checksum. PostgreSQL uses an exact-identity,
 mode-0700 bind directory under the fixed sandbox so WAL recovery survives a
-forced server-process stop; its fixed probe SQL, connection count, statement
-timeouts, temporary-file limit, and WAL targets bound the fixture workload.
+forced server-process stop. Its image-declared `/var/lib/postgresql` parent
+remains an exact 64 MiB mode-0700 tmpfs around the nested durable data bind, and
+`/var/run/postgresql` is a separate exact 1 MiB mode-0700 tmpfs used as the
+explicit Unix-socket directory. Its fixed probe SQL, connection count,
+statement timeouts, temporary-file limit, and WAL targets bound the fixture workload.
 The directory is prepared and fsynced in the cleanup ledger before creation and
 is removed only after its container. Before the host contacts either fixture,
 the gate requires the exact internal network to be the container's only network,
@@ -185,10 +192,11 @@ Current repository closure is intentionally fail-closed:
   container process boundary and PostgreSQL WAL recovery from durable
   sandbox-owned storage, but no real asynchronous Postgres lifecycle adapter
   exists;
-- the MinIO fixture uses distinct bytes and a distinct checksum to prove that
-  its upload credential can overwrite without the adapter's conditional
-  request, so credential-level immutability is not claimed and production
-  provider approval remains absent;
+- the MinIO fixture preserves its checksum across an evidenced server-process
+  restart inside the stable container/tmpfs boundary, and uses distinct bytes
+  and a distinct checksum to prove that its upload credential can overwrite
+  without the adapter's conditional request, so credential-level immutability
+  is not claimed and production provider approval remains absent;
 - HyperQueue uses restart-durable fsynced ordering and exact post-cancel
   observation, but 0.26.2 lacks operation-ID lookup for ambiguous submit;
 - the running systemd manager, cgroup controllers, and required unit properties

@@ -14,6 +14,24 @@ describe("production gate object overwrite truthfulness", () => {
       Buffer.from(checksum.slice(7), "hex").toString("base64");
     let conditionalPuts = 0;
     let partitioned = false;
+    const restartEvidence = {
+      configurationSha256: "c".repeat(64),
+      containerBoundaryPid: 101,
+      containerBoundaryStable: true,
+      containerConfinementStable: true,
+      containerIdentity: "d".repeat(64),
+      containerIdentityStable: true,
+      currentServerGeneration: 2,
+      currentServerPid: 202,
+      previousServerGeneration: 1,
+      previousServerPid: 201,
+      readinessAfterRestart: true,
+      schemaVersion: "workload-funnel.minio-server-process-restart.v1",
+      serverProcessGenerationChanged: true,
+      serverProcessPidChanged: true,
+      supervisorBoundaryStable: true,
+      supervisorPid: 7,
+    };
     const run = vi.fn(async (_executable, args, options) => {
       const operation = args[1];
       const role = options.environment.ROLE;
@@ -59,7 +77,7 @@ describe("production gate object overwrite truthfulness", () => {
       },
       prefix: `${runId}/uploads/`,
       provider: { providerId: "synthetic-minio" },
-      restart: vi.fn(),
+      restart: vi.fn(() => Promise.resolve(restartEvidence)),
       runId,
       runner: { run },
       sizeBytes: 1,
@@ -71,6 +89,7 @@ describe("production gate object overwrite truthfulness", () => {
       overwriteChangedServerChecksum: true,
       scopeComplete: true,
       serverChecksum: encoded(overwrite),
+      serverProcessRestart: restartEvidence,
       uploadCredentialCanOverwrite: true,
     });
     const overwriteCall = run.mock.calls.find(

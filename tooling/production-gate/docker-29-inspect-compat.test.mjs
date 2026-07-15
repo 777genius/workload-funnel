@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   POSTGRES_PARENT_TMPFS_DESTINATION,
   POSTGRES_PARENT_TMPFS_OPTIONS,
+  POSTGRES_SOCKET_TMPFS_DESTINATION,
+  POSTGRES_SOCKET_TMPFS_OPTIONS,
   postgresContainerArguments,
 } from "./docker-plan.mjs";
 import { GateDockerRuntime } from "./docker-runtime.mjs";
@@ -39,6 +41,7 @@ function docker29Inspect() {
       Volumes: { "/var/lib/postgresql": {} },
     },
     HostConfig: {
+      CapAdd: null,
       CapDrop: ["ALL"],
       Init: true,
       IpcMode: "private",
@@ -55,6 +58,7 @@ function docker29Inspect() {
       Tmpfs: {
         "/tmp": "rw,size=67108864",
         [POSTGRES_PARENT_TMPFS_DESTINATION]: POSTGRES_PARENT_TMPFS_OPTIONS,
+        [POSTGRES_SOCKET_TMPFS_DESTINATION]: POSTGRES_SOCKET_TMPFS_OPTIONS,
       },
       UTSMode: "",
     },
@@ -177,10 +181,15 @@ describe("Docker 29 internal-network endpoint compatibility", () => {
     const parentTmpfs = `${POSTGRES_PARENT_TMPFS_DESTINATION}:${POSTGRES_PARENT_TMPFS_OPTIONS}`;
     const parentIndex = args.indexOf(parentTmpfs);
     const dataBind = `type=bind,src=${postgresData},dst=/var/lib/postgresql/data,bind-propagation=rprivate`;
+    const socketTmpfs = `${POSTGRES_SOCKET_TMPFS_DESTINATION}:${POSTGRES_SOCKET_TMPFS_OPTIONS}`;
     expect(parentIndex).toBeGreaterThan(args.indexOf("--tmpfs"));
     expect(args[parentIndex - 1]).toBe("--tmpfs");
     expect(parentIndex).toBeLessThan(args.indexOf(dataBind));
     expect(args.filter((argument) => argument === parentTmpfs)).toHaveLength(1);
+    expect(args).toContain(socketTmpfs);
+    expect(args.at(-1)).toBe(
+      `unix_socket_directories=${POSTGRES_SOCKET_TMPFS_DESTINATION}`,
+    );
   });
 
   it("proves the created bridge is internal before admitting any container", async () => {
@@ -254,6 +263,10 @@ describe("Docker 29 internal-network endpoint compatibility", () => {
           destination: POSTGRES_PARENT_TMPFS_DESTINATION,
           options: POSTGRES_PARENT_TMPFS_OPTIONS,
         },
+        socketTmpfs: {
+          destination: POSTGRES_SOCKET_TMPFS_DESTINATION,
+          options: POSTGRES_SOCKET_TMPFS_OPTIONS,
+        },
       },
     });
     expect(runtime.runner.run.mock.calls).toEqual([
@@ -297,6 +310,46 @@ describe("Docker 29 internal-network endpoint compatibility", () => {
       (value) => (value.HostConfig.Tmpfs["/foreign"] = "rw,size=4096"),
     ],
   ])("rejects %s for the declared Postgres 18 parent", async (_, mutate) => {
+    const inspected = docker29Inspect();
+    mutate(inspected);
+    await expect(inspect(runtimeFor(inspected))).rejects.toThrow(
+      "docker_container_confinement_unproven",
+    );
+  });
+
+  it.each([
+    [
+      "missing socket tmpfs",
+      (value) =>
+        Reflect.deleteProperty(
+          value.HostConfig.Tmpfs,
+          POSTGRES_SOCKET_TMPFS_DESTINATION,
+        ),
+    ],
+    [
+      "wrong socket tmpfs",
+      (value) =>
+        (value.HostConfig.Tmpfs[POSTGRES_SOCKET_TMPFS_DESTINATION] =
+          POSTGRES_SOCKET_TMPFS_OPTIONS.replace("mode=0700", "mode=0777")),
+    ],
+    [
+      "unbounded socket tmpfs",
+      (value) =>
+        (value.HostConfig.Tmpfs[POSTGRES_SOCKET_TMPFS_DESTINATION] =
+          "rw,nosuid,nodev,noexec,uid=70,gid=70,mode=0700"),
+    ],
+    [
+      "foreign socket tmpfs",
+      (value) => {
+        Reflect.deleteProperty(
+          value.HostConfig.Tmpfs,
+          POSTGRES_SOCKET_TMPFS_DESTINATION,
+        );
+        value.HostConfig.Tmpfs["/run/postgresql"] =
+          POSTGRES_SOCKET_TMPFS_OPTIONS;
+      },
+    ],
+  ])("rejects %s in Docker 29 inspect", async (_, mutate) => {
     const inspected = docker29Inspect();
     mutate(inspected);
     await expect(inspect(runtimeFor(inspected))).rejects.toThrow(

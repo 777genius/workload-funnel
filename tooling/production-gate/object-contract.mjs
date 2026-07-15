@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import { OWNED_RESOURCE_PATTERN } from "./constants.mjs";
+import { assertMinioRestartEvidence } from "./minio-process-restart.mjs";
 
 function safeObjectKey(key, prefix) {
   return (
@@ -324,7 +325,7 @@ export async function runObjectCompatibilityProbe(config) {
   ).toString("base64");
   if (checksum !== expectedChecksum)
     throw new Error("object_gate_server_checksum_mismatch");
-  await config.restart();
+  const processRestart = assertMinioRestartEvidence(await config.restart());
   const afterRestart = await awsRequest(
     config,
     ["head-object", ...common, "--checksum-mode", "ENABLED"],
@@ -373,6 +374,7 @@ export async function runObjectCompatibilityProbe(config) {
     exactProviderIdentity: config.provider,
     networkPartitionReconciled: true,
     restartReconciled: true,
+    serverProcessRestart: processRestart,
     serverChecksum: checksum,
     scopeComplete: Object.values(scopeDenials).every(Boolean),
     scopeDenials,

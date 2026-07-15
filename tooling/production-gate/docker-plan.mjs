@@ -13,6 +13,26 @@ export const POSTGRES_PARENT_TMPFS_DESTINATION = "/var/lib/postgresql";
 export const POSTGRES_PARENT_TMPFS_OPTIONS =
   "rw,nosuid,nodev,noexec,size=67108864,uid=70,gid=70,mode=0700";
 const POSTGRES_PARENT_TMPFS_ARGUMENT = `${POSTGRES_PARENT_TMPFS_DESTINATION}:${POSTGRES_PARENT_TMPFS_OPTIONS}`;
+export const POSTGRES_SOCKET_TMPFS_DESTINATION = "/var/run/postgresql";
+export const POSTGRES_SOCKET_TMPFS_OPTIONS =
+  "rw,nosuid,nodev,noexec,size=1048576,uid=70,gid=70,mode=0700";
+const POSTGRES_SOCKET_TMPFS_ARGUMENT = `${POSTGRES_SOCKET_TMPFS_DESTINATION}:${POSTGRES_SOCKET_TMPFS_OPTIONS}`;
+export const MINIO_DATA_TMPFS_OPTIONS =
+  "rw,nosuid,nodev,noexec,size=268435456,uid=1000,gid=1000,mode=0700";
+export const MINIO_SUPERVISOR_DESTINATION = "/gate/minio-supervisor.sh";
+export const MINIO_IMAGE_ENTRYPOINT = Object.freeze([
+  "/usr/bin/docker-entrypoint.sh",
+]);
+export const MINIO_SUPERVISOR_COMMAND = Object.freeze([
+  "/bin/sh",
+  MINIO_SUPERVISOR_DESTINATION,
+  "server",
+  "/data",
+  "--address",
+  ":9000",
+  "--console-address",
+  ":9001",
+]);
 
 export function assertSafeDockerArguments(args) {
   const rendered = args.join(" ");
@@ -53,8 +73,10 @@ function boundedContainerArguments({
   name,
   network,
   parentTmpfs,
+  readOnlyMounts = [],
   scratchTmpfs,
   secretMounts,
+  socketTmpfs,
   user,
 }) {
   if (
@@ -76,6 +98,8 @@ function boundedContainerArguments({
         ))) ||
     (parentTmpfs !== undefined &&
       parentTmpfs !== POSTGRES_PARENT_TMPFS_ARGUMENT) ||
+    (socketTmpfs !== undefined &&
+      socketTmpfs !== POSTGRES_SOCKET_TMPFS_ARGUMENT) ||
     !Array.isArray(secretMounts) ||
     secretMounts.some(
       ({ destination, source }) =>
@@ -84,6 +108,15 @@ function boundedContainerArguments({
         source.includes("\u0000") ||
         typeof destination !== "string" ||
         !/^\/run\/secrets\/[a-z0-9-]{1,64}$/u.test(destination),
+    ) ||
+    !Array.isArray(readOnlyMounts) ||
+    readOnlyMounts.length > 1 ||
+    readOnlyMounts.some(
+      ({ destination, source }) =>
+        destination !== MINIO_SUPERVISOR_DESTINATION ||
+        typeof source !== "string" ||
+        !source.startsWith("/") ||
+        source.includes("\u0000"),
     ) ||
     environment === null ||
     typeof environment !== "object" ||
@@ -148,6 +181,7 @@ function boundedContainerArguments({
     "--tmpfs",
     scratchTmpfs,
     ...(parentTmpfs === undefined ? [] : ["--tmpfs", parentTmpfs]),
+    ...(socketTmpfs === undefined ? [] : ["--tmpfs", socketTmpfs]),
     ...(dataStorage.kind === "tmpfs"
       ? ["--tmpfs", dataStorage.options]
       : [
@@ -159,6 +193,10 @@ function boundedContainerArguments({
       `${key}=${value}`,
     ]),
     ...secretMounts.flatMap(({ destination, source }) => [
+      "--mount",
+      `type=bind,src=${source},dst=${destination},readonly`,
+    ]),
+    ...readOnlyMounts.flatMap(({ destination, source }) => [
       "--mount",
       `type=bind,src=${source},dst=${destination},readonly`,
     ]),
@@ -200,6 +238,7 @@ export function postgresContainerArguments(config) {
           source: config.passwordFile,
         },
       ],
+      socketTmpfs: POSTGRES_SOCKET_TMPFS_ARGUMENT,
       user: "70:70",
     }),
     "postgres",
@@ -216,18 +255,23 @@ export function postgresContainerArguments(config) {
     "-c",
     "idle_in_transaction_session_timeout=15000",
     "-c",
-    "unix_socket_directories=",
+    `unix_socket_directories=${POSTGRES_SOCKET_TMPFS_DESTINATION}`,
   ]);
 }
 
 export function objectContainerArguments(config) {
+  if (
+    typeof config.supervisorFile !== "string" ||
+    !config.supervisorFile.startsWith("/") ||
+    config.supervisorFile.includes("\u0000")
+  )
+    throw new Error("unsafe_minio_supervisor_identity");
   return Object.freeze([
     ...boundedContainerArguments({
       dataStorage: {
         destination: "/data",
         kind: "tmpfs",
-        options:
-          "/data:rw,nosuid,nodev,noexec,size=268435456,uid=1000,gid=1000,mode=0700",
+        options: `/data:${MINIO_DATA_TMPFS_OPTIONS}`,
       },
       image: config.image,
       environment: {
@@ -237,6 +281,12 @@ export function objectContainerArguments(config) {
       ioDevice: config.ioDevice,
       name: config.name,
       network: config.network,
+      readOnlyMounts: [
+        {
+          destination: MINIO_SUPERVISOR_DESTINATION,
+          source: config.supervisorFile,
+        },
+      ],
       scratchTmpfs:
         "/tmp:rw,nosuid,nodev,noexec,size=67108864,uid=1000,gid=1000,mode=0700",
       secretMounts: [
@@ -251,11 +301,6 @@ export function objectContainerArguments(config) {
       ],
       user: "1000:1000",
     }),
-    "server",
-    "/data",
-    "--address",
-    ":9000",
-    "--console-address",
-    ":9001",
+    ...MINIO_SUPERVISOR_COMMAND,
   ]);
 }

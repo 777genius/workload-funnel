@@ -19,7 +19,10 @@ import {
 } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
 import { DECLARED_COMPONENTS } from "./constants.mjs";
-import { objectContainerArguments } from "./docker-plan.mjs";
+import {
+  MINIO_SUPERVISOR_DESTINATION,
+  objectContainerArguments,
+} from "./docker-plan.mjs";
 import {
   createDockerRecoveryCleaners,
   GateDockerRuntime,
@@ -34,6 +37,7 @@ import { writeEvidenceAtomically } from "./evidence-writer.mjs";
 import { observeHost } from "./host-observation.mjs";
 import { runHyperQueueCompatibilityProbe } from "./hyperqueue-contract.mjs";
 import { monotonicMilliseconds } from "./mixed-load.mjs";
+import { restartConfinedMinio } from "./minio-process-restart.mjs";
 import { bootstrapObjectFixture } from "./object-fixture-bootstrap.mjs";
 import { cleanupOwnedDirectoryRecord } from "./owned-directory.mjs";
 import {
@@ -64,6 +68,9 @@ import { probeRealSystemdCapabilities } from "./systemd-capability-probe.mjs";
 const startedAt = new Date().toISOString();
 const minioBootstrapScript = fileURLToPath(
   new URL("./fixtures/minio-bootstrap.sh", import.meta.url),
+);
+const minioSupervisorScript = fileURLToPath(
+  new URL("./fixtures/minio-supervisor.sh", import.meta.url),
 );
 const systemdFixturePath = fileURLToPath(
   new URL("./fixtures/systemd-workload.mjs", import.meta.url),
@@ -279,7 +286,10 @@ async function main() {
 
   if (components.get("preflight").status === "PASS") {
     docker = new GateDockerRuntime({
-      allowedReadOnlyMounts: new Set([minioBootstrapScript]),
+      allowedReadOnlyMounts: new Set([
+        minioBootstrapScript,
+        minioSupervisorScript,
+      ]),
       executable: config.dockerExecutable,
       ioDevice: config.ioDevice,
       ledger,
@@ -349,8 +359,27 @@ async function main() {
           network: docker.network,
           rootPasswordFile,
           rootUserFile,
+          supervisorFile: minioSupervisorScript,
         }),
       );
+      const objectSecretMounts = [
+        {
+          destination: "/run/secrets/minio-root-user",
+          source: rootUserFile,
+        },
+        {
+          destination: "/run/secrets/minio-root-password",
+          source: rootPasswordFile,
+        },
+      ];
+      const objectProcess = {
+        readOnlyMounts: [
+          {
+            destination: MINIO_SUPERVISOR_DESTINATION,
+            source: minioSupervisorScript,
+          },
+        ],
+      };
       const objectDockerConfinement = await docker.inspectContainerConfinement(
         objectName,
         "1000:1000",
@@ -359,16 +388,8 @@ async function main() {
         { destination: "/data", kind: "tmpfs" },
         9000,
         config.objectImage,
-        [
-          {
-            destination: "/run/secrets/minio-root-user",
-            source: rootUserFile,
-          },
-          {
-            destination: "/run/secrets/minio-root-password",
-            source: rootPasswordFile,
-          },
-        ],
+        objectSecretMounts,
+        objectProcess,
       );
       const adminConfigFile = await writeSecretFile({
         contents: `${JSON.stringify({
@@ -499,16 +520,8 @@ async function main() {
             { destination: "/data", kind: "tmpfs" },
             9000,
             config.objectImage,
-            [
-              {
-                destination: "/run/secrets/minio-root-user",
-                source: rootUserFile,
-              },
-              {
-                destination: "/run/secrets/minio-root-password",
-                source: rootPasswordFile,
-              },
-            ],
+            objectSecretMounts,
+            objectProcess,
           );
           if (
             healed.internalNetworkEndpoint.ipv4Address !==
@@ -523,8 +536,26 @@ async function main() {
         prefix,
         provider,
         restart: async () => {
-          await docker.restart(objectName);
-          await waitFor(objectReady, "object_fixture_restart_timeout");
+          return restartConfinedMinio({
+            beforeConfinement: objectDockerConfinement,
+            docker,
+            identity: objectIdentity,
+            inspectConfinement: () =>
+              docker.inspectContainerConfinement(
+                objectName,
+                "1000:1000",
+                [rootSecret],
+                objectIdentity,
+                { destination: "/data", kind: "tmpfs" },
+                9000,
+                config.objectImage,
+                objectSecretMounts,
+                objectProcess,
+              ),
+            name: objectName,
+            ready: objectReady,
+            waitFor,
+          });
         },
         runId: config.runId,
         runner,
