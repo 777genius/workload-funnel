@@ -1,3 +1,6 @@
+import { performance } from "node:perf_hooks";
+import { setTimeout as wait } from "node:timers/promises";
+
 function unitAbsent(result) {
   const loadStates = result.stdout
     .split("\n")
@@ -92,6 +95,34 @@ function showSlice(config, slice) {
   );
 }
 
+const SLICE_CLEANUP_POLL_INTERVAL_MS = 50;
+const SLICE_CLEANUP_POLL_MAXIMUM_MS = 1_000;
+
+async function observeStoppedSlice(config, slice, controlGroup) {
+  const clock = config.clock ?? (() => performance.now());
+  const pause = config.wait ?? wait;
+  const deadline = clock() + SLICE_CLEANUP_POLL_MAXIMUM_MS;
+  for (;;) {
+    const observed = await showSlice(config, slice);
+    if (implicitSliceBaseline(observed, slice)) {
+      if (clock() > deadline)
+        throw new Error("systemd_slice_cleanup_uncertain");
+      return;
+    }
+    const values = parseSliceShow(observed);
+    if (observed.code !== 0 || values === undefined)
+      throw new Error("systemd_slice_cleanup_uncertain");
+    if (
+      !unconfiguredSliceIdentity(values, slice) ||
+      values.ActiveState !== "active" ||
+      values.ControlGroup !== controlGroup
+    )
+      throw new Error("systemd_slice_cleanup_identity_changed");
+    if (clock() >= deadline) throw new Error("systemd_slice_cleanup_uncertain");
+    await pause(SLICE_CLEANUP_POLL_INTERVAL_MS);
+  }
+}
+
 export async function cleanupSystemdSlice(config, record) {
   const before = await showSlice(config, record.name);
   if (unitAbsent(before) || implicitSliceBaseline(before, record.name)) return;
@@ -121,9 +152,8 @@ export async function cleanupSystemdSlice(config, record) {
     ["reset-failed", record.name],
     { timeoutMs: 2_000 },
   );
-  const after = await showSlice(config, record.name);
-  if (reset.code !== 0 || !implicitSliceBaseline(after, record.name))
-    throw new Error("systemd_slice_cleanup_uncertain");
+  if (reset.code !== 0) throw new Error("systemd_slice_cleanup_uncertain");
+  await observeStoppedSlice(config, record.name, beforeValues.ControlGroup);
 }
 
 export function createSystemdSliceOwnership(config) {

@@ -58,7 +58,7 @@ function postgresInspect(overrides = {}) {
       NetworkMode: `${runId}-network`,
       PidsLimit: 256,
       PortBindings: {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
+        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
       },
       Privileged: false,
       ReadonlyRootfs: true,
@@ -79,6 +79,11 @@ function postgresInspect(overrides = {}) {
         Type: "bind",
       },
     ],
+    NetworkSettings: {
+      Ports: {
+        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
+      },
+    },
   };
 }
 
@@ -178,7 +183,7 @@ describe("Docker 29 production-gate compatibility", () => {
 
     for (const binding of [
       { HostIp: "127.0.0.1", HostPort: "" },
-      { HostIp: "127.0.0.1", HostPort: "0" },
+      { HostIp: "127.0.0.1", HostPort: "49152" },
       { HostIp: "0.0.0.0", HostPort: "49152" },
       { HostIp: "127.0.0.1", HostPort: "65536" },
     ]) {
@@ -199,7 +204,7 @@ describe("Docker 29 production-gate compatibility", () => {
 
     inspected = postgresInspect({
       PortBindings: {
-        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
+        "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
         "9000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49153" }],
       },
     });

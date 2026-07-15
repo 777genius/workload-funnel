@@ -140,6 +140,14 @@ function pinnedArchiveBinary(archive) {
   return matches[0];
 }
 
+export function exactOfficialHyperQueueVersion(result) {
+  return (
+    result.code === 0 &&
+    result.stderr.length === 0 &&
+    result.stdout === `hyperqueue v${HYPERQUEUE_VERSION}\n`
+  );
+}
+
 export async function verifyHyperQueueRelease({
   archivePath,
   binaryPath,
@@ -180,11 +188,7 @@ export async function verifyHyperQueueRelease({
   const version = await runner.run(binaryPath, ["--version"], {
     timeoutMs: 5_000,
   });
-  if (
-    version.code !== 0 ||
-    version.stderr.length !== 0 ||
-    version.stdout.trim() !== `hq ${HYPERQUEUE_VERSION}`
-  )
+  if (!exactOfficialHyperQueueVersion(version))
     throw new Error("hyperqueue_exact_version_mismatch");
   return Object.freeze({
     archiveSha256,

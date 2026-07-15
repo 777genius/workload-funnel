@@ -310,7 +310,7 @@ describe("production gate host safety", () => {
         NetworkMode: `${runId}-network`,
         PidsLimit: 256,
         PortBindings: {
-          "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
+          "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }],
         },
         Privileged: false,
         ReadonlyRootfs: true,
@@ -330,6 +330,11 @@ describe("production gate host safety", () => {
           Type: "bind",
         },
       ],
+      NetworkSettings: {
+        Ports: {
+          "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
+        },
+      },
     };
     const inspectOutput = { value: JSON.stringify([inspected]) };
     const runtime = new GateDockerRuntime({

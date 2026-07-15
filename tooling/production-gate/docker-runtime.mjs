@@ -229,12 +229,16 @@ export class GateDockerRuntime {
     const inspected = decoded?.[0];
     const host = inspected?.HostConfig;
     const container = inspected?.Config;
-    const ports = host?.PortBindings;
+    const requestedPorts = host?.PortBindings;
+    const assignedPorts = inspected?.NetworkSettings?.Ports;
     const expectedPortKey = `${String(expectedContainerPort)}/tcp`;
-    const portKeys = Object.keys(ports ?? {});
-    const publishedBindings = ports?.[expectedPortKey];
-    const publishedBinding = publishedBindings?.[0];
-    const publishedHostPort = Number(publishedBinding?.HostPort);
+    const requestedPortKeys = Object.keys(requestedPorts ?? {});
+    const requestedBindings = requestedPorts?.[expectedPortKey];
+    const requestedBinding = requestedBindings?.[0];
+    const assignedPortKeys = Object.keys(assignedPorts ?? {});
+    const assignedBindings = assignedPorts?.[expectedPortKey];
+    const assignedBinding = assignedBindings?.[0];
+    const publishedHostPort = Number(assignedBinding?.HostPort);
     const writableStorageProven =
       expectedWritableStorage?.kind === "bind"
         ? Array.isArray(inspected?.Mounts) &&
@@ -277,16 +281,26 @@ export class GateDockerRuntime {
       !Number.isSafeInteger(expectedContainerPort) ||
       expectedContainerPort < 1 ||
       expectedContainerPort > 65_535 ||
-      portKeys.length !== 1 ||
-      portKeys[0] !== expectedPortKey ||
-      !Array.isArray(publishedBindings) ||
-      publishedBindings.length !== 1 ||
-      publishedBinding === null ||
-      typeof publishedBinding !== "object" ||
-      Array.isArray(publishedBinding) ||
-      Object.keys(publishedBinding).sort().join(",") !== "HostIp,HostPort" ||
-      publishedBinding.HostIp !== "127.0.0.1" ||
-      !/^[1-9]\d{0,4}$/u.test(publishedBinding.HostPort ?? "") ||
+      requestedPortKeys.length !== 1 ||
+      requestedPortKeys[0] !== expectedPortKey ||
+      !Array.isArray(requestedBindings) ||
+      requestedBindings.length !== 1 ||
+      requestedBinding === null ||
+      typeof requestedBinding !== "object" ||
+      Array.isArray(requestedBinding) ||
+      Object.keys(requestedBinding).sort().join(",") !== "HostIp,HostPort" ||
+      requestedBinding.HostIp !== "127.0.0.1" ||
+      requestedBinding.HostPort !== "0" ||
+      assignedPortKeys.length !== 1 ||
+      assignedPortKeys[0] !== expectedPortKey ||
+      !Array.isArray(assignedBindings) ||
+      assignedBindings.length !== 1 ||
+      assignedBinding === null ||
+      typeof assignedBinding !== "object" ||
+      Array.isArray(assignedBinding) ||
+      Object.keys(assignedBinding).sort().join(",") !== "HostIp,HostPort" ||
+      assignedBinding.HostIp !== "127.0.0.1" ||
+      !/^[1-9]\d{0,4}$/u.test(assignedBinding.HostPort ?? "") ||
       !Number.isSafeInteger(publishedHostPort) ||
       publishedHostPort > 65_535
     )
