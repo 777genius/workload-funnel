@@ -182,6 +182,10 @@ for (const token of [
   "MINIO_SUPERVISOR_ENTRYPOINT",
   "container?.Cmd",
   "container?.Entrypoint",
+  "exactMinioCredentialFileEnvironment",
+  '"MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-root-password"',
+  '"MINIO_ROOT_USER_FILE=/run/secrets/minio-root-user"',
+  "/^MINIO_ROOT_(?:PASSWORD|USER)=/u",
   "ReadonlyRootfs",
   "no-new-privileges",
 ])
@@ -196,6 +200,13 @@ for (const token of [
   "postCommitPersistedAfterRestart: true",
   "parsePostgresCanonicalIdentity",
   "proveConcurrentPostgresReplay",
+  '"--quiet"',
+  '"VERBOSITY=verbose"',
+  "PostgresSerializationFailure",
+  "postgresCommandError",
+  'error?.code !== "40001"',
+  'output.endsWith("\\n")',
+  "return result.stdout;",
   "crashServer",
 ])
   if (!postgres.includes(token))
@@ -206,6 +217,18 @@ if (
   postgres.includes("LIMIT 1;")
 )
   failures.push("Postgres replay identity is not canonically deduplicated");
+const postgresRegression = await source(
+  "tooling/production-gate/postgres-probe.test.mjs",
+);
+for (const token of [
+  "BEGIN\\nSET\\nworkload\\nCOMMIT",
+  "suppresses real multi-statement psql command statuses",
+  "ERROR:  40001:",
+  "does not retry a non-serialization psql failure",
+  "foreign-workload\\n",
+])
+  if (!postgresRegression.includes(token))
+    failures.push(`Postgres real-output regression is missing ${token}`);
 
 for (const token of [
   "crashAndRestart",
@@ -244,9 +267,34 @@ for (const token of [
   "workload-funnel.minio-supervisor.v1",
   "trap request_restart USR1",
   "/usr/bin/minio",
+  "expected_root_user_file=/run/secrets/minio-root-user",
+  "expected_root_password_file=/run/secrets/minio-root-password",
+  "IFS= read -r root_user",
+  "IFS= read -r root_password",
+  'MINIO_ROOT_USER="$root_user" MINIO_ROOT_PASSWORD="$root_password"',
 ])
   if (!minioSupervisor.includes(token))
     failures.push(`MinIO process supervisor is missing ${token}`);
+if (
+  minioSupervisor.includes('/bin/cat "$expected_root_') ||
+  minioSupervisor.includes("set -x")
+)
+  failures.push("MinIO process supervisor can disclose root credentials");
+
+const minioSupervisorRegression = await source(
+  "tooling/production-gate/minio-process-restart.test.mjs",
+);
+for (const token of [
+  "WF_GATE_USER_DIGEST_CAPTURE",
+  "WF_GATE_PASSWORD_DIGEST_CAPTURE",
+  "syntheticRootUser",
+  "syntheticRootPassword",
+  "JSON.stringify(createMetadata)",
+  "multi-line root-password file",
+  "generation: 2",
+])
+  if (!minioSupervisorRegression.includes(token))
+    failures.push(`MinIO credential regression is missing ${token}`);
 
 const minioRestart = await source(
   "tooling/production-gate/minio-process-restart.mjs",

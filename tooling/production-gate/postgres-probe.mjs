@@ -1,6 +1,19 @@
 const sqlIdentifier = /^[a-z][a-z0-9_]{0,62}$/u;
 const gateValue = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
+class PostgresSerializationFailure extends Error {
+  constructor() {
+    super("postgres_serialization_failure");
+    this.code = "40001";
+  }
+}
+
+export function postgresCommandError({ stderr = "", stdout = "" }) {
+  if (/\bERROR:\s+40001:/u.test(`${stderr}\n${stdout}`))
+    return new PostgresSerializationFailure();
+  return new Error("postgres_fixture_command_failed");
+}
+
 function identifier(value) {
   if (!sqlIdentifier.test(value))
     throw new Error("unsafe_postgres_gate_identifier");
@@ -73,8 +86,11 @@ export function psqlArguments({ database, host, port, sql, user }) {
     throw new Error("unsafe_psql_gate_arguments");
   return Object.freeze([
     "--no-psqlrc",
+    "--quiet",
     "--set",
     "ON_ERROR_STOP=1",
+    "--set",
+    "VERBOSITY=verbose",
     "--host",
     host,
     "--port",
@@ -113,10 +129,25 @@ export function parsePostgresSnapshot(output) {
   return Object.freeze(decoded);
 }
 
+function parsePsqlSingleRow(output, malformed) {
+  if (
+    typeof output !== "string" ||
+    !output.endsWith("\n") ||
+    output.includes("\r") ||
+    output.slice(0, -1).includes("\n")
+  )
+    throw new Error(malformed);
+  return output.slice(0, -1);
+}
+
 export function parsePostgresCanonicalIdentity(output) {
-  if (typeof output !== "string" || !gateValue.test(output))
+  const identity = parsePsqlSingleRow(
+    output,
+    "postgres_gate_identity_malformed",
+  );
+  if (!gateValue.test(identity))
     throw new Error("postgres_gate_identity_malformed");
-  return output;
+  return identity;
 }
 
 export async function proveConcurrentPostgresReplay({
@@ -130,14 +161,21 @@ export async function proveConcurrentPostgresReplay({
   const duplicates = await Promise.all(
     Array.from({ length: 8 }, () => replay().catch((error) => error)),
   );
+  const failures = duplicates.filter((result) => result instanceof Error);
+  const nonSerializationFailure = failures.find(
+    (error) => error?.code !== "40001",
+  );
+  if (nonSerializationFailure !== undefined) throw nonSerializationFailure;
   if (duplicates.every((result) => result instanceof Error))
     throw new Error("postgres_concurrent_duplicate_all_failed");
+  if (
+    duplicates.some(
+      (result) => !(result instanceof Error) && result !== expectedIdentity,
+    )
+  )
+    throw new Error("postgres_concurrent_duplicate_identity_unstable");
   const identities = await Promise.all(
-    duplicates.map((result) =>
-      result instanceof Error || result !== expectedIdentity
-        ? replay()
-        : result,
-    ),
+    duplicates.map((result) => (result instanceof Error ? replay() : result)),
   );
   if (identities.some((identity) => identity !== expectedIdentity))
     throw new Error("postgres_concurrent_duplicate_identity_unstable");
@@ -174,15 +212,21 @@ async function executePsql(config, sql, timeoutMs = 20_000) {
       timeoutMs,
     },
   );
-  if (result.code !== 0) throw new Error("postgres_fixture_command_failed");
-  return result.stdout.trim();
+  if (result.code !== 0) throw postgresCommandError(result);
+  return result.stdout;
 }
 
 async function waitForCrashWindow(config, applicationName) {
   const deadline = Date.now() + 8_000;
   const sql = `SELECT count(*) FROM pg_stat_activity WHERE application_name = ${literal(applicationName)} AND state = 'active' AND query LIKE '%pg_sleep%';`;
   for (;;) {
-    if ((await executePsql(config, sql, 2_000)) === "1") return;
+    if (
+      parsePsqlSingleRow(
+        await executePsql(config, sql, 2_000),
+        "postgres_crash_window_observation_malformed",
+      ) === "1"
+    )
+      return;
     if (Date.now() >= deadline)
       throw new Error("postgres_crash_window_not_synchronized");
     await config.wait(25);
@@ -209,7 +253,10 @@ async function startCrashClient(config, input, window, applicationName) {
 }
 
 export async function runPostgresFixtureProbe(config) {
-  const version = await executePsql(config, "SHOW server_version;");
+  const version = parsePsqlSingleRow(
+    await executePsql(config, "SHOW server_version;"),
+    "postgres_fixture_version_output_malformed",
+  );
   if (!/^18\.4(?:\s|$)/u.test(version))
     throw new Error("postgres_fixture_version_mismatch");
   await executePsql(config, postgresSchemaSql(config.schema));

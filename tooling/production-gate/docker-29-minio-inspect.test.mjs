@@ -212,6 +212,17 @@ describe("Docker 29 supervised MinIO confinement", () => {
     ],
     ["supervisor command bypass", (value) => (value.Config.Cmd = ["server"])],
     [
+      "missing root-user file environment",
+      (value) =>
+        (value.Config.Env = value.Config.Env.filter(
+          (entry) => !entry.startsWith("MINIO_ROOT_USER_FILE="),
+        )),
+    ],
+    [
+      "direct root-password environment",
+      (value) => value.Config.Env.push("MINIO_ROOT_PASSWORD=not-a-file"),
+    ],
+    [
       "image entrypoint wrapper",
       (value) => (value.Config.Entrypoint = ["/usr/bin/docker-entrypoint.sh"]),
     ],
@@ -252,10 +263,19 @@ describe("Docker 29 supervised MinIO confinement", () => {
     );
   });
 
-  it("rejects a MinIO secret in Docker metadata", async () => {
+  it.each([
+    [
+      "Config.Env",
+      (value, secret) => value.Config.Env.push(`FOREIGN=${secret}`),
+    ],
+    ["Config.Cmd", (value, secret) => value.Config.Cmd.push(secret)],
+  ])("rejects a MinIO credential in Docker %s metadata", async (_, expose) => {
     const inspected = containerInspect();
-    inspected.Config.Env.push("MINIO_ROOT_PASSWORD=adversarial-secret");
-    await expect(inspect(inspected, ["adversarial-secret"])).rejects.toThrow(
+    const rootUser = "synthetic-root-user";
+    const rootPassword = "synthetic-root-password";
+    expose(inspected, rootUser);
+    expose(inspected, rootPassword);
+    await expect(inspect(inspected, [rootUser, rootPassword])).rejects.toThrow(
       "docker_container_metadata_contains_secret",
     );
   });

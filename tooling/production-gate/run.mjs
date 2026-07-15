@@ -332,7 +332,7 @@ async function main() {
       const suffix = config.runId.slice("wf-production-gate-".length);
       const rootAccess = `wfroot${suffix.slice(0, 16)}`;
       const rootSecret = gateSecret();
-      secrets.push(rootSecret);
+      secrets.push(rootAccess, rootSecret);
       const rootUserFile = await writeSecretFile({
         contents: `${rootAccess}\n`,
         ledger,
@@ -383,7 +383,7 @@ async function main() {
       const objectDockerConfinement = await docker.inspectContainerConfinement(
         objectName,
         "1000:1000",
-        [rootSecret],
+        [rootAccess, rootSecret],
         objectIdentity,
         { destination: "/data", kind: "tmpfs" },
         9000,
@@ -515,7 +515,7 @@ async function main() {
           const healed = await docker.inspectContainerConfinement(
             objectName,
             "1000:1000",
-            [rootSecret],
+            [rootAccess, rootSecret],
             objectIdentity,
             { destination: "/data", kind: "tmpfs" },
             9000,
@@ -544,7 +544,7 @@ async function main() {
               docker.inspectContainerConfinement(
                 objectName,
                 "1000:1000",
-                [rootSecret],
+                [rootAccess, rootSecret],
                 objectIdentity,
                 { destination: "/data", kind: "tmpfs" },
                 9000,

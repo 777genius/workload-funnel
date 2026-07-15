@@ -76,6 +76,20 @@ function exactContainerTmpfs(tmpfs, expectedWritableStorage) {
   );
 }
 
+function exactMinioCredentialFileEnvironment(environment) {
+  if (!Array.isArray(environment)) return false;
+  const expected = [
+    "MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio-root-password",
+    "MINIO_ROOT_USER_FILE=/run/secrets/minio-root-user",
+  ];
+  return (
+    expected.every(
+      (entry) => environment.filter((value) => value === entry).length === 1,
+    ) &&
+    !environment.some((entry) => /^MINIO_ROOT_(?:PASSWORD|USER)=/u.test(entry))
+  );
+}
+
 function missingDockerObject(result) {
   return (
     result.code !== 0 &&
@@ -381,7 +395,8 @@ export class GateDockerRuntime {
         container.Cmd.length === MINIO_SUPERVISOR_COMMAND.length &&
         container.Cmd.every(
           (argument, index) => argument === MINIO_SUPERVISOR_COMMAND[index],
-        ));
+        ) &&
+        exactMinioCredentialFileEnvironment(container?.Env));
     const expectedReadOnlyMounts = [
       ...(Array.isArray(expectedSecretMounts) ? expectedSecretMounts : []),
       ...(Array.isArray(expectedProcess?.readOnlyMounts)

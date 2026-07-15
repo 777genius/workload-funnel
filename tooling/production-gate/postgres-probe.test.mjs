@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   atomicAcceptanceSql,
   parsePostgresCanonicalIdentity,
+  postgresCommandError,
+  psqlArguments,
   proveConcurrentPostgresReplay,
 } from "./postgres-probe.mjs";
 
@@ -30,10 +32,33 @@ describe("Postgres concurrent acceptance replay", () => {
   it("fails closed when every adversarial concurrent replay emits the identity twice", async () => {
     await expect(
       proveConcurrentPostgresReplay({
-        attempt: async () => "workload\nworkload",
+        attempt: async () => "workload\nworkload\n",
         expectedIdentity: "workload",
       }),
-    ).rejects.toThrow("postgres_concurrent_duplicate_all_failed");
+    ).rejects.toThrow("postgres_gate_identity_malformed");
+  });
+
+  it("suppresses real multi-statement psql command statuses instead of filtering them", () => {
+    const args = psqlArguments({
+      database: "wf_gate",
+      host: "127.0.0.1",
+      port: 5432,
+      sql: atomicAcceptanceSql(input),
+      user: "wf_gate",
+    });
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--no-psqlrc",
+        "--quiet",
+        "ON_ERROR_STOP=1",
+        "VERBOSITY=verbose",
+        "--tuples-only",
+        "--no-align",
+      ]),
+    );
+    expect(() =>
+      parsePostgresCanonicalIdentity("BEGIN\nSET\nworkload\nCOMMIT\n"),
+    ).toThrow("postgres_gate_identity_malformed");
   });
 
   it("retries serialization losers and returns one canonical identity", async () => {
@@ -42,8 +67,12 @@ describe("Postgres concurrent acceptance replay", () => {
       proveConcurrentPostgresReplay({
         attempt: async () => {
           calls += 1;
-          if (calls < 8) throw new Error("synthetic_serialization_loser");
-          return "workload";
+          if (calls < 8)
+            throw postgresCommandError({
+              stderr:
+                "psql: ERROR:  40001: could not serialize access due to concurrent update",
+            });
+          return "workload\n";
         },
         expectedIdentity: "workload",
       }),
@@ -51,7 +80,42 @@ describe("Postgres concurrent acceptance replay", () => {
     expect(calls).toBe(15);
   });
 
+  it("does not retry a non-serialization psql failure", async () => {
+    const failure = postgresCommandError({
+      stderr: "psql: ERROR:  23505: synthetic constraint failure",
+    });
+    expect(failure).toMatchObject({
+      message: "postgres_fixture_command_failed",
+    });
+    await expect(
+      proveConcurrentPostgresReplay({
+        attempt: async () => {
+          throw failure;
+        },
+        expectedIdentity: "workload",
+      }),
+    ).rejects.toBe(failure);
+  });
+
   it("accepts exactly one canonical replay identity", () => {
-    expect(parsePostgresCanonicalIdentity("workload")).toBe("workload");
+    expect(parsePostgresCanonicalIdentity("workload\n")).toBe("workload");
+  });
+
+  it.each([
+    ["different", "foreign-workload\n"],
+    ["duplicate", "workload\nworkload\n"],
+    ["transaction statuses", "BEGIN\nworkload\nCOMMIT\n"],
+    ["missing row terminator", "workload"],
+  ])("fails closed on a %s replay identity", async (_case, output) => {
+    await expect(
+      proveConcurrentPostgresReplay({
+        attempt: async () => output,
+        expectedIdentity: "workload",
+      }),
+    ).rejects.toThrow(
+      output === "foreign-workload\n"
+        ? "postgres_concurrent_duplicate_identity_unstable"
+        : "postgres_gate_identity_malformed",
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { fileURLToPath, URL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { objectContainerArguments } from "./docker-plan.mjs";
 import { GateDockerRuntime } from "./docker-runtime.mjs";
 import {
   assertMinioRestartEvidence,
@@ -81,6 +83,38 @@ async function waitForState(path, generation) {
     if (Date.now() >= deadline) throw new Error("synthetic_supervisor_timeout");
     await delay(20);
   }
+}
+
+async function waitForLines(path, count) {
+  const deadline = Date.now() + 2_000;
+  for (;;) {
+    try {
+      const lines = (await readFile(path, "utf8")).trim().split("\n");
+      if (lines.length >= count) return lines;
+    } catch {
+      // The synthetic child creates its captures after the supervisor state.
+    }
+    if (Date.now() >= deadline)
+      throw new Error("synthetic_minio_capture_timeout");
+    await delay(20);
+  }
+}
+
+function renderSyntheticSupervisor(source, paths) {
+  return source
+    .replace(
+      "state_file=/tmp/workload-funnel-minio-supervisor.state",
+      `state_file=${paths.state}`,
+    )
+    .replace(
+      "expected_root_user_file=/run/secrets/minio-root-user",
+      `expected_root_user_file=${paths.user}`,
+    )
+    .replace(
+      "expected_root_password_file=/run/secrets/minio-root-password",
+      `expected_root_password_file=${paths.password}`,
+    )
+    .replace("/usr/bin/minio", paths.server);
 }
 
 describe("confined MinIO server-process restart", () => {
@@ -225,7 +259,7 @@ describe("confined MinIO server-process restart", () => {
     ).resolves.toMatchObject({ stderr: "", stdout: "" });
   });
 
-  it("runs the reviewed supervisor through a real synthetic process restart", async () => {
+  it("materializes exact credentials only into each synthetic MinIO generation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "wf-minio-supervisor-"));
     const sourcePath = fileURLToPath(
       new URL("./fixtures/minio-supervisor.sh", import.meta.url),
@@ -233,12 +267,31 @@ describe("confined MinIO server-process restart", () => {
     const statePath = join(directory, "state");
     const serverPath = join(directory, "synthetic-minio");
     const supervisorPath = join(directory, "supervisor.sh");
+    const rootUserFile = join(directory, "minio-root-user");
+    const rootPasswordFile = join(directory, "minio-root-password");
+    const argvCapture = join(directory, "argv");
+    const passwordDigestCapture = join(directory, "password-digest");
+    const startupCapture = join(directory, "startups");
+    const userDigestCapture = join(directory, "user-digest");
+    const syntheticRootUser = "wfroot0123456789abcdef";
+    const syntheticRootPassword = "synthetic_Root-Password_0123456789";
+    let logs = "";
     let child;
     try {
+      await writeFile(rootUserFile, `${syntheticRootUser}\n`, { mode: 0o400 });
+      await writeFile(rootPasswordFile, `${syntheticRootPassword}\n`, {
+        mode: 0o400,
+      });
       await writeFile(
         serverPath,
         [
           "#!/bin/sh",
+          "set -eu",
+          ': > "$WF_GATE_ARGV_CAPTURE"',
+          'for argument do /usr/bin/printf "%s\\n" "$argument" >> "$WF_GATE_ARGV_CAPTURE"; done',
+          '/usr/bin/printf "%s" "$MINIO_ROOT_USER" | /usr/bin/sha256sum >> "$WF_GATE_USER_DIGEST_CAPTURE"',
+          '/usr/bin/printf "%s" "$MINIO_ROOT_PASSWORD" | /usr/bin/sha256sum >> "$WF_GATE_PASSWORD_DIGEST_CAPTURE"',
+          '/usr/bin/printf "started\\n" >> "$WF_GATE_STARTUP_CAPTURE"',
           "trap 'exit 0' TERM INT",
           "while :; do /bin/sleep 1; done",
           "",
@@ -248,28 +301,71 @@ describe("confined MinIO server-process restart", () => {
       const source = await readFile(sourcePath, "utf8");
       await writeFile(
         supervisorPath,
-        source
-          .replace(
-            "state_file=/tmp/workload-funnel-minio-supervisor.state",
-            `state_file=${statePath}`,
-          )
-          .replace("/usr/bin/minio", serverPath),
+        renderSyntheticSupervisor(source, {
+          password: rootPasswordFile,
+          server: serverPath,
+          state: statePath,
+          user: rootUserFile,
+        }),
         { mode: 0o700 },
       );
       child = spawn("/bin/sh", [supervisorPath, "server", "/data"], {
         detached: true,
-        stdio: "ignore",
+        env: {
+          LANG: "C.UTF-8",
+          LC_ALL: "C.UTF-8",
+          MINIO_ROOT_PASSWORD_FILE: rootPasswordFile,
+          MINIO_ROOT_USER_FILE: rootUserFile,
+          PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          TZ: "UTC",
+          WF_GATE_ARGV_CAPTURE: argvCapture,
+          WF_GATE_PASSWORD_DIGEST_CAPTURE: passwordDigestCapture,
+          WF_GATE_STARTUP_CAPTURE: startupCapture,
+          WF_GATE_USER_DIGEST_CAPTURE: userDigestCapture,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
       });
+      child.stdout.on("data", (chunk) => (logs += chunk.toString("utf8")));
+      child.stderr.on("data", (chunk) => (logs += chunk.toString("utf8")));
       const before = await waitForState(statePath, 1);
+      await waitForLines(startupCapture, 1);
       expect(before.supervisorPid).toBe(child.pid);
       expect(child.kill("SIGUSR1")).toBe(true);
       const after = await waitForState(statePath, 2);
+      await waitForLines(startupCapture, 2);
       expect(after).toMatchObject({
         generation: 2,
         supervisorPid: before.supervisorPid,
       });
       expect(after.serverPid).not.toBe(before.serverPid);
       expect(child.exitCode).toBeNull();
+
+      const digest = (value) =>
+        createHash("sha256").update(value, "utf8").digest("hex");
+      expect(await waitForLines(userDigestCapture, 2)).toEqual([
+        `${digest(syntheticRootUser)}  -`,
+        `${digest(syntheticRootUser)}  -`,
+      ]);
+      expect(await waitForLines(passwordDigestCapture, 2)).toEqual([
+        `${digest(syntheticRootPassword)}  -`,
+        `${digest(syntheticRootPassword)}  -`,
+      ]);
+      expect(await readFile(argvCapture, "utf8")).toBe("server\n/data\n");
+
+      const createMetadata = objectContainerArguments({
+        image: `quay.io/minio/minio:test@sha256:${"f".repeat(64)}`,
+        ioDevice: "/dev/vda",
+        name,
+        network: `${runId}-network`,
+        rootPasswordFile,
+        rootUserFile,
+        supervisorFile: supervisorPath,
+      });
+      for (const credential of [syntheticRootUser, syntheticRootPassword]) {
+        expect(logs).not.toContain(credential);
+        expect(await readFile(argvCapture, "utf8")).not.toContain(credential);
+        expect(JSON.stringify(createMetadata)).not.toContain(credential);
+      }
     } finally {
       if (child?.exitCode === null) {
         const exited = new Promise((resolve) => child.once("exit", resolve));
@@ -279,4 +375,55 @@ describe("confined MinIO server-process restart", () => {
       await rm(directory, { force: true, recursive: true });
     }
   });
+
+  it.each([
+    ["empty root-user file", "\n", "valid_Root-Password_0123456789\n"],
+    [
+      "multi-line root-password file",
+      "wfroot0123456789abcdef\n",
+      "first_password\nsecond_password\n",
+    ],
+  ])(
+    "refuses a malformed secret before starting MinIO: %s",
+    async (_, user, password) => {
+      const directory = await mkdtemp(join(tmpdir(), "wf-minio-secret-check-"));
+      const sourcePath = fileURLToPath(
+        new URL("./fixtures/minio-supervisor.sh", import.meta.url),
+      );
+      const paths = {
+        password: join(directory, "password"),
+        server: join(directory, "server"),
+        state: join(directory, "state"),
+        user: join(directory, "user"),
+      };
+      const marker = join(directory, "server-started");
+      try {
+        await writeFile(paths.user, user, { mode: 0o400 });
+        await writeFile(paths.password, password, { mode: 0o400 });
+        await writeFile(
+          paths.server,
+          `#!/bin/sh\n/usr/bin/printf started > ${marker}\n`,
+          { mode: 0o700 },
+        );
+        const source = await readFile(sourcePath, "utf8");
+        const supervisor = join(directory, "supervisor.sh");
+        await writeFile(supervisor, renderSyntheticSupervisor(source, paths), {
+          mode: 0o700,
+        });
+        await expect(
+          executeFile("/bin/sh", [supervisor, "server", "/data"], {
+            env: {
+              MINIO_ROOT_PASSWORD_FILE: paths.password,
+              MINIO_ROOT_USER_FILE: paths.user,
+            },
+          }),
+        ).rejects.toMatchObject({ code: 70, stdout: "", stderr: "" });
+        await expect(readFile(marker, "utf8")).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        await rm(directory, { force: true, recursive: true });
+      }
+    },
+  );
 });
