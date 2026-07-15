@@ -137,7 +137,11 @@ function processManagerHarness(
           stderr: "",
           stdout: "ActiveState=inactive\nControlGroup=\nLoadState=loaded\n",
         });
-      const stdout = loadedUnitShow(systemdArguments, propertyOverrides);
+      const overrides =
+        typeof propertyOverrides === "function"
+          ? propertyOverrides(observedUnitProperties.length)
+          : propertyOverrides;
+      const stdout = loadedUnitShow(systemdArguments, overrides);
       observedUnitProperties.push(stdout);
       return Promise.resolve({
         code: 0,
@@ -212,7 +216,7 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
   it("forwards the exact pressure runtime through launch and observation", async () => {
     const harness = processManagerHarness(
       { code: 0, stderr: "", stdout: "" },
-      { foreign: { RuntimeMaxUSec: "75s" } },
+      { foreign: { RuntimeMaxUSec: "1min 15s" } },
     );
 
     const process = await harness.manager.start(
@@ -239,9 +243,156 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
           ),
       ),
     ).toBe(true);
-    expect(harness.observedUnitProperties).toHaveLength(1);
-    expect(harness.observedUnitProperties[0]).toContain("RuntimeMaxUSec=75s\n");
+    const verified = await harness.manager.verify(process);
+    expect(harness.observedUnitProperties).toHaveLength(2);
+    expect(harness.observedUnitProperties).toEqual([
+      expect.stringContaining("RuntimeMaxUSec=1min 15s\n"),
+      expect.stringContaining("RuntimeMaxUSec=1min 15s\n"),
+    ]);
     expect(process.runtimeMaxSec).toBe(75);
+    expect(verified).toEqual({
+      active: true,
+      controlGroup: process.controlGroup,
+      invocationId: process.invocationId,
+      runtimeMaxSec: 75,
+      unit: process.unit,
+    });
+  });
+
+  it.each([
+    ["1min", 60],
+    ["1min 30s", 90],
+    ["75s", 75],
+    ["75000ms", 75],
+    ["75000000us", 75],
+    ["75000000", 75],
+  ])("accepts the exact RuntimeMaxUSec form %s", async (observed, seconds) => {
+    const harness = processManagerHarness(
+      { code: 0, stderr: "", stdout: "" },
+      { foreign: { RuntimeMaxUSec: observed } },
+    );
+
+    await expect(
+      harness.manager.start(
+        "/usr/bin/node",
+        ["-e", "setInterval(() => {}, 1000)"],
+        "pressure-cpu",
+        { runtimeMaxSec: seconds },
+      ),
+    ).resolves.toMatchObject({ runtimeMaxSec: seconds });
+  });
+
+  it.each([
+    "+75s",
+    "-75s",
+    "75.0s",
+    "1.25min",
+    "1min 15.5s",
+    "1min 15s 5s",
+    "1min 1min",
+    "15s 1min",
+    "1min 60s",
+    "1min 0s",
+    "01min 15s",
+    "1min 05s",
+    "1h 15min",
+    "75M",
+    "75sec",
+    " 1min 15s",
+    "1min 15s ",
+    "1min  15s",
+    "1min\t15s",
+    "1min15s",
+    "",
+  ])("rejects malformed RuntimeMaxUSec text %j", async (observed) => {
+    const harness = processManagerHarness(
+      { code: 0, stderr: "", stdout: "" },
+      { foreign: { RuntimeMaxUSec: observed } },
+    );
+
+    await expect(
+      harness.manager.start(
+        "/usr/bin/node",
+        ["-e", "setInterval(() => {}, 1000)"],
+        "pressure-cpu",
+        { runtimeMaxSec: 75 },
+      ),
+    ).rejects.toThrow("bounded_host_process_property_malformed");
+  });
+
+  it.each([
+    ["memory", { MemoryMax: "1min 15s" }, "property_malformed"],
+    [
+      "memory duration unit",
+      { MemoryMax: "536870912us" },
+      "property_malformed",
+    ],
+    [
+      "IO rate",
+      { IOReadBandwidthMax: "/dev/vda 1min 15s" },
+      "property_malformed",
+    ],
+    [
+      "IO rate duration unit",
+      { IOReadBandwidthMax: "/dev/vda 16777216us" },
+      "property_malformed",
+    ],
+    ["file-size limit", { LimitFSIZE: "1min 15s" }, "confinement_unproven"],
+    ["open-file limit", { LimitNOFILE: "1min 15s" }, "confinement_unproven"],
+  ])(
+    "does not extend the %s grammar with duration compounds",
+    async (_, foreign, error) => {
+      const harness = processManagerHarness(
+        { code: 0, stderr: "", stdout: "" },
+        { foreign: { RuntimeMaxUSec: "1min 15s", ...foreign } },
+      );
+
+      await expect(
+        harness.manager.start(
+          "/usr/bin/node",
+          ["-e", "setInterval(() => {}, 1000)"],
+          "pressure-cpu",
+          { runtimeMaxSec: 75 },
+        ),
+      ).rejects.toThrow(`bounded_host_process_${error}`);
+    },
+  );
+
+  it("preserves exact RuntimeMaxUSec equality after parsing", async () => {
+    const harness = processManagerHarness(
+      { code: 0, stderr: "", stdout: "" },
+      { foreign: { RuntimeMaxUSec: "1min 14s" } },
+    );
+
+    await expect(
+      harness.manager.start(
+        "/usr/bin/node",
+        ["-e", "setInterval(() => {}, 1000)"],
+        "pressure-cpu",
+        { runtimeMaxSec: 75 },
+      ),
+    ).rejects.toThrow("bounded_host_process_confinement_unproven");
+  });
+
+  it("rejects a malformed RuntimeMaxUSec during last-moment verify", async () => {
+    const harness = processManagerHarness(
+      { code: 0, stderr: "", stdout: "" },
+      (observation) => ({
+        foreign: {
+          RuntimeMaxUSec: observation === 0 ? "1min 15s" : "1min 60s",
+        },
+      }),
+    );
+    const process = await harness.manager.start(
+      "/usr/bin/node",
+      ["-e", "setInterval(() => {}, 1000)"],
+      "pressure-cpu",
+      { runtimeMaxSec: 75 },
+    );
+
+    await expect(harness.manager.verify(process)).rejects.toThrow(
+      "bounded_host_process_property_malformed",
+    );
   });
 
   it("keeps non-pressure starts on the exact default runtime", async () => {

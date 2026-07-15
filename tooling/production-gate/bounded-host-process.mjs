@@ -8,6 +8,18 @@ const PRESSURE_RUNTIME_MAX_SEC_RANGE = Object.freeze({
   maximum: 90,
   minimum: 60,
 });
+const SYSTEMD_DURATION_UNITS = Object.freeze({
+  "": 1n,
+  ms: 1_000n,
+  s: 1_000_000n,
+  us: 1n,
+});
+const SYSTEMD_SIZE_UNITS = Object.freeze({
+  "": 1n,
+  G: 1024n * 1024n * 1024n,
+  K: 1024n,
+  M: 1024n * 1024n,
+});
 const PRESSURE_ROLES = new Set([
   "pressure-cpu",
   "pressure-disk",
@@ -59,21 +71,25 @@ function parseShow(output) {
   return values;
 }
 
-function systemdInteger(value) {
-  const units = Object.freeze({
-    "": 1n,
-    G: 1024n * 1024n * 1024n,
-    K: 1024n,
-    M: 1024n * 1024n,
-    ms: 1_000n,
-    s: 1_000_000n,
-    us: 1n,
-  });
+function systemdInteger(value, units) {
   const match = value?.match(/^(\d+)([A-Za-z]+)?$/u);
   const multiplier = units[match?.[2] ?? ""];
   if (match === null || match === undefined || multiplier === undefined)
     throw new Error("bounded_host_process_property_malformed");
   return BigInt(match[1]) * multiplier;
+}
+
+function systemdRuntimeMicroseconds(value) {
+  const single = value?.match(/^(\d+)(ms|s|us)?$/u);
+  if (single !== null && single !== undefined)
+    return BigInt(single[1]) * SYSTEMD_DURATION_UNITS[single[2] ?? ""];
+  const minuteSecond = value?.match(/^([1-9]\d*)min(?: ([1-9]|[1-5]\d)s)?$/u);
+  if (minuteSecond === null || minuteSecond === undefined)
+    throw new Error("bounded_host_process_property_malformed");
+  return (
+    (BigInt(minuteSecond[1]) * 60n + BigInt(minuteSecond[2] ?? "0")) *
+    1_000_000n
+  );
 }
 
 function sameWords(value, expected) {
@@ -160,19 +176,25 @@ export function exactBoundedHostPropertiesObserved(
       ).has(values.ActiveState)) ||
     (requireControlGroup &&
       !/^\/[A-Za-z0-9_./-]+$/u.test(values.ControlGroup ?? "")) ||
-    systemdInteger(values.CPUQuotaPerSecUSec) !== 1_000_000n ||
-    systemdInteger(values.IOReadBandwidthMax?.split(/\s+/u)[1]) !==
-      16_777_216n ||
-    systemdInteger(values.IOWriteBandwidthMax?.split(/\s+/u)[1]) !==
-      8_388_608n ||
+    systemdInteger(values.CPUQuotaPerSecUSec, SYSTEMD_DURATION_UNITS) !==
+      1_000_000n ||
+    systemdInteger(
+      values.IOReadBandwidthMax?.split(/\s+/u)[1],
+      SYSTEMD_SIZE_UNITS,
+    ) !== 16_777_216n ||
+    systemdInteger(
+      values.IOWriteBandwidthMax?.split(/\s+/u)[1],
+      SYSTEMD_SIZE_UNITS,
+    ) !== 8_388_608n ||
     read?.[0] !== config.ioDevice ||
     write?.[0] !== config.ioDevice ||
-    systemdInteger(values.MemoryHigh) !== 402_653_184n ||
-    systemdInteger(values.MemoryMax) !== 536_870_912n ||
-    systemdInteger(values.MemorySwapMax) !== 0n ||
-    systemdInteger(values.RuntimeMaxUSec) !==
+    systemdInteger(values.MemoryHigh, SYSTEMD_SIZE_UNITS) !== 402_653_184n ||
+    systemdInteger(values.MemoryMax, SYSTEMD_SIZE_UNITS) !== 536_870_912n ||
+    systemdInteger(values.MemorySwapMax, SYSTEMD_SIZE_UNITS) !== 0n ||
+    systemdRuntimeMicroseconds(values.RuntimeMaxUSec) !==
       BigInt(plan.runtimeMaxSec ?? DEFAULT_RUNTIME_MAX_SEC) * 1_000_000n ||
-    systemdInteger(values.TimeoutStopUSec) !== 5_000_000n ||
+    systemdInteger(values.TimeoutStopUSec, SYSTEMD_DURATION_UNITS) !==
+      5_000_000n ||
     !new Set(["9", "SIGKILL", "kill"]).has(values.FinalKillSignal) ||
     !new Set(["15", "SIGTERM", "term"]).has(values.KillSignal) ||
     !sameWords(values.RestrictAddressFamilies, [
@@ -462,7 +484,7 @@ export function createBoundedHostProcessManager(config) {
       values.Description !== process.description ||
       values.InvocationID !== process.invocationId ||
       values.LoadState !== "loaded" ||
-      systemdInteger(values.RuntimeMaxUSec) !==
+      systemdRuntimeMicroseconds(values.RuntimeMaxUSec) !==
         BigInt(process.runtimeMaxSec) * 1_000_000n
     )
       throw new Error(code);
