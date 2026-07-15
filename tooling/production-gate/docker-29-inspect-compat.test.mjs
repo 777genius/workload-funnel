@@ -108,21 +108,33 @@ function runtimeFor(
   network = docker29NetworkInspect(),
   publishedPorts = "",
 ) {
+  let containerInspectCalls = 0;
+  let networkInspectCalls = 0;
   return new GateDockerRuntime({
     executable: "/usr/bin/docker",
     ioDevice: "/dev/vda",
     runId,
     runner: {
-      run: vi.fn((_executable, args) =>
-        Promise.resolve({
+      run: vi.fn((_executable, args) => {
+        const inspectedValue = Array.isArray(inspected)
+          ? inspected[Math.min(containerInspectCalls, inspected.length - 1)]
+          : inspected;
+        const networkValue = Array.isArray(network)
+          ? network[Math.min(networkInspectCalls, network.length - 1)]
+          : network;
+        if (args[0] === "container") containerInspectCalls += 1;
+        if (args[0] === "network") networkInspectCalls += 1;
+        return Promise.resolve({
           code: 0,
           stderr: "",
           stdout:
             args[0] === "port"
               ? publishedPorts
-              : JSON.stringify([args[0] === "container" ? inspected : network]),
-        }),
-      ),
+              : JSON.stringify([
+                  args[0] === "container" ? inspectedValue : networkValue,
+                ]),
+        });
+      }),
     },
     sandboxRoot: `/tmp/${runId}`,
   });
@@ -222,6 +234,200 @@ describe("Docker 29 internal-network endpoint compatibility", () => {
       ],
       ["/usr/bin/docker", ["port", name], { timeoutMs: 5_000 }],
     ]);
+  });
+
+  it("converges from Docker 29's empty endpoint and membership to exact evidence", async () => {
+    const empty = docker29Inspect();
+    empty.NetworkSettings.Networks[networkName] = {
+      EndpointID: "",
+      IPAddress: "",
+      IPPrefixLen: 0,
+      MacAddress: "",
+      NetworkID: networkIdentity,
+    };
+    const runtime = runtimeFor([empty, docker29Inspect()]);
+    await expect(inspect(runtime)).resolves.toMatchObject({
+      exactIdentity: identity,
+      internalNetworkEndpoint: { ipv4Address: "172.28.0.2", port: 5432 },
+    });
+    expect(
+      runtime.runner.run.mock.calls.filter(
+        ([, args]) => args[0] === "container" && args[1] === "inspect",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("converges from absent network membership to exact evidence", async () => {
+    const runtime = runtimeFor(docker29Inspect(), [
+      { ...docker29NetworkInspect(), Containers: {} },
+      docker29NetworkInspect(),
+    ]);
+    await expect(inspect(runtime)).resolves.toMatchObject({
+      exactIdentity: identity,
+      internalNetworkEndpoint: { ipv4Address: "172.28.0.2", port: 5432 },
+    });
+    expect(
+      runtime.runner.run.mock.calls.filter(
+        ([, args]) => args[0] === "network" && args[1] === "inspect",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("fails closed after the bounded window when endpoint membership stays empty", async () => {
+    const empty = docker29Inspect();
+    empty.NetworkSettings.Networks = {};
+    const runtime = runtimeFor(empty, {
+      ...docker29NetworkInspect(),
+      Containers: {},
+    });
+    await expect(inspect(runtime)).rejects.toThrow(
+      "docker_container_confinement_unproven",
+    );
+    expect(
+      runtime.runner.run.mock.calls.filter(
+        ([, args]) => args[0] === "container" && args[1] === "inspect",
+      ),
+    ).toHaveLength(5);
+  });
+
+  it("fails immediately when identity contradicts an otherwise transient endpoint", async () => {
+    const empty = docker29Inspect();
+    empty.Id = "f".repeat(64);
+    empty.NetworkSettings.Networks = {};
+    const runtime = runtimeFor(empty, {
+      ...docker29NetworkInspect(),
+      Containers: {},
+    });
+    await expect(inspect(runtime)).rejects.toThrow(
+      "docker_container_confinement_unproven",
+    );
+    expect(
+      runtime.runner.run.mock.calls.filter(
+        ([, args]) => args[0] === "container" && args[1] === "inspect",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "stale",
+      {
+        Containers: {
+          ["f".repeat(64)]: {
+            ...docker29NetworkInspect().Containers[identity],
+            Name: name,
+          },
+        },
+      },
+    ],
+    [
+      "foreign",
+      {
+        Containers: {
+          ["f".repeat(64)]: {
+            ...docker29NetworkInspect().Containers[identity],
+            Name: "foreign-container",
+          },
+        },
+      },
+    ],
+  ])(
+    "fails immediately on %s membership while the endpoint is absent",
+    async (_, mutation) => {
+      const empty = docker29Inspect();
+      empty.NetworkSettings.Networks = {};
+      const runtime = runtimeFor(empty, {
+        ...docker29NetworkInspect(),
+        ...mutation,
+      });
+      await expect(inspect(runtime)).rejects.toThrow(
+        "docker_container_confinement_unproven",
+      );
+      expect(
+        runtime.runner.run.mock.calls.filter(
+          ([, args]) => args[0] === "container" && args[1] === "inspect",
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ["writable mount", (value) => (value.Mounts[0].RW = false)],
+    ["resource limit", (value) => (value.HostConfig.Memory = 1)],
+    [
+      "port binding",
+      (value) =>
+        (value.HostConfig.PortBindings = {
+          "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }],
+        }),
+    ],
+    ["image", (value) => (value.Config.Image = `${image}-foreign`)],
+    ["label", (value) => (value.Config.Labels = {})],
+  ])(
+    "does not retry endpoint absence with contradictory %s evidence",
+    async (_, mutate) => {
+      const empty = docker29Inspect();
+      empty.NetworkSettings.Networks = {};
+      mutate(empty);
+      const runtime = runtimeFor(empty, {
+        ...docker29NetworkInspect(),
+        Containers: {},
+      });
+      await expect(inspect(runtime)).rejects.toThrow(
+        "docker_container_confinement_unproven",
+      );
+      expect(
+        runtime.runner.run.mock.calls.filter(
+          ([, args]) => args[0] === "container" && args[1] === "inspect",
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("does not retry endpoint absence with malformed or secret evidence", async () => {
+    const malformed = docker29Inspect();
+    malformed.NetworkSettings.Networks = null;
+    const malformedRuntime = runtimeFor(malformed);
+    await expect(inspect(malformedRuntime)).rejects.toThrow(
+      "docker_container_confinement_unproven",
+    );
+    expect(
+      malformedRuntime.runner.run.mock.calls.filter(
+        ([, args]) => args[0] === "container" && args[1] === "inspect",
+      ),
+    ).toHaveLength(1);
+
+    const missingSubnet = docker29Inspect();
+    missingSubnet.NetworkSettings.Networks = {};
+    const missingSubnetRuntime = runtimeFor(missingSubnet, {
+      ...docker29NetworkInspect(),
+      Containers: {},
+      IPAM: { Config: [] },
+    });
+    await expect(inspect(missingSubnetRuntime)).rejects.toThrow(
+      "docker_container_confinement_unproven",
+    );
+    expect(
+      missingSubnetRuntime.runner.run.mock.calls.filter(
+        ([, args]) => args[0] === "container" && args[1] === "inspect",
+      ),
+    ).toHaveLength(1);
+
+    const secret = docker29Inspect();
+    secret.NetworkSettings.Networks = {};
+    secret.Config.Env.push("PASSWORD=gate-secret");
+    const secretRuntime = runtimeFor(secret, {
+      ...docker29NetworkInspect(),
+      Containers: {},
+    });
+    await expect(inspect(secretRuntime, ["gate-secret"])).rejects.toThrow(
+      "docker_container_metadata_contains_secret",
+    );
+    expect(
+      secretRuntime.runner.run.mock.calls.filter(
+        ([, args]) => args[0] === "container" && args[1] === "inspect",
+      ),
+    ).toHaveLength(1);
   });
 
   it("rejects a docker port mapping even when inspect falsely reports none", async () => {

@@ -296,8 +296,15 @@ describe("production gate host safety", () => {
     ).toThrow("unsafe_docker_gate_arguments");
 
     const client = {
-      Config: { Cmd: ["/gate/bootstrap.sh", "ready"], User: "1000:1000" },
+      Config: {
+        Cmd: ["/gate/bootstrap.sh", "ready"],
+        Labels: {
+          "workload-funnel.production-gate.resource": `${runId}-client-1`,
+        },
+        User: "1000:1000",
+      },
       HostConfig: {
+        CapAdd: null,
         CapDrop: ["ALL"],
         Init: true,
         IpcMode: "private",
@@ -311,10 +318,17 @@ describe("production gate host safety", () => {
         ReadonlyRootfs: true,
         RestartPolicy: { Name: "no" },
         SecurityOpt: ["no-new-privileges=true"],
-        Tmpfs: { "/tmp": "rw,size=16777216" },
+        Tmpfs: {
+          "/gate/mc":
+            "rw,nosuid,nodev,noexec,size=4194304,uid=1000,gid=1000,mode=0700",
+          "/tmp":
+            "rw,nosuid,nodev,noexec,size=16777216,uid=1000,gid=1000,mode=0700",
+        },
         UTSMode: "",
       },
       Id: "c".repeat(64),
+      Mounts: [],
+      NetworkSettings: { Ports: null },
     };
     const inspectOutput = { value: JSON.stringify([client]) };
     const runtime = new GateDockerRuntime({
@@ -322,8 +336,12 @@ describe("production gate host safety", () => {
       ioDevice: "/dev/vda",
       runId,
       runner: {
-        run: () =>
-          Promise.resolve({ code: 0, stderr: "", stdout: inspectOutput.value }),
+        run: (_executable, args) =>
+          Promise.resolve({
+            code: 0,
+            stderr: "",
+            stdout: args[0] === "port" ? "" : inspectOutput.value,
+          }),
       },
       sandboxRoot: `/tmp/${runId}`,
     });

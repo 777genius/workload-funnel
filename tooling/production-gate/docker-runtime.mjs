@@ -1,169 +1,32 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   assertSafeDockerArguments,
   isolatedNetworkArguments,
 } from "./docker-plan.mjs";
+import {
+  evaluateInternalEndpoint,
+  exactBindMounts,
+  exactOwnedNetworkMembers,
+  exactSingleIpv4Subnet,
+  noRequestedPortBindings,
+  unpublishedPortMap,
+} from "./docker-confinement-evidence.mjs";
+import {
+  CLIENT_TMPFS_OPTIONS,
+  exactClientConfinement,
+} from "./docker-client-confinement.mjs";
 import { OWNED_RESOURCE_PATTERN } from "./constants.mjs";
+
+const ENDPOINT_CONVERGENCE_ATTEMPTS = 5;
+const ENDPOINT_CONVERGENCE_DELAY_MS = 50;
 
 function missingDockerObject(result) {
   return (
     result.code !== 0 &&
     /(?:no such|not found)/iu.test(`${result.stdout}\n${result.stderr}`)
-  );
-}
-
-function ipv4Number(value) {
-  if (typeof value !== "string") return undefined;
-  const octets = value.split(".");
-  if (
-    octets.length !== 4 ||
-    octets.some(
-      (octet) => !/^(?:0|[1-9]\d{0,2})$/u.test(octet) || Number(octet) > 255,
-    )
-  )
-    return undefined;
-  return octets.reduce((address, octet) => address * 256 + Number(octet), 0);
-}
-
-function ipv4BelongsToSubnet(address, subnet, prefixLength) {
-  const addressNumber = ipv4Number(address);
-  const subnetNumber = ipv4Number(subnet);
-  if (
-    addressNumber === undefined ||
-    subnetNumber === undefined ||
-    !Number.isSafeInteger(prefixLength) ||
-    prefixLength < 1 ||
-    prefixLength > 32
-  )
-    return false;
-  const blockSize = 2 ** (32 - prefixLength);
-  return (
-    Math.floor(addressNumber / blockSize) ===
-    Math.floor(subnetNumber / blockSize)
-  );
-}
-
-function unpublishedPortMap(value) {
-  if (value === null) return true;
-  if (typeof value !== "object" || Array.isArray(value)) return false;
-  return Object.values(value).every((bindings) => bindings === null);
-}
-
-function noRequestedPortBindings(value) {
-  return (
-    value === null ||
-    (typeof value === "object" &&
-      !Array.isArray(value) &&
-      Object.keys(value).length === 0)
-  );
-}
-
-function exactSingleIpv4Subnet(network) {
-  if (!Array.isArray(network?.IPAM?.Config) || network.IPAM.Config.length !== 1)
-    return undefined;
-  const config = network.IPAM.Config[0];
-  if (
-    config === null ||
-    typeof config !== "object" ||
-    typeof config.Subnet !== "string"
-  )
-    return undefined;
-  const match = config.Subnet.match(
-    /^((?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3})\/(\d{1,2})$/u,
-  );
-  const prefixLength = Number(match?.[2]);
-  if (
-    match === null ||
-    ipv4Number(match[1]) === undefined ||
-    !Number.isSafeInteger(prefixLength) ||
-    prefixLength < 1 ||
-    prefixLength > 30 ||
-    !ipv4BelongsToSubnet(config.Gateway, match[1], prefixLength)
-  )
-    return undefined;
-  return Object.freeze({ address: match[1], prefixLength });
-}
-
-function usableIpv4Host(address, subnet) {
-  const addressNumber = ipv4Number(address);
-  const subnetNumber = ipv4Number(subnet?.address);
-  if (addressNumber === undefined || subnetNumber === undefined) return false;
-  const blockSize = 2 ** (32 - subnet.prefixLength);
-  const networkAddress = Math.floor(subnetNumber / blockSize) * blockSize;
-  return (
-    addressNumber > networkAddress &&
-    addressNumber < networkAddress + blockSize - 1
-  );
-}
-
-function exactOwnedNetworkMembers(network, runId, subnet) {
-  if (
-    network?.Containers === null ||
-    typeof network?.Containers !== "object" ||
-    Array.isArray(network?.Containers)
-  )
-    return false;
-  const addresses = [];
-  for (const [identity, member] of Object.entries(network.Containers)) {
-    if (
-      !/^[a-f0-9]{12,64}$/u.test(identity) ||
-      member === null ||
-      typeof member !== "object" ||
-      !OWNED_RESOURCE_PATTERN.test(member.Name ?? "") ||
-      !member.Name.startsWith(`${runId}-`) ||
-      !/^[a-f0-9]{12,64}$/u.test(member.EndpointID ?? "") ||
-      typeof member.IPv4Address !== "string"
-    )
-      return false;
-    const match = member.IPv4Address.match(
-      /^((?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3})\/(\d{1,2})$/u,
-    );
-    if (
-      match === null ||
-      Number(match[2]) !== subnet.prefixLength ||
-      !usableIpv4Host(match[1], subnet) ||
-      !ipv4BelongsToSubnet(match[1], subnet.address, subnet.prefixLength)
-    )
-      return false;
-    addresses.push(match[1]);
-  }
-  return new Set(addresses).size === addresses.length;
-}
-
-function exactBindMounts(mounts, expectedWritableStorage, expectedSecrets) {
-  if (!Array.isArray(mounts) || !Array.isArray(expectedSecrets)) return false;
-  const expected = [
-    ...(expectedWritableStorage?.kind === "bind"
-      ? [
-          {
-            destination: expectedWritableStorage.destination,
-            readWrite: true,
-            source: expectedWritableStorage.source,
-          },
-        ]
-      : []),
-    ...expectedSecrets.map(({ destination, source }) => ({
-      destination,
-      readWrite: false,
-      source,
-    })),
-  ];
-  return (
-    mounts.length === expected.length &&
-    expected.every(({ destination, readWrite, source }) =>
-      mounts.some(
-        (mount) =>
-          mount !== null &&
-          typeof mount === "object" &&
-          mount.Type === "bind" &&
-          mount.Source === source &&
-          mount.Destination === destination &&
-          mount.RW === readWrite &&
-          mount.Propagation === "rprivate",
-      ),
-    )
   );
 }
 
@@ -370,6 +233,39 @@ export class GateDockerRuntime {
     expectedImage,
     expectedSecretMounts,
   ) {
+    for (
+      let attempt = 1;
+      attempt <= ENDPOINT_CONVERGENCE_ATTEMPTS;
+      attempt += 1
+    ) {
+      const evidence = await this.inspectContainerConfinementObservation(
+        name,
+        expectedUser,
+        forbiddenValues,
+        expectedIdentity,
+        expectedWritableStorage,
+        expectedContainerPort,
+        expectedImage,
+        expectedSecretMounts,
+      );
+      if (evidence !== undefined) return evidence;
+      if (attempt === ENDPOINT_CONVERGENCE_ATTEMPTS)
+        throw new Error("docker_container_confinement_unproven");
+      await delay(ENDPOINT_CONVERGENCE_DELAY_MS);
+    }
+    throw new Error("docker_container_confinement_unproven");
+  }
+
+  async inspectContainerConfinementObservation(
+    name,
+    expectedUser,
+    forbiddenValues,
+    expectedIdentity,
+    expectedWritableStorage,
+    expectedContainerPort,
+    expectedImage,
+    expectedSecretMounts,
+  ) {
     const [output, networkOutput, publishedPorts] = await Promise.all([
       this.command(["container", "inspect", name]),
       this.command(["network", "inspect", this.network]),
@@ -397,12 +293,16 @@ export class GateDockerRuntime {
     const container = inspected?.Config;
     const network = decodedNetwork?.[0];
     const attachedNetworks = inspected?.NetworkSettings?.Networks;
-    const networkNames = Object.keys(attachedNetworks ?? {});
-    const endpoint = attachedNetworks?.[this.network];
-    const prefixLength = endpoint?.IPPrefixLen;
-    const ipv4Address = endpoint?.IPAddress;
     const subnet = exactSingleIpv4Subnet(network);
-    const membership = network?.Containers?.[inspected?.Id];
+    const endpointEvidence = evaluateInternalEndpoint({
+      attachedNetworks,
+      containerIdentity: inspected?.Id,
+      name,
+      network,
+      networkName: this.network,
+      runId: this.runId,
+      subnet,
+    });
     const writableStorageProven =
       expectedWritableStorage?.kind === "bind"
         ? typeof host?.Tmpfs?.[expectedWritableStorage.destination] !== "string"
@@ -458,35 +358,12 @@ export class GateDockerRuntime {
       network?.Internal !== true ||
       network?.Ingress !== false ||
       network?.Labels?.["workload-funnel.production-gate.run"] !== this.runId ||
-      networkNames.length !== 1 ||
-      networkNames[0] !== this.network ||
-      endpoint === null ||
-      typeof endpoint !== "object" ||
-      !/^[a-f0-9]{12,64}$/u.test(endpoint.NetworkID ?? "") ||
-      endpoint.NetworkID !== network.Id ||
-      !/^[a-f0-9]{12,64}$/u.test(endpoint.EndpointID ?? "") ||
-      ipv4Number(ipv4Address) === undefined ||
-      !Number.isSafeInteger(prefixLength) ||
-      prefixLength < 1 ||
-      prefixLength > 32 ||
       subnet === undefined ||
-      subnet.prefixLength !== prefixLength ||
-      !usableIpv4Host(ipv4Address, subnet) ||
-      !ipv4BelongsToSubnet(
-        ipv4Address,
-        subnet?.address,
-        subnet?.prefixLength,
-      ) ||
-      membership === null ||
-      typeof membership !== "object" ||
-      !exactOwnedNetworkMembers(network, this.runId, subnet) ||
-      membership.Name !== name ||
-      membership.EndpointID !== endpoint.EndpointID ||
-      membership.MacAddress !== endpoint.MacAddress ||
-      membership.IPv4Address !== `${ipv4Address}/${String(prefixLength)}` ||
-      membership.IPv6Address !== ""
+      endpointEvidence.state === "invalid"
     )
       throw new Error("docker_container_confinement_unproven");
+    if (endpointEvidence.state === "transient-absence") return undefined;
+    const { ipv4Address } = endpointEvidence;
     return Object.freeze({
       capabilitiesDropped: true,
       configurationSha256: createHash("sha256")
@@ -669,7 +546,9 @@ export class GateDockerRuntime {
       "--stop-timeout",
       "5",
       "--tmpfs",
-      "/tmp:rw,nosuid,nodev,noexec,size=16777216,uid=1000,gid=1000,mode=0700",
+      `/tmp:${CLIENT_TMPFS_OPTIONS["/tmp"]}`,
+      "--tmpfs",
+      `/gate/mc:${CLIENT_TMPFS_OPTIONS["/gate/mc"]}`,
       "--label",
       `workload-funnel.production-gate.resource=${name}`,
       ...Object.entries(environment).flatMap(([key, value]) => [
@@ -707,12 +586,19 @@ export class GateDockerRuntime {
       await this.command(["container", "rm", "--force", "--volumes", name]);
     };
     await this.ledger.finalize(recordId, { identity }, cleanup);
-    await this.inspectClientConfinement(name, identity);
+    await this.inspectClientConfinement(name, identity, { image, mounts });
     return this.command(["container", "start", "--attach", name], 15_000);
   }
 
-  async inspectClientConfinement(name, identity) {
-    const output = await this.command(["container", "inspect", name]);
+  async inspectClientConfinement(
+    name,
+    identity,
+    { image: expectedImage, mounts: expectedMounts = [] } = {},
+  ) {
+    const [output, publishedPorts] = await Promise.all([
+      this.command(["container", "inspect", name]),
+      this.runner.run(this.executable, ["port", name], { timeoutMs: 5_000 }),
+    ]);
     if (
       !Array.isArray(this.secretValues) ||
       this.secretValues.some(
@@ -728,32 +614,19 @@ export class GateDockerRuntime {
       throw new Error("docker_container_inspect_malformed");
     }
     const inspected = decoded?.[0];
-    const host = inspected?.HostConfig;
-    const container = inspected?.Config;
     if (
       !Array.isArray(decoded) ||
       decoded.length !== 1 ||
-      inspected?.Id !== identity ||
-      container?.User !== "1000:1000" ||
-      host?.Privileged !== false ||
-      host?.ReadonlyRootfs !== true ||
-      host?.Init !== true ||
-      host?.IpcMode !== "private" ||
-      host?.UTSMode !== "" ||
-      host?.NetworkMode !== this.network ||
-      host?.Memory !== 268_435_456 ||
-      host?.MemorySwap !== 268_435_456 ||
-      host?.NanoCpus !== 1_000_000_000 ||
-      host?.PidsLimit !== 64 ||
-      host?.RestartPolicy?.Name !== "no" ||
-      !host?.CapDrop?.includes("ALL") ||
-      !host?.SecurityOpt?.some((value) =>
-        value.startsWith("no-new-privileges"),
-      ) ||
-      typeof host?.Tmpfs?.["/tmp"] !== "string" ||
-      Object.values(host?.PortBindings ?? {}).some(
-        (bindings) => Array.isArray(bindings) && bindings.length > 0,
-      )
+      !Array.isArray(expectedMounts) ||
+      !exactClientConfinement({
+        expectedImage,
+        expectedMounts,
+        identity,
+        inspected,
+        name,
+        networkName: this.network,
+        publishedPorts,
+      })
     )
       throw new Error("docker_client_confinement_unproven");
     return true;

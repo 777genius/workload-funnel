@@ -44,8 +44,16 @@ function sliceShow(overrides = {}) {
 
 function clientInspect(identity, overrides = {}) {
   return {
-    Config: { Cmd: ["ready"], User: "1000:1000" },
+    Config: {
+      Cmd: ["ready"],
+      Image: POSTGRES_FIXTURE_IMAGE,
+      Labels: {
+        "workload-funnel.production-gate.resource": `${runId}-client-1`,
+      },
+      User: "1000:1000",
+    },
     HostConfig: {
+      CapAdd: null,
       CapDrop: ["ALL"],
       Init: true,
       IpcMode: "private",
@@ -59,11 +67,18 @@ function clientInspect(identity, overrides = {}) {
       ReadonlyRootfs: true,
       RestartPolicy: { Name: "no" },
       SecurityOpt: ["no-new-privileges=true"],
-      Tmpfs: { "/tmp": "rw,size=16777216" },
+      Tmpfs: {
+        "/gate/mc":
+          "rw,nosuid,nodev,noexec,size=4194304,uid=1000,gid=1000,mode=0700",
+        "/tmp":
+          "rw,nosuid,nodev,noexec,size=16777216,uid=1000,gid=1000,mode=0700",
+      },
       UTSMode: "",
       ...overrides,
     },
     Id: identity,
+    Mounts: [],
+    NetworkSettings: { Ports: null },
   };
 }
 
@@ -127,6 +142,7 @@ describe("Docker 29 production-gate compatibility", () => {
             createCalls.push(args);
             return Promise.resolve(result(identity));
           }
+          if (args[0] === "port") return Promise.resolve(result(""));
           return Promise.resolve(result(`${runId}-client-1`));
         },
       },
@@ -142,6 +158,12 @@ describe("Docker 29 production-gate compatibility", () => {
     expect(
       createCalls[0].some((argument) => argument.startsWith("--uts")),
     ).toBe(false);
+    expect(createCalls[0]).toEqual(
+      expect.arrayContaining([
+        "--tmpfs",
+        "/gate/mc:rw,nosuid,nodev,noexec,size=4194304,uid=1000,gid=1000,mode=0700",
+      ]),
+    );
 
     inspected = clientInspect(identity, { UTSMode: "host" });
     await expect(
