@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FilesystemHyperQueueObservationOrder } from "@workload-funnel/scheduler-hyperqueue/dispatch-observation";
 import { cleanupOwnedDirectoryRecord } from "./owned-directory.mjs";
 import { OwnedResourceLedger } from "./resource-ledger.mjs";
+import { writeSecretFile } from "./secret-files.mjs";
 
 const runId = "wf-production-gate-0123456789abcdef0123456789abcdef";
 const directories = [];
@@ -125,6 +126,92 @@ describe("production gate crash durability", () => {
         state: "prepared",
       }),
     ]);
+  });
+
+  it("serializes concurrent and sequential ledger mutations without loss across reopen", async () => {
+    const directory = await temporaryDirectory("wf-gate-ledger-concurrency");
+    const ledgerPath = join(directory, "cleanup-ledger.json");
+    const ledger = await OwnedResourceLedger.open({ path: ledgerPath, runId });
+    const concurrentNames = ["delete", "upload", "verify"];
+    await Promise.all(
+      concurrentNames.map((kind) =>
+        writeSecretFile({
+          contents: `${kind}-access\n${kind}-secret\n`,
+          ledger,
+          path: join(directory, `${kind}-identity`),
+          runId,
+          sandboxRoot: directory,
+        }),
+      ),
+    );
+
+    const firstReopen = await OwnedResourceLedger.open({
+      path: ledgerPath,
+      runId,
+    });
+    const concurrentSnapshot = firstReopen.snapshot();
+    expect(concurrentSnapshot.map((record) => record.name)).toEqual(
+      concurrentNames.map((kind) => `${runId}-${kind}-identity`),
+    );
+    expect(
+      concurrentSnapshot.every((record) => record.state === "active"),
+    ).toBe(true);
+    expect(
+      new Set(concurrentSnapshot.map((record) => record.recordId)).size,
+    ).toBe(3);
+
+    await writeSecretFile({
+      contents: "sequential-access\nsequential-secret\n",
+      ledger: firstReopen,
+      path: join(directory, "sequential-identity"),
+      runId,
+      sandboxRoot: directory,
+    });
+    const duplicateName = `${runId}-duplicate-identity`;
+    const duplicate = await Promise.allSettled([
+      firstReopen.prepare("secret-file", duplicateName, { attempt: 1 }),
+      firstReopen.prepare("secret-file", duplicateName, { attempt: 2 }),
+    ]);
+    expect(duplicate[0].status).toBe("fulfilled");
+    expect(duplicate[1]).toMatchObject({
+      reason: expect.objectContaining({ message: "duplicate_owned_resource" }),
+      status: "rejected",
+    });
+    const duplicateRecordId = duplicate[0].value;
+    await firstReopen.finalize(
+      duplicateRecordId,
+      { attempt: 1 },
+      () => undefined,
+    );
+    const afterRejectedMutation = await firstReopen.prepare(
+      "fixture",
+      `${runId}-after-rejection`,
+    );
+    await firstReopen.finalize(
+      afterRejectedMutation,
+      { durable: true },
+      () => undefined,
+    );
+
+    const finalReopen = await OwnedResourceLedger.open({
+      path: ledgerPath,
+      runId,
+    });
+    const finalSnapshot = finalReopen.snapshot();
+    expect(finalSnapshot).toHaveLength(6);
+    expect(new Set(finalSnapshot.map((record) => record.recordId)).size).toBe(
+      6,
+    );
+    expect(new Set(finalSnapshot.map((record) => record.name)).size).toBe(6);
+    expect(finalSnapshot.map((record) => record.name)).toEqual([
+      ...concurrentNames.map((kind) => `${runId}-${kind}-identity`),
+      `${runId}-sequential-identity`,
+      duplicateName,
+      `${runId}-after-rejection`,
+    ]);
+    expect(finalSnapshot.every((record) => record.state === "active")).toBe(
+      true,
+    );
   });
 
   it("recovers a prepared durable Postgres directory and refuses an inode swap", async () => {

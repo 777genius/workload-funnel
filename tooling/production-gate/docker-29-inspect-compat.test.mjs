@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  POSTGRES_PARENT_TMPFS_DESTINATION,
+  POSTGRES_PARENT_TMPFS_OPTIONS,
+  postgresContainerArguments,
+} from "./docker-plan.mjs";
 import { GateDockerRuntime } from "./docker-runtime.mjs";
 
 const runId = "wf-production-gate-0123456789abcdef0123456789abcdef";
@@ -31,6 +36,7 @@ function docker29Inspect() {
       Image: image,
       Labels: { "workload-funnel.production-gate.resource": name },
       User: "70:70",
+      Volumes: { "/var/lib/postgresql": {} },
     },
     HostConfig: {
       CapDrop: ["ALL"],
@@ -46,7 +52,10 @@ function docker29Inspect() {
       ReadonlyRootfs: true,
       RestartPolicy: { Name: "no" },
       SecurityOpt: ["no-new-privileges=true"],
-      Tmpfs: { "/tmp": "rw,size=67108864" },
+      Tmpfs: {
+        "/tmp": "rw,size=67108864",
+        [POSTGRES_PARENT_TMPFS_DESTINATION]: POSTGRES_PARENT_TMPFS_OPTIONS,
+      },
       UTSMode: "",
     },
     Id: identity,
@@ -154,6 +163,26 @@ function inspect(runtime, forbiddenValues = []) {
 }
 
 describe("Docker 29 internal-network endpoint compatibility", () => {
+  it("covers the Postgres 18 declared parent with a bounded tmpfs before the nested data bind", () => {
+    const args = postgresContainerArguments({
+      database: "wf_gate",
+      dataDirectory: postgresData,
+      image,
+      ioDevice: "/dev/vda",
+      name,
+      network: networkName,
+      passwordFile,
+      user: "wf_gate",
+    });
+    const parentTmpfs = `${POSTGRES_PARENT_TMPFS_DESTINATION}:${POSTGRES_PARENT_TMPFS_OPTIONS}`;
+    const parentIndex = args.indexOf(parentTmpfs);
+    const dataBind = `type=bind,src=${postgresData},dst=/var/lib/postgresql/data,bind-propagation=rprivate`;
+    expect(parentIndex).toBeGreaterThan(args.indexOf("--tmpfs"));
+    expect(args[parentIndex - 1]).toBe("--tmpfs");
+    expect(parentIndex).toBeLessThan(args.indexOf(dataBind));
+    expect(args.filter((argument) => argument === parentTmpfs)).toHaveLength(1);
+  });
+
   it("proves the created bridge is internal before admitting any container", async () => {
     let inspectCalls = 0;
     const ledger = {
@@ -219,7 +248,13 @@ describe("Docker 29 internal-network endpoint compatibility", () => {
       internalNetwork: networkName,
       internalNetworkEndpoint: { ipv4Address: "172.28.0.2", port: 5432 },
       publishedPorts: 0,
-      writableStorage: expectedStorage,
+      writableStorage: {
+        ...expectedStorage,
+        parentTmpfs: {
+          destination: POSTGRES_PARENT_TMPFS_DESTINATION,
+          options: POSTGRES_PARENT_TMPFS_OPTIONS,
+        },
+      },
     });
     expect(runtime.runner.run.mock.calls).toEqual([
       [
@@ -234,6 +269,59 @@ describe("Docker 29 internal-network endpoint compatibility", () => {
       ],
       ["/usr/bin/docker", ["port", name], { timeoutMs: 5_000 }],
     ]);
+  });
+
+  it.each([
+    [
+      "missing parent tmpfs",
+      (value) =>
+        Reflect.deleteProperty(
+          value.HostConfig.Tmpfs,
+          POSTGRES_PARENT_TMPFS_DESTINATION,
+        ),
+    ],
+    [
+      "wrong parent ownership",
+      (value) =>
+        (value.HostConfig.Tmpfs[POSTGRES_PARENT_TMPFS_DESTINATION] =
+          POSTGRES_PARENT_TMPFS_OPTIONS.replace("uid=70", "uid=0")),
+    ],
+    [
+      "unbounded parent tmpfs",
+      (value) =>
+        (value.HostConfig.Tmpfs[POSTGRES_PARENT_TMPFS_DESTINATION] =
+          "rw,nosuid,nodev,noexec,uid=70,gid=70,mode=0700"),
+    ],
+    [
+      "foreign tmpfs",
+      (value) => (value.HostConfig.Tmpfs["/foreign"] = "rw,size=4096"),
+    ],
+  ])("rejects %s for the declared Postgres 18 parent", async (_, mutate) => {
+    const inspected = docker29Inspect();
+    mutate(inspected);
+    await expect(inspect(runtimeFor(inspected))).rejects.toThrow(
+      "docker_container_confinement_unproven",
+    );
+  });
+
+  it.each([
+    ["anonymous parent volume", "/var/lib/postgresql"],
+    ["foreign volume", "/foreign"],
+  ])("rejects a Docker-created %s", async (_, destination) => {
+    const inspected = docker29Inspect();
+    inspected.Mounts.push({
+      Destination: destination,
+      Driver: "local",
+      Mode: "",
+      Name: "f".repeat(64),
+      Propagation: "",
+      RW: true,
+      Source: `/var/lib/docker/volumes/${"f".repeat(64)}/_data`,
+      Type: "volume",
+    });
+    await expect(inspect(runtimeFor(inspected))).rejects.toThrow(
+      "docker_container_confinement_unproven",
+    );
   });
 
   it("converges from Docker 29's empty endpoint and membership to exact evidence", async () => {

@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
+  POSTGRES_PARENT_TMPFS_DESTINATION,
+  POSTGRES_PARENT_TMPFS_OPTIONS,
   assertSafeDockerArguments,
   isolatedNetworkArguments,
 } from "./docker-plan.mjs";
@@ -22,6 +24,34 @@ import { OWNED_RESOURCE_PATTERN } from "./constants.mjs";
 
 const ENDPOINT_CONVERGENCE_ATTEMPTS = 5;
 const ENDPOINT_CONVERGENCE_DELAY_MS = 50;
+
+function exactContainerTmpfs(tmpfs, expectedWritableStorage) {
+  if (tmpfs === null || typeof tmpfs !== "object" || Array.isArray(tmpfs))
+    return false;
+  const postgresParentRequired =
+    expectedWritableStorage?.kind === "bind" &&
+    expectedWritableStorage.destination === "/var/lib/postgresql/data";
+  const expectedDestinations = new Set([
+    "/tmp",
+    ...(expectedWritableStorage?.kind === "tmpfs"
+      ? [expectedWritableStorage.destination]
+      : []),
+    ...(postgresParentRequired ? [POSTGRES_PARENT_TMPFS_DESTINATION] : []),
+  ]);
+  const destinations = Object.keys(tmpfs);
+  return (
+    destinations.length === expectedDestinations.size &&
+    destinations.every((destination) =>
+      expectedDestinations.has(destination),
+    ) &&
+    destinations.every(
+      (destination) => typeof tmpfs[destination] === "string",
+    ) &&
+    (!postgresParentRequired ||
+      tmpfs[POSTGRES_PARENT_TMPFS_DESTINATION] ===
+        POSTGRES_PARENT_TMPFS_OPTIONS)
+  );
+}
 
 function missingDockerObject(result) {
   return (
@@ -303,12 +333,10 @@ export class GateDockerRuntime {
       runId: this.runId,
       subnet,
     });
-    const writableStorageProven =
-      expectedWritableStorage?.kind === "bind"
-        ? typeof host?.Tmpfs?.[expectedWritableStorage.destination] !== "string"
-        : expectedWritableStorage?.kind === "tmpfs" &&
-          typeof host?.Tmpfs?.[expectedWritableStorage.destination] ===
-            "string";
+    const writableStorageProven = exactContainerTmpfs(
+      host?.Tmpfs,
+      expectedWritableStorage,
+    );
     if (
       !Array.isArray(decoded) ||
       decoded.length !== 1 ||
@@ -334,7 +362,6 @@ export class GateDockerRuntime {
       !host?.SecurityOpt?.some((value) =>
         value.startsWith("no-new-privileges"),
       ) ||
-      typeof host?.Tmpfs?.["/tmp"] !== "string" ||
       !writableStorageProven ||
       !exactBindMounts(
         inspected?.Mounts,
@@ -381,7 +408,18 @@ export class GateDockerRuntime {
       privateUtsNamespace: true,
       publishedPorts: 0,
       readOnlyRoot: true,
-      writableStorage: Object.freeze({ ...expectedWritableStorage }),
+      writableStorage: Object.freeze({
+        ...expectedWritableStorage,
+        ...(expectedWritableStorage?.kind === "bind" &&
+        expectedWritableStorage.destination === "/var/lib/postgresql/data"
+          ? {
+              parentTmpfs: Object.freeze({
+                destination: POSTGRES_PARENT_TMPFS_DESTINATION,
+                options: POSTGRES_PARENT_TMPFS_OPTIONS,
+              }),
+            }
+          : {}),
+      }),
       resourceLimits: Object.freeze({
         memoryBytes: host.Memory,
         pids: host.PidsLimit,

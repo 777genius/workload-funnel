@@ -92,6 +92,7 @@ async function syncDirectory(path) {
 
 export class OwnedResourceLedger {
   #cleanup = new Map();
+  #mutationTail = Promise.resolve();
   #path;
   #records;
   #recoveryCleaners;
@@ -115,6 +116,15 @@ export class OwnedResourceLedger {
     this.#records = [];
     this.#recoveryCleaners = Object.freeze({ ...recoveryCleaners });
     this.#runId = runId;
+  }
+
+  #serializeMutation(operation) {
+    const result = this.#mutationTail.then(operation);
+    this.#mutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   async #loadOrCreate() {
@@ -199,53 +209,57 @@ export class OwnedResourceLedger {
   }
 
   async prepare(kind, name, expected = {}) {
-    if (!/^[a-z][a-z0-9-]{0,63}$/u.test(kind) || !owned(this.#runId, name))
-      throw new Error("resource_not_owned_by_gate_run");
-    if (
-      expected === null ||
-      typeof expected !== "object" ||
-      Array.isArray(expected) ||
-      Buffer.byteLength(JSON.stringify(expected)) > 16 * 1024
-    )
-      throw new Error("cleanup_ledger_expected_identity_invalid");
-    if (
-      this.#records.some(
-        (record) => record.kind === kind && record.name === name,
+    return this.#serializeMutation(async () => {
+      if (!/^[a-z][a-z0-9-]{0,63}$/u.test(kind) || !owned(this.#runId, name))
+        throw new Error("resource_not_owned_by_gate_run");
+      if (
+        expected === null ||
+        typeof expected !== "object" ||
+        Array.isArray(expected) ||
+        Buffer.byteLength(JSON.stringify(expected)) > 16 * 1024
       )
-    )
-      throw new Error("duplicate_owned_resource");
-    if (this.#records.length >= 1024) throw new Error("cleanup_ledger_full");
-    const record = {
-      errorCode: null,
-      expected: { ...expected },
-      kind,
-      name,
-      observed: {},
-      order: this.#records.length + 1,
-      recordId: randomUUID(),
-      state: "prepared",
-    };
-    this.#records.push(record);
-    await this.#persist();
-    return record.recordId;
+        throw new Error("cleanup_ledger_expected_identity_invalid");
+      if (
+        this.#records.some(
+          (record) => record.kind === kind && record.name === name,
+        )
+      )
+        throw new Error("duplicate_owned_resource");
+      if (this.#records.length >= 1024) throw new Error("cleanup_ledger_full");
+      const record = {
+        errorCode: null,
+        expected: { ...expected },
+        kind,
+        name,
+        observed: {},
+        order: this.#records.length + 1,
+        recordId: randomUUID(),
+        state: "prepared",
+      };
+      this.#records.push(record);
+      await this.#persist();
+      return record.recordId;
+    });
   }
 
   async finalize(recordId, observed, cleanup) {
-    const record = this.#records.find((item) => item.recordId === recordId);
-    if (record === undefined || record.state !== "prepared")
-      throw new Error("cleanup_ledger_prepare_missing");
-    if (
-      observed === null ||
-      typeof observed !== "object" ||
-      Array.isArray(observed) ||
-      Buffer.byteLength(JSON.stringify(observed)) > 16 * 1024 ||
-      typeof cleanup !== "function"
-    )
-      throw new Error("cleanup_ledger_observed_identity_invalid");
-    record.observed = { ...observed };
-    record.state = "active";
-    await this.#persist();
-    this.#cleanup.set(recordId, cleanup);
+    return this.#serializeMutation(async () => {
+      const record = this.#records.find((item) => item.recordId === recordId);
+      if (record === undefined || record.state !== "prepared")
+        throw new Error("cleanup_ledger_prepare_missing");
+      if (
+        observed === null ||
+        typeof observed !== "object" ||
+        Array.isArray(observed) ||
+        Buffer.byteLength(JSON.stringify(observed)) > 16 * 1024 ||
+        typeof cleanup !== "function"
+      )
+        throw new Error("cleanup_ledger_observed_identity_invalid");
+      record.observed = { ...observed };
+      record.state = "active";
+      await this.#persist();
+      this.#cleanup.set(recordId, cleanup);
+    });
   }
 
   snapshot() {
@@ -267,46 +281,48 @@ export class OwnedResourceLedger {
   }
 
   async cleanup() {
-    const outcomes = [];
-    const pending = this.#records
-      .filter((record) => record.state !== "removed")
-      .sort((left, right) => right.order - left.order);
-    for (const record of pending) {
-      try {
-        const cleanup =
-          this.#cleanup.get(record.recordId) ??
-          this.#recoveryCleaners[record.kind];
-        if (typeof cleanup !== "function")
-          throw new Error("cleanup_recovery_handler_missing");
-        await cleanup(Object.freeze({ ...record }));
-        record.errorCode = null;
-        record.state = "removed";
-        await this.#persist();
-        outcomes.push({
-          kind: record.kind,
-          name: record.name,
-          status: "removed",
-        });
-      } catch (error) {
-        const code =
-          error instanceof Error && /^[a-z0-9_]{1,128}$/u.test(error.message)
-            ? error.message
-            : "cleanup_failed";
-        record.errorCode = code;
-        record.state = "uncertain";
-        await this.#persist();
-        outcomes.push({
-          errorCode: code,
-          kind: record.kind,
-          name: record.name,
-          status: "uncertain",
-        });
+    return this.#serializeMutation(async () => {
+      const outcomes = [];
+      const pending = this.#records
+        .filter((record) => record.state !== "removed")
+        .sort((left, right) => right.order - left.order);
+      for (const record of pending) {
+        try {
+          const cleanup =
+            this.#cleanup.get(record.recordId) ??
+            this.#recoveryCleaners[record.kind];
+          if (typeof cleanup !== "function")
+            throw new Error("cleanup_recovery_handler_missing");
+          await cleanup(Object.freeze({ ...record }));
+          record.errorCode = null;
+          record.state = "removed";
+          await this.#persist();
+          outcomes.push({
+            kind: record.kind,
+            name: record.name,
+            status: "removed",
+          });
+        } catch (error) {
+          const code =
+            error instanceof Error && /^[a-z0-9_]{1,128}$/u.test(error.message)
+              ? error.message
+              : "cleanup_failed";
+          record.errorCode = code;
+          record.state = "uncertain";
+          await this.#persist();
+          outcomes.push({
+            errorCode: code,
+            kind: record.kind,
+            name: record.name,
+            status: "uncertain",
+          });
+        }
       }
-    }
-    return Object.freeze({
-      certain: outcomes.every((outcome) => outcome.status === "removed"),
-      outcomes: Object.freeze(outcomes),
-      pending: this.snapshot(),
+      return Object.freeze({
+        certain: outcomes.every((outcome) => outcome.status === "removed"),
+        outcomes: Object.freeze(outcomes),
+        pending: this.snapshot(),
+      });
     });
   }
 

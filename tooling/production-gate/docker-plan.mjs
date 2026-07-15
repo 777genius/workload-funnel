@@ -9,6 +9,11 @@ const forbidden = [
   "--env-file",
 ];
 
+export const POSTGRES_PARENT_TMPFS_DESTINATION = "/var/lib/postgresql";
+export const POSTGRES_PARENT_TMPFS_OPTIONS =
+  "rw,nosuid,nodev,noexec,size=67108864,uid=70,gid=70,mode=0700";
+const POSTGRES_PARENT_TMPFS_ARGUMENT = `${POSTGRES_PARENT_TMPFS_DESTINATION}:${POSTGRES_PARENT_TMPFS_OPTIONS}`;
+
 export function assertSafeDockerArguments(args) {
   const rendered = args.join(" ");
   if (forbidden.some((token) => rendered.includes(token)))
@@ -47,6 +52,7 @@ function boundedContainerArguments({
   ioDevice,
   name,
   network,
+  parentTmpfs,
   scratchTmpfs,
   secretMounts,
   user,
@@ -68,6 +74,8 @@ function boundedContainerArguments({
         !/^\/data:rw,nosuid,nodev,noexec,size=268435456,uid=1000,gid=1000,mode=0700$/u.test(
           dataStorage.options,
         ))) ||
+    (parentTmpfs !== undefined &&
+      parentTmpfs !== POSTGRES_PARENT_TMPFS_ARGUMENT) ||
     !Array.isArray(secretMounts) ||
     secretMounts.some(
       ({ destination, source }) =>
@@ -139,6 +147,7 @@ function boundedContainerArguments({
     "5",
     "--tmpfs",
     scratchTmpfs,
+    ...(parentTmpfs === undefined ? [] : ["--tmpfs", parentTmpfs]),
     ...(dataStorage.kind === "tmpfs"
       ? ["--tmpfs", dataStorage.options]
       : [
@@ -182,6 +191,7 @@ export function postgresContainerArguments(config) {
       ioDevice: config.ioDevice,
       name: config.name,
       network: config.network,
+      parentTmpfs: POSTGRES_PARENT_TMPFS_ARGUMENT,
       scratchTmpfs:
         "/tmp:rw,nosuid,nodev,noexec,size=67108864,uid=70,gid=70,mode=0700",
       secretMounts: [
