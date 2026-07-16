@@ -3,6 +3,7 @@ import { URL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { runMixedWorkloadMeasurement } from "./mixed-load.mjs";
 import {
   encodePressureFixtureReadiness,
   parsePressureFixtureReadiness,
@@ -122,6 +123,65 @@ describe("pressure fixture priming and bounded lifetime", () => {
     ).rejects.toThrow("pressure_fixture_runtime_expired");
     expect(readReady).not.toHaveBeenCalled();
     expect(verifyRunning).not.toHaveBeenCalled();
+  });
+});
+
+describe("pressure pause escalation", () => {
+  it("quiesces after two high observations before critical escalation, then reopens admissions", async () => {
+    let now = 1_000;
+    let observations = 0;
+    let pressureQuiesced = false;
+    const onAbort = vi.fn(() => Promise.resolve());
+    const onPause = vi.fn(() => {
+      pressureQuiesced = true;
+      return Promise.resolve();
+    });
+    const produce = vi.fn(() => Promise.resolve(true));
+    const result = await runMixedWorkloadMeasurement({
+      clock: () => now,
+      durationMs: 10_000,
+      maximumIterations: 100,
+      maximumSamples: 100,
+      observe: () => {
+        observations += 1;
+        return Promise.resolve({
+          cpuPsiSome: pressureQuiesced ? 0.01 : observations <= 2 ? 0.25 : 0.7,
+          diskFreeBytes: 16 * 1024 ** 3,
+          diskFreeRatio: 0.5,
+          ioPsiSome: 0.01,
+          loadPerCpu: 0.1,
+          memoryAvailableRatio: 0.8,
+          memoryPsiSome: 0.01,
+          nowMs: now,
+          observedAtMs: now,
+        });
+      },
+      onAbort,
+      onPause,
+      preciseClock: () => now,
+      produce,
+      protectedControls: {
+        cancel: () => Promise.resolve(true),
+        health: () => Promise.resolve(true),
+        status: () => Promise.resolve(true),
+      },
+      wait: () => {
+        now += 100;
+        return Promise.resolve();
+      },
+    });
+
+    expect(result).toMatchObject({
+      abortedBeforeHostExhaustion: false,
+      observedPause: true,
+      observedReopen: true,
+      sampleCounts: { cancel: 100, health: 100, status: 100 },
+      slo: { passed: true },
+    });
+    expect(onPause).toHaveBeenCalledOnce();
+    expect(onAbort).not.toHaveBeenCalled();
+    expect(result.acceptedAfterReopen).toBeGreaterThan(0);
+    expect(produce).toHaveBeenCalled();
   });
 });
 

@@ -518,6 +518,8 @@ for (const token of [
 ])
   if (!pressureStage.includes(token))
     failures.push(`real pressure stage is missing ${token}`);
+if (pressureStage.includes("highObservationsToPause"))
+  failures.push("real pressure stage overrides strict pause hysteresis");
 if (/`cancel-\$\{String\(/u.test(pressureStage))
   failures.push("real pressure stage creates one systemd unit per sample");
 for (const token of [".ready-${mode}", 'if (mode !== "io") await ready()'])

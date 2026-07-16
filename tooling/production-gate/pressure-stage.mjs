@@ -6,7 +6,6 @@ import {
   monotonicMilliseconds,
   runMixedWorkloadMeasurement,
 } from "./mixed-load.mjs";
-import { DEFAULT_PRESSURE_POLICY } from "./pressure.mjs";
 import {
   parsePressureFixtureReadiness,
   PRESSURE_FIXTURE_MODES,
@@ -212,10 +211,6 @@ export async function runPressureAdmissionStage({
         await stopPressure();
         pressureQuiescedAfterPause = true;
       },
-      policy: Object.freeze({
-        ...DEFAULT_PRESSURE_POLICY,
-        highObservationsToPause: 20,
-      }),
       prepare: async () => {
         pressureReadiness = await waitForPressureFixtureReadiness({
           clock: runtimeClock,

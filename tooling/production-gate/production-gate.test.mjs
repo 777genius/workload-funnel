@@ -526,7 +526,7 @@ describe("live pressure admission", () => {
         observations += 1;
         return Promise.resolve({
           ...observation,
-          cpuPsiSome: observations <= 20 ? 0.25 : 0.01,
+          cpuPsiSome: observations <= 2 ? 0.25 : 0.01,
           nowMs: now,
           observedAtMs: now,
         });
@@ -534,10 +534,6 @@ describe("live pressure admission", () => {
       onPause: () => {
         pressureQuiesced = true;
         return Promise.resolve();
-      },
-      policy: {
-        ...new ProducerPressureGate().policy,
-        highObservationsToPause: 20,
       },
       preciseClock: () => now,
       prepare: async () => {
