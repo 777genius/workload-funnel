@@ -3,6 +3,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
+import { PRESSURE_FIXTURE_CPU_WORKER_COUNT } from "../production-gate/pressure-fixture-protocol.mjs";
+
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const failures = [];
 
@@ -475,7 +477,7 @@ for (const token of ['"cpu"', '"memory"', '"io"', '"disk"', '"inodes"'])
     failures.push(`mixed pressure fixture is missing ${token}`);
 for (const token of [
   "PRESSURE_FIXTURE_READY_SCHEMA",
-  "workersOnline: 4",
+  "workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT",
   "retainedBytes: 28 * 16 * 1024 * 1024",
   "syncedBytes: 8 * 1024 * 1024",
   "writtenBytes: 48 * 1024 * 1024",
@@ -484,6 +486,14 @@ for (const token of [
 ])
   if (!pressureFixtureProtocol.includes(token))
     failures.push(`pressure priming protocol is missing ${token}`);
+if (PRESSURE_FIXTURE_CPU_WORKER_COUNT !== 2)
+  failures.push("pressure CPU fixture worker count is not exactly two");
+for (const token of [
+  "PRESSURE_FIXTURE_CPU_WORKER_COUNT",
+  "length: PRESSURE_FIXTURE_CPU_WORKER_COUNT",
+])
+  if (!pressureFixture.includes(token))
+    failures.push(`pressure CPU fixture is missing protocol-owned ${token}`);
 
 const mixedLoad = await source("tooling/production-gate/mixed-load.mjs");
 for (const token of [

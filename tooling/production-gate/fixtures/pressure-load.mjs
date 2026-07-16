@@ -5,6 +5,7 @@ import { setInterval, setTimeout } from "node:timers";
 
 import {
   encodePressureFixtureReadiness,
+  PRESSURE_FIXTURE_CPU_WORKER_COUNT,
   PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
 } from "../pressure-fixture-protocol.mjs";
@@ -49,7 +50,9 @@ if (mode === "cpu") {
       });
     });
   retainedWorkers.push(
-    ...(await Promise.all(Array.from({ length: 4 }, startWorker))),
+    ...(await Promise.all(
+      Array.from({ length: PRESSURE_FIXTURE_CPU_WORKER_COUNT }, startWorker),
+    )),
   );
 }
 

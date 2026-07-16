@@ -8,8 +8,10 @@ import {
   encodePressureFixtureReadiness,
   parsePressureFixtureReadiness,
   pressureFixturePrimedState,
+  PRESSURE_FIXTURE_CPU_WORKER_COUNT,
   PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
+  PRESSURE_FIXTURE_READY_SCHEMA,
 } from "./pressure-fixture-protocol.mjs";
 import {
   runPressureAdmissionStage,
@@ -31,6 +33,67 @@ function missingReady() {
 }
 
 describe("pressure fixture priming and bounded lifetime", () => {
+  it("uses the protocol-owned exact two-worker CPU target", async () => {
+    expect(PRESSURE_FIXTURE_CPU_WORKER_COUNT).toBe(2);
+    expect(pressureFixturePrimedState("cpu")).toStrictEqual({
+      workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT,
+    });
+    expect(
+      parsePressureFixtureReadiness(
+        JSON.stringify({
+          mode: "cpu",
+          primed: { workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT },
+          schemaVersion: PRESSURE_FIXTURE_READY_SCHEMA,
+        }),
+        "cpu",
+      ),
+    ).toStrictEqual({
+      mode: "cpu",
+      primed: { workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT },
+      schemaVersion: PRESSURE_FIXTURE_READY_SCHEMA,
+    });
+
+    const fixtureSource = await readFile(
+      new URL("./fixtures/pressure-load.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(fixtureSource).toContain(
+      "length: PRESSURE_FIXTURE_CPU_WORKER_COUNT",
+    );
+  });
+
+  it("rejects the former four-worker marker and non-exact CPU markers", () => {
+    const readiness = (primed, extra = {}) =>
+      JSON.stringify({
+        mode: "cpu",
+        primed,
+        schemaVersion: PRESSURE_FIXTURE_READY_SCHEMA,
+        ...extra,
+      });
+
+    expect(() =>
+      parsePressureFixtureReadiness(readiness({ workersOnline: 4 }), "cpu"),
+    ).toThrow("pressure_fixture_readiness_malformed");
+    expect(() =>
+      parsePressureFixtureReadiness(
+        readiness({
+          unexpected: true,
+          workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT,
+        }),
+        "cpu",
+      ),
+    ).toThrow("pressure_fixture_readiness_malformed");
+    expect(() =>
+      parsePressureFixtureReadiness(
+        readiness(
+          { workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT },
+          { unexpected: true },
+        ),
+        "cpu",
+      ),
+    ).toThrow("pressure_fixture_readiness_malformed");
+  });
+
   it("keeps the memory fixture and strict protocol on one 22 x 16 MiB target", async () => {
     expect(PRESSURE_FIXTURE_MEMORY_TARGET).toStrictEqual({
       chunkBytes: 16 * 1024 * 1024,

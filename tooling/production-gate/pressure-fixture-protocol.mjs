@@ -1,6 +1,8 @@
 export const PRESSURE_FIXTURE_READY_SCHEMA =
   "workload-funnel.production-gate.pressure-ready.v1";
 
+export const PRESSURE_FIXTURE_CPU_WORKER_COUNT = 2;
+
 export const PRESSURE_FIXTURE_MODES = Object.freeze([
   "cpu",
   "memory",
@@ -20,7 +22,9 @@ export const PRESSURE_FIXTURE_MEMORY_TARGET = Object.freeze({
 });
 
 const PRIMED_STATES = Object.freeze({
-  cpu: Object.freeze({ workersOnline: 4 }),
+  cpu: Object.freeze({
+    workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT,
+  }),
   disk: Object.freeze({ writtenBytes: 48 * 1024 * 1024 }),
   inodes: Object.freeze({ createdFiles: 3_200 }),
   io: Object.freeze({ syncedBytes: 8 * 1024 * 1024 }),
