@@ -34,6 +34,7 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     properties.ProtectKernelModules !== true ||
     properties.ProtectKernelTunables !== true ||
     properties.PrivateDevices !== true ||
+    properties.PrivateMounts !== true ||
     properties.PrivateTmp !== true ||
     properties.DevicePolicy !== "closed" ||
     !Array.isArray(properties.AmbientCapabilities) ||
@@ -75,6 +76,7 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     `NoNewPrivileges=${yesNo(properties.NoNewPrivileges)}`,
     "LockPersonality=yes",
     `PrivateDevices=${yesNo(properties.PrivateDevices)}`,
+    `PrivateMounts=${yesNo(properties.PrivateMounts)}`,
     `PrivateNetwork=${yesNo(properties.PrivateNetwork)}`,
     `PrivateTmp=${yesNo(properties.PrivateTmp)}`,
     "ProcSubset=pid",
@@ -155,7 +157,7 @@ export function systemctlShowArguments(unit) {
     "show",
     unit,
     "--no-pager",
-    "--property=ActiveState,AmbientCapabilities,CapabilityBoundingSet,CPUQuotaPerSecUSec,CPUWeight,ControlGroup,Description,DevicePolicy,Environment,FinalKillSignal,Group,IOReadBandwidthMax,IOWeight,IOWriteBandwidthMax,InvocationID,KillMode,KillSignal,LimitNOFILE,LockPersonality,MemoryHigh,MemoryMax,MemorySwapMax,NoNewPrivileges,PrivateDevices,PrivateNetwork,PrivateTmp,ProcSubset,ProtectClock,ProtectControlGroups,ProtectHome,ProtectHostname,ProtectKernelLogs,ProtectKernelModules,ProtectKernelTunables,ProtectProc,ProtectSystem,ReadWritePaths,RestrictAddressFamilies,RestrictNamespaces,RestrictRealtime,RestrictSUIDSGID,Result,RuntimeMaxUSec,SendSIGKILL,Slice,SystemCallArchitectures,SystemCallFilter,TasksMax,TimeoutStopUSec,UMask,User",
+    "--property=ActiveState,AmbientCapabilities,CapabilityBoundingSet,CPUQuotaPerSecUSec,CPUWeight,ControlGroup,Description,DevicePolicy,Environment,FinalKillSignal,Group,IOReadBandwidthMax,IOWeight,IOWriteBandwidthMax,InvocationID,KillMode,KillSignal,LimitNOFILE,LockPersonality,MemoryHigh,MemoryMax,MemorySwapMax,NoNewPrivileges,PrivateDevices,PrivateMounts,PrivateNetwork,PrivateTmp,ProcSubset,ProtectClock,ProtectControlGroups,ProtectHome,ProtectHostname,ProtectKernelLogs,ProtectKernelModules,ProtectKernelTunables,ProtectProc,ProtectSystem,ReadWritePaths,RestrictAddressFamilies,RestrictNamespaces,RestrictRealtime,RestrictSUIDSGID,Result,RuntimeMaxUSec,SendSIGKILL,Slice,SystemCallArchitectures,SystemCallFilter,TasksMax,TimeoutStopUSec,UMask,User",
   ]);
 }
 
@@ -200,6 +202,7 @@ export function exactSystemdPropertiesObserved(
     LockPersonality: "yes",
     NoNewPrivileges: "yes",
     PrivateDevices: "yes",
+    PrivateMounts: "yes",
     PrivateNetwork: "yes",
     PrivateTmp: "yes",
     ProcSubset: "pid",
@@ -513,7 +516,10 @@ export async function runSystemdGateProbe(config) {
     memoryLimitClassification: "memory_limit_oom",
     pidLimitClassification: "pids_limit_enforced",
     processTreeCancellation: true,
-    projectQuotaApplied: false,
+    projectQuotaApplied:
+      config.capabilityEvidence.projectQuotaBytes === true &&
+      config.capabilityEvidence.projectQuotaInodes === true &&
+      config.capabilityEvidence.projectQuota?.receipt !== undefined,
     resourceMappingDigest: plan.profileDigest,
     runtimeLimitClassification: ioTerminal.Result,
     systemdVersion: config.capabilityReport.systemdVersion,

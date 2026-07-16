@@ -98,6 +98,7 @@ describe("Phase 4C exact resource and sandbox mapping", () => {
       MemorySwapMax: 0n,
       NoNewPrivileges: true,
       PrivateDevices: true,
+      PrivateMounts: true,
       PrivateNetwork: true,
       PrivateTmp: true,
       ProtectControlGroups: true,
@@ -177,6 +178,7 @@ describe("Phase 4C exact resource and sandbox mapping", () => {
 
   it("requires exact byte and inode quota before the systemd call", () => {
     const { decision } = supportedPlan();
+    const fence = startFence();
     const quota = vi.fn(quotaReceipt);
     const start = vi.fn<(unit: SyntheticTransientUnit) => "created">(
       () => "created",
@@ -193,11 +195,11 @@ describe("Phase 4C exact resource and sandbox mapping", () => {
       startSyntheticTransientUnit(
         manager,
         "workload-funnel-phase4a-0123456789abcdef0123456789abcdef.service",
-        startFence(),
+        fence,
         decision,
       ),
     ).toMatchObject({ status: "started" });
-    expect(quota).toHaveBeenCalledWith(decision.diskQuota);
+    expect(quota).toHaveBeenCalledWith(decision.diskQuota, fence);
     expect(quota.mock.invocationCallOrder[0]).toBeLessThan(
       start.mock.invocationCallOrder[0] ?? 0,
     );

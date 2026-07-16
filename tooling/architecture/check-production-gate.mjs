@@ -96,10 +96,22 @@ if (/writeFile\([^)]*\/sys\/fs\/cgroup/u.test(gate))
 for (const blocker of [
   "ambiguous_submit_lookup_unsupported",
   "object_provider_create_only_credential_unsupported",
-  "project_quota_application_adapter_missing",
 ])
   if (!gate.includes(blocker))
     failures.push(`manual gate omits production-closure blocker ${blocker}`);
+
+const projectQuotaGate = [
+  gate,
+  await source("tooling/production-gate/systemd-capability-probe.mjs"),
+  await source("tooling/production-gate/systemd-contract.mjs"),
+].join("\n");
+for (const evidence of [
+  "projectQuotaMutatingProbe",
+  "project_quota_capability_not_proven",
+  "projectQuotaApplied",
+])
+  if (!projectQuotaGate.includes(evidence))
+    failures.push(`manual gate omits project-quota evidence ${evidence}`);
 
 const attestation = await source("tooling/production-gate/attestation.mjs");
 for (const token of [

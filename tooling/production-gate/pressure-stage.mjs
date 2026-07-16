@@ -145,7 +145,10 @@ export async function runPressureAdmissionStage({
   if (postgres === undefined)
     throw new Error("postgres_fixture_required_for_mixed_load");
   if (
-    systemdCapabilityEvidence?.nonMutatingVerification !== true ||
+    systemdCapabilityEvidence?.systemdPropertyVerificationNonMutating !==
+      true ||
+    systemdCapabilityEvidence?.projectQuotaMutatingProbe !== true ||
+    systemdCapabilityEvidence?.projectQuota?.receipt === undefined ||
     !["cpu", "io", "memory", "pids"].every((controller) =>
       systemdCapabilityEvidence.cgroupV2Controllers?.includes(controller),
     )

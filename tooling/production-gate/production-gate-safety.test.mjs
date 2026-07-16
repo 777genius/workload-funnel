@@ -528,7 +528,7 @@ describe("production gate host safety", () => {
     expect(outputs).toHaveLength(0);
   });
 
-  it("uses only a non-mutating real-systemd capability preflight", async () => {
+  it("combines non-mutating systemd checks with exact quota application evidence", async () => {
     const directory = join(
       tmpdir(),
       `wf-systemd-capability-${process.pid}-${Date.now()}`,
@@ -560,6 +560,21 @@ describe("production gate host safety", () => {
         },
         {
           hostPlatform: () => "linux",
+          projectQuotaApplication: () =>
+            Promise.resolve({
+              capability: {
+                byteQuota: true,
+                inodeQuota: true,
+              },
+              control: {
+                allocationId: runId,
+                inodeMaximum: 4_096n,
+                maximumBytes: 67_108_864n,
+                projectId: 1,
+                root: `/var/lib/workload-funnel/allocations/${runId}`,
+              },
+              receipt: { receiptDigest: "a".repeat(64) },
+            }),
           read: () => Promise.resolve("cpu io memory pids\n"),
           write: (path, contents, options) => {
             verificationUnit = contents;
@@ -568,7 +583,7 @@ describe("production gate host safety", () => {
         },
       );
       expect(result.report.evidenceSource).toBe("disposable_linux_host");
-      expect(result.report.capabilities.ephemeral_disk_quota).toBe(false);
+      expect(result.report.capabilities.ephemeral_disk_quota).toBe(true);
       expect(calls).toHaveLength(3);
       expect(calls[1][1]).toEqual([
         "show",

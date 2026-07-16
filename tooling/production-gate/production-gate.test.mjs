@@ -124,6 +124,8 @@ function argumentsFor(root) {
     POSTGRES_FIXTURE_IMAGE,
     "--psql-executable",
     "/usr/bin/psql",
+    "--project-quota-helper",
+    "/usr/libexec/workload-funnel/linux-project-quota",
     "--review-manifest",
     "/root/review-manifest.json",
     "--review-manifest-sha256",
@@ -873,6 +875,7 @@ describe("systemd and SLO contracts", () => {
     MemorySwapMax: 0n,
     NoNewPrivileges: true,
     PrivateDevices: true,
+    PrivateMounts: true,
     PrivateNetwork: true,
     PrivateTmp: true,
     ProtectControlGroups: true,
@@ -899,6 +902,7 @@ describe("systemd and SLO contracts", () => {
     expect(args).toEqual(
       expect.arrayContaining([
         "--property=KillMode=control-group",
+        "--property=PrivateMounts=yes",
         "--property=RuntimeMaxSec=5000000us",
         "--property=MemorySwapMax=0",
         "--property=SystemCallFilter=@system-service",
@@ -928,6 +932,19 @@ describe("systemd and SLO contracts", () => {
         unit: `${runId}-legacy-filter.service`,
       }),
     ).toThrow("systemd_gate_mapping_relaxed");
+    expect(() =>
+      systemdRunArguments({
+        description: `WorkloadFunnel production gate ${runId} shared-mounts`,
+        executable: "/usr/bin/node",
+        ioDevice: "/dev/vda",
+        properties: {
+          ...properties,
+          PrivateMounts: false,
+        },
+        slice: `${runId}.slice`,
+        unit: `${runId}-shared-mounts.service`,
+      }),
+    ).toThrow("systemd_gate_mapping_relaxed");
     expect(args.join(" ")).not.toContain("sh -c");
     expect(() =>
       systemdRunArguments({
@@ -940,7 +957,7 @@ describe("systemd and SLO contracts", () => {
       }),
     ).toThrow("unsafe_systemd_gate_invocation");
     const shown = parseSystemctlShow(
-      `ActiveState=active\nAmbientCapabilities=\nCapabilityBoundingSet=\nControlGroup=/wf.slice/test\nDescription=WorkloadFunnel production gate ${runId} tree\nEnvironment=HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC\nInvocationID=${"c".repeat(32)}\nKillMode=control-group\nLockPersonality=yes\nNoNewPrivileges=yes\nProtectSystem=strict\nSlice=${runId}.slice\nDevicePolicy=closed\nPrivateDevices=yes\nPrivateNetwork=yes\nPrivateTmp=yes\nProcSubset=pid\nProtectClock=yes\nProtectControlGroups=yes\nProtectHome=yes\nProtectHostname=yes\nProtectKernelLogs=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectProc=invisible\nRestrictAddressFamilies=AF_UNIX\nRestrictNamespaces=yes\nRestrictRealtime=yes\nRestrictSUIDSGID=yes\nSystemCallArchitectures=native\nUMask=0077`,
+      `ActiveState=active\nAmbientCapabilities=\nCapabilityBoundingSet=\nControlGroup=/wf.slice/test\nDescription=WorkloadFunnel production gate ${runId} tree\nEnvironment=HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC\nInvocationID=${"c".repeat(32)}\nKillMode=control-group\nLockPersonality=yes\nNoNewPrivileges=yes\nProtectSystem=strict\nSlice=${runId}.slice\nDevicePolicy=closed\nPrivateDevices=yes\nPrivateMounts=yes\nPrivateNetwork=yes\nPrivateTmp=yes\nProcSubset=pid\nProtectClock=yes\nProtectControlGroups=yes\nProtectHome=yes\nProtectHostname=yes\nProtectKernelLogs=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectProc=invisible\nRestrictAddressFamilies=AF_UNIX\nRestrictNamespaces=yes\nRestrictRealtime=yes\nRestrictSUIDSGID=yes\nSystemCallArchitectures=native\nUMask=0077`,
     );
     expect(
       exactSystemdPropertiesObserved(shown, {

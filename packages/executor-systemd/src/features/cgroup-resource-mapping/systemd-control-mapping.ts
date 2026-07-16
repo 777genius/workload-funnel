@@ -26,6 +26,7 @@ export interface SystemdExecutionProperties {
   readonly MemorySwapMax: bigint | "infinity";
   readonly NoNewPrivileges: true;
   readonly PrivateDevices: true;
+  readonly PrivateMounts: true;
   readonly PrivateNetwork: boolean;
   readonly PrivateTmp: true;
   readonly ProtectControlGroups: true;
@@ -147,6 +148,7 @@ export function mapSystemdExecutionControls(
         : "infinity",
     NoNewPrivileges: profile.isolation.noNewPrivileges,
     PrivateDevices: profile.isolation.privateDevices,
+    PrivateMounts: true,
     PrivateNetwork: profile.isolation.network === "none",
     PrivateTmp: profile.isolation.privateTmp,
     ProtectControlGroups: profile.isolation.protectControlGroups,

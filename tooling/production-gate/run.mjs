@@ -47,6 +47,7 @@ import {
 import { admitPreflight } from "./pressure.mjs";
 import { runPressureAdmissionStage } from "./pressure-stage.mjs";
 import { runPostgresCompatibilityStage } from "./postgres-stage.mjs";
+import { cleanupProjectQuotaRecord } from "./project-quota-runtime.mjs";
 import { OwnedResourceLedger } from "./resource-ledger.mjs";
 import {
   cleanupSecretFileRecord,
@@ -167,6 +168,7 @@ async function main() {
       ...dockerRecovery,
       "secret-file": cleanupSecretFileRecord,
       "owned-directory": cleanupOwnedDirectoryRecord,
+      "project-quota": cleanupProjectQuotaRecord,
       "systemd-allocation": cleanupSystemdAllocationRecord,
       "systemd-slice": (record) =>
         cleanupSystemdSlice(systemdCleanupConfig, record),
@@ -219,10 +221,17 @@ async function main() {
       runner,
     });
     try {
+      const projectQuotaHelper = reviewed.evidence.executables.find(
+        (identity) => identity.path === config.projectQuotaHelper,
+      );
+      if (projectQuotaHelper === undefined)
+        throw new Error("project_quota_helper_review_missing");
       systemdCapability = await probeRealSystemdCapabilities({
         ...config,
         ioDevice: config.ioDevice,
         runner,
+        ledger,
+        projectQuotaHelperSha256: projectQuotaHelper.sha256,
         workloadGroup: systemdAllocation.group,
         workloadRoot: systemdAllocation.root,
         workloadUser: systemdAllocation.user,
@@ -687,7 +696,8 @@ async function main() {
         !capability.report.capabilities.ephemeral_disk_quota ||
         !capability.report.capabilities.ephemeral_disk_inode_quota
       )
-        throw new Error("project_quota_application_adapter_missing");
+        throw new Error("project_quota_capability_not_proven");
+      capability.verifyProjectQuota();
       const io = createSystemdProbeIo({
         ...config,
         ledger,
@@ -708,17 +718,10 @@ async function main() {
       });
       components.set(
         "systemd_cgroup_v2",
-        blocked(
-          "systemd_cgroup_v2",
-          "project_quota_application_adapter_missing",
-          [
-            evidenceRecord(
-              "systemd_real_partial_evidence",
-              true,
-              systemdEvidence,
-            ),
-          ],
-        ),
+        passed("systemd_cgroup_v2", {
+          ...systemdEvidence,
+          projectQuota: capability.evidence.projectQuota,
+        }),
       );
     } catch (error) {
       const code = reasonCode(error);
@@ -728,6 +731,10 @@ async function main() {
         "systemd_manager_unavailable",
         "systemd_version_unsupported",
         "cgroup_v2_unsupported",
+        "project_quota_filesystem_unsupported",
+        "project_quota_kernel_capability_missing",
+        "project_quota_mount_option_missing",
+        "project_quota_quotactl_fd_unavailable",
         "systemd_required_property_unsupported",
       ]).has(code)
         ? "UNSUPPORTED"

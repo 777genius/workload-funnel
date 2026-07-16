@@ -359,7 +359,9 @@ function pressureStageHarness(uncertainMode) {
     runtimeClock: () => now,
     systemdCapabilityEvidence: {
       cgroupV2Controllers: ["cpu", "io", "memory", "pids"],
-      nonMutatingVerification: true,
+      projectQuota: { receipt: { receiptDigest: "a".repeat(64) } },
+      projectQuotaMutatingProbe: true,
+      systemdPropertyVerificationNonMutating: true,
     },
     wait: (milliseconds) => {
       now += milliseconds;

@@ -80,7 +80,9 @@ host mismatch refuses admission.
   CLI, PostgreSQL 18 client, and `systemd-analyze`;
 - a pre-created `workload-funnel-synthetic` non-root user and group;
 - root-owned `/var/lib/workload-funnel/allocations` and
-  `/var/data/workload-funnel/sandboxes` directories;
+  `/var/lib/workload-funnel/project-quota` directories on the same reviewed
+  XFS (`prjquota` or `pquota`) or ext4 (`prjquota`) project-quota filesystem,
+  plus root-owned `/var/data/workload-funnel/sandboxes`;
 - enough unused CPU, memory, IO, PID, byte, and inode headroom;
 - the reviewed HyperQueue 0.26.2 x64 archive with SHA-256
   `e15dae9113e1a307a97a66bfe90f74f78c6016239436b5d9f1e4efec480e84b5`;
@@ -114,6 +116,7 @@ pnpm production-gate:host -- \
   --evidence-path "$SANDBOX/evidence.json" \
   --docker-executable /usr/bin/docker \
   --psql-executable /usr/bin/psql \
+  --project-quota-helper /usr/libexec/workload-funnel/linux-project-quota \
   --aws-executable /usr/bin/aws \
   --id-executable /usr/bin/id \
   --node-executable /canonical/path/to/node \
@@ -211,8 +214,11 @@ Current repository closure is intentionally fail-closed:
   observation, but 0.26.2 lacks operation-ID lookup for ambiguous submit;
 - the running systemd manager, cgroup controllers, and required unit properties
   are probed with read-only `systemctl` plus non-mutating `systemd-analyze
-verify`, but byte/inode project-quota application and pinned execution-path
-  capabilities remain absent; and
+verify`. The reviewed native helper then applies and reads back exact byte and
+  inode project quotas on only the gate-owned allocation, persists and reopens
+  its fsync-durable receipt, and registers exact reverse-order cleanup. A host
+  without supported XFS/ext4 project quotas remains `UNSUPPORTED`; pinned
+  execution-path capability remains absent; and
 - pressure evidence requires bounded CPU, memory, IO, disk-byte, and inode load,
   pause, protected cancel/status/health service responsiveness, hysteretic
   reopen, at least 10 seconds, at least 100 samples, and all p99 SLOs.
