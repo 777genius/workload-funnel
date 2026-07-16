@@ -190,8 +190,11 @@ Current repository closure is intentionally fail-closed:
 - the Postgres 18.4 fixture proves duplicate acceptance and synchronized
   pre-commit rollback plus post-commit persistence across `SIGKILL` of the
   container process boundary and PostgreSQL WAL recovery from durable
-  sandbox-owned storage, but no real asynchronous Postgres lifecycle adapter
-  exists;
+  sandbox-owned storage. The same disposable fixture runs the real
+  `pg@8.22.0` asynchronous lifecycle adapter through concurrent migration,
+  duplicate/conflicting acceptance, exact lookup, optimistic conflict,
+  rollback, pre-/post-commit connection loss, reopen, migration corruption,
+  pool exhaustion/timeout, abort, and credential-redaction probes;
 - the MinIO fixture preserves its checksum across an evidenced server-process
   restart inside the stable container/tmpfs boundary and proves network recovery
   plus disjoint upload, verify, and delete identities. The upload policy grants

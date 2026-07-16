@@ -22,7 +22,7 @@
     "generate": "node tooling/architecture/generate-composition.mjs",
     "lint": "pnpm lint:code && pnpm lint:docs",
     "lint:code": "eslint . --max-warnings=0",
-    "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.pnpm-store\"",
+    "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#**/node_modules/**\" \"#**/.pnpm-store/**\"",
     "production-gate:host": "node tooling/production-gate/run.mjs",
     "test": "vitest run",
     "test:e2e": "vitest run tooling/e2e/full-synthetic-lifecycle.test.ts",

@@ -3,16 +3,13 @@ import { describe, expect, it } from "vitest";
 import * as postgres from "./composition.control-postgres.js";
 import * as sqlite from "./composition.control-sqlite.js";
 
-describe.each([
-  ["Postgres", postgres],
-  ["SQLite", sqlite],
-])("%s Phase 0 control profile", (_name, profile) => {
+describe("SQLite Phase 0 control profile", () => {
   it("constructs without later-phase scheduler or provider runtime capability", () => {
-    const service = profile.createControlService();
+    const service = sqlite.createControlService();
 
     expect(Object.isFrozen(service)).toBe(true);
     expect(service.phase1.participantCount).toBe(7);
-    expect(service.phase1.profile).toBe(profile.profileId.split("-")[1]);
+    expect(service.phase1.profile).toBe("sqlite");
     expect(
       service.evaluateCapabilityRequirements([
         "external_scheduler_dispatch",
@@ -29,22 +26,22 @@ describe.each([
 });
 
 describe("control-postgres Phase 0 profile", () => {
-  it("declares atomic acceptance and bounded synthetic capacity", () => {
-    const service = postgres.createControlService();
-
+  it("declares atomic acceptance without enabling production starts", () => {
     expect(
-      service.evaluateCapabilityRequirements([
+      postgres.evaluateCapabilityRequirements([
         "bounded_capacity_reservation",
         "postgres_atomic_acceptance",
       ]),
     ).toEqual({ status: "satisfied" });
+    expect(postgres.productionStartsEnabled).toBe(false);
+    expect(() => postgres.startControlService()).toThrow(
+      "production_starts_disabled",
+    );
   });
 
   it("fails closed when artifact capabilities are absent", () => {
-    const service = postgres.createControlService();
-
     expect(
-      service.evaluateCapabilityRequirements([
+      postgres.evaluateCapabilityRequirements([
         "artifact_retention_deletion",
         "artifact_verification",
       ]),

@@ -2,11 +2,15 @@
   "name": "@workload-funnel/store-postgres",
   "version": "0.1.0",
   "private": true,
-  "description": "Synthetic-safe Postgres persistence adapters for WorkloadFunnel",
+  "description": "PostgreSQL persistence adapters for WorkloadFunnel",
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@workload-funnel/workload-control": "workspace:*"
+    "@workload-funnel/workload-control": "workspace:*",
+    "pg": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.20.0"
   },
   "exports": {
     "./audit-ledger-persistence": {
@@ -48,6 +52,10 @@
     "./reconciliation-claims": {
       "types": "./dist/features/reconciliation-claims/index.d.ts",
       "import": "./dist/features/reconciliation-claims/index.js"
+    },
+    "./schema-migrations": {
+      "types": "./dist/features/schema-migrations/index.d.ts",
+      "import": "./dist/features/schema-migrations/index.js"
     },
     "./transactional-outbox": {
       "types": "./dist/features/transactional-outbox/index.d.ts",

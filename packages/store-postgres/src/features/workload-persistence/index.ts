@@ -1,12 +1,14 @@
-import type {
-  AcceptanceInput,
-  AcceptanceReceipt,
-  Attempt,
-  CancellationReceipt,
-  LifecyclePersistenceFactoryInput,
-  LifecycleRepository,
-  Run,
-  Workload,
+import {
+  lifecycleIdempotencyStorageKey,
+  lifecycleOperationId,
+  type AcceptanceInput,
+  type AcceptanceReceipt,
+  type Attempt,
+  type CancellationReceipt,
+  type LifecyclePersistenceFactoryInput,
+  type LifecycleRepository,
+  type Run,
+  type Workload,
 } from "@workload-funnel/workload-control/workload-lifecycle";
 
 export function createPostgresLifecycleRepository(
@@ -15,7 +17,10 @@ export function createPostgresLifecycleRepository(
   const { hooks, state } = input;
   return {
     accept(command: AcceptanceInput): AcceptanceReceipt {
-      const key = `${command.callerScope}:${command.idempotencyKey}`;
+      const key = lifecycleIdempotencyStorageKey(
+        command.callerScope,
+        command.idempotencyKey,
+      );
       const prior = state.acceptanceByKey.get(key);
       if (prior !== undefined) {
         if (state.acceptanceDigestByKey.get(key) !== command.specDigest) {
@@ -30,7 +35,11 @@ export function createPostgresLifecycleRepository(
       const runId = `run-${suffix}`;
       const attemptId = `attempt-${suffix}`;
       const executionGeneration = `generation-${suffix}`;
-      const operationId = `submit:${command.callerScope}:${command.idempotencyKey}`;
+      const operationId = lifecycleOperationId(
+        "submit",
+        command.callerScope,
+        command.idempotencyKey,
+      );
       const workload: Workload = Object.freeze({
         principalId: command.principalId,
         spec: command.spec,
@@ -81,15 +90,25 @@ export function createPostgresLifecycleRepository(
           status: "committed",
         }),
       );
+      state.callerScopeByOperationId.set(operationId, command.callerScope);
+      state.callerScopeByRunId.set(runId, command.callerScope);
       hooks.accepted({ attemptId, operationId, runId, workloadId });
       return receipt;
     },
-    cancel(runId, operationId): CancellationReceipt {
+    cancel(callerScope, runId, operationId): CancellationReceipt {
       const run = state.runById.get(runId);
-      if (run === undefined) throw new Error("Run does not exist");
+      if (
+        run === undefined ||
+        state.callerScopeByRunId.get(runId) !== callerScope
+      )
+        throw new Error("Run does not exist");
       const prior = state.cancellationReceiptByOperation.get(operationId);
       if (prior !== undefined) {
-        if (prior.runId !== runId) throw new Error("idempotency_key_conflict");
+        if (
+          prior.runId !== runId ||
+          state.callerScopeByOperationId.get(operationId) !== callerScope
+        )
+          throw new Error("idempotency_key_conflict");
         return prior;
       }
       const terminal = run.terminalOutcome !== undefined;
@@ -129,6 +148,7 @@ export function createPostgresLifecycleRepository(
           status: "committed",
         }),
       );
+      state.callerScopeByOperationId.set(operationId, callerScope);
       const receipt = Object.freeze({
         operationId,
         runId,
@@ -139,7 +159,15 @@ export function createPostgresLifecycleRepository(
     },
     erasePrincipalReferences(command) {
       const prior = state.lifecycleErasureByOperation.get(command.operationId);
-      if (prior !== undefined) return prior;
+      if (prior !== undefined) {
+        if (
+          prior.tenantId !== command.tenantId ||
+          prior.subjectPrincipalId !== command.subjectPrincipalId ||
+          prior.pseudonym !== command.pseudonym
+        )
+          throw new Error("idempotency_key_conflict");
+        return prior.changedCount;
+      }
       let changed = 0;
       for (const [workloadId, workload] of state.workloadById) {
         if (
@@ -161,13 +189,27 @@ export function createPostgresLifecycleRepository(
         );
         changed += 1;
       }
-      state.lifecycleErasureByOperation.set(command.operationId, changed);
+      state.lifecycleErasureByOperation.set(
+        command.operationId,
+        Object.freeze({
+          changedCount: changed,
+          pseudonym: command.pseudonym,
+          subjectPrincipalId: command.subjectPrincipalId,
+          tenantId: command.tenantId,
+        }),
+      );
       return changed;
     },
     findOperation: (callerScope, idempotencyKey) =>
-      state.operationById.get(`submit:${callerScope}:${idempotencyKey}`),
-    getOperation: (operationId) => state.operationById.get(operationId),
-    getStatus(runId) {
+      state.operationById.get(
+        lifecycleOperationId("submit", callerScope, idempotencyKey),
+      ),
+    getOperation: (callerScope, operationId) =>
+      state.callerScopeByOperationId.get(operationId) === callerScope
+        ? state.operationById.get(operationId)
+        : undefined,
+    getStatus(callerScope, runId) {
+      if (state.callerScopeByRunId.get(runId) !== callerScope) return undefined;
       const run = state.runById.get(runId);
       if (run === undefined) return undefined;
       const workload = state.workloadById.get(run.workloadId);
@@ -184,3 +226,27 @@ export function createPostgresLifecycleRepository(
     },
   };
 }
+
+export {
+  createPostgresLifecycleDatabase,
+  type PostgresLifecycleDatabase,
+  type PostgresLifecycleDatabaseFactoryInput,
+} from "./postgres-database.js";
+export {
+  type PostgresLifecycleDatabaseConfig,
+  type PostgresLifecycleDisposableConfig,
+  type PostgresLifecycleProductionConfig,
+  PostgresLifecycleConfigurationError,
+  validatePostgresLifecycleConfig,
+} from "./postgres-config.js";
+export {
+  PostgresLifecycleError,
+  type PostgresLifecycleErrorCode,
+} from "./postgres-errors.js";
+export type {
+  PostgresLifecycleFaultBoundary,
+  PostgresLifecycleFaultInjector,
+  PostgresLifecycleMigrationExecutor,
+  PostgresLifecycleTraceSink,
+} from "./postgres-pool.js";
+export { postgresLifecycleDriverVersion } from "./postgres-pool.js";

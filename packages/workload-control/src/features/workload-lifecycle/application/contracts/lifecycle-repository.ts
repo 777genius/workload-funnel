@@ -20,9 +20,16 @@ export interface AcceptanceInput {
 
 export interface LifecycleRepository {
   accept(input: AcceptanceInput): AcceptanceReceipt;
-  cancel(runId: string, operationId: string): CancellationReceipt;
-  getStatus(runId: string): WorkloadStatus | undefined;
-  getOperation(operationId: string): OperationStatus | undefined;
+  cancel(
+    callerScope: string,
+    runId: string,
+    operationId: string,
+  ): CancellationReceipt;
+  getStatus(callerScope: string, runId: string): WorkloadStatus | undefined;
+  getOperation(
+    callerScope: string,
+    operationId: string,
+  ): OperationStatus | undefined;
   findOperation(
     callerScope: string,
     idempotencyKey: string,
@@ -46,9 +53,18 @@ export interface LifecyclePersistenceState {
   readonly acceptanceByKey: Map<string, AcceptanceReceipt>;
   readonly acceptanceDigestByKey: Map<string, string>;
   readonly operationById: Map<string, OperationStatus>;
+  readonly callerScopeByOperationId: Map<string, string>;
+  readonly callerScopeByRunId: Map<string, string>;
   readonly cancelOperationByRun: Map<string, string>;
   readonly cancellationReceiptByOperation: Map<string, CancellationReceipt>;
-  readonly lifecycleErasureByOperation: Map<string, number>;
+  readonly lifecycleErasureByOperation: Map<string, LifecycleErasureRecord>;
+}
+
+export interface LifecycleErasureRecord {
+  readonly changedCount: number;
+  readonly pseudonym: string;
+  readonly subjectPrincipalId: string;
+  readonly tenantId: string;
 }
 
 export interface LifecyclePersistenceHooks {

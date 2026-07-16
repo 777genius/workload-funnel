@@ -97,7 +97,6 @@ for (const blocker of [
   "ambiguous_submit_lookup_unsupported",
   "object_provider_create_only_credential_unsupported",
   "project_quota_application_adapter_missing",
-  "real_async_postgres_lifecycle_adapter_missing",
 ])
   if (!gate.includes(blocker))
     failures.push(`manual gate omits production-closure blocker ${blocker}`);
@@ -262,6 +261,82 @@ for (const token of [
 ])
   if (!postgresStage.includes(token))
     failures.push(`Postgres crash orchestration is missing ${token}`);
+
+const postgresAdapter = await source(
+  "tooling/production-gate/postgres-adapter-probe.mjs",
+);
+for (const token of [
+  "createPostgresLifecycleDatabase",
+  "migratePostgresLifecycleSchema",
+  '"before_commit"',
+  '"after_commit"',
+  "postgres_lifecycle_idempotency_conflict",
+  "postgres_lifecycle_conflict",
+  "postgres_lifecycle_pool_timeout",
+  "queryTimeoutProven: true",
+  "transactionLockTraceProven: true",
+  "postgres_migration_corrupt",
+  "credentialRedactionProven: true",
+  "deterministicShutdownProven: true",
+  "callerScopeAuthorizationProven: true",
+  "callerScopeDelimiterAndTenantIsolationProven: true",
+  "callerAbortAfterCommitReconciled: true",
+  "erasureTupleIdempotencyAndTenantIsolationProven: true",
+  "lifecycleInputValidationProven: true",
+  'database.driverVersion === "8.22.0"',
+])
+  if (!postgresAdapter.includes(token))
+    failures.push(`Postgres adapter gate is missing ${token}`);
+const postgresManifest = JSON.parse(
+  await source("packages/store-postgres/package.json"),
+);
+if (
+  postgresManifest.dependencies?.pg !== "8.22.0" ||
+  postgresManifest.devDependencies?.["@types/pg"] !== "8.20.0" ||
+  postgresManifest.dependencies?.postgres !== undefined
+)
+  failures.push(
+    "Postgres adapter must pin official pg@8.22.0 and @types/pg@8.20.0",
+  );
+const lockfile = await source("pnpm-lock.yaml");
+const postgresImporterStart = lockfile.indexOf("  packages/store-postgres:\n");
+const postgresImporterEnd = lockfile.indexOf(
+  "\n  packages/",
+  postgresImporterStart + 1,
+);
+const postgresImporter = lockfile.slice(
+  postgresImporterStart,
+  postgresImporterEnd,
+);
+if (
+  postgresImporterStart < 0 ||
+  !postgresImporter.includes(
+    "      pg:\n        specifier: 8.22.0\n        version: 8.22.0",
+  ) ||
+  !postgresImporter.includes(
+    "      '@types/pg':\n        specifier: 8.20.0\n        version: 8.20.0",
+  )
+)
+  failures.push(
+    "Postgres adapter lockfile must pin pg@8.22.0 and @types/pg@8.20.0",
+  );
+const postgresComposition = await source(
+  "apps/control-service/src/generated/composition.control-postgres.ts",
+);
+for (const token of [
+  "createPostgresLifecycleDatabase",
+  "migratePostgresLifecycleSchema",
+  "createAsyncWorkloadLifecycleService",
+  "productionStartsEnabled = false",
+  'throw new Error("production_starts_disabled")',
+])
+  if (!postgresComposition.includes(token))
+    failures.push(`Postgres production composition is missing ${token}`);
+if (
+  postgresComposition.includes("createSyntheticDatabase") ||
+  /\bMap\b/u.test(postgresComposition)
+)
+  failures.push("Postgres production composition uses synthetic state");
 
 for (const token of [
   "crashAndRestart",

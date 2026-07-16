@@ -313,20 +313,20 @@ async function main() {
         "postgres_fixture",
         passed("postgres_fixture", stage.evidence),
       );
+      components.set(
+        "postgres_production_adapter",
+        passed("postgres_production_adapter", stage.adapterEvidence),
+      );
     } catch (error) {
       components.set(
         "postgres_fixture",
         blocked("postgres_fixture", reasonCode(error)),
       );
-    }
-
-    components.set(
-      "postgres_production_adapter",
-      blocked(
+      components.set(
         "postgres_production_adapter",
-        "real_async_postgres_lifecycle_adapter_missing",
-      ),
-    );
+        blocked("postgres_production_adapter", reasonCode(error)),
+      );
+    }
 
     try {
       const suffix = config.runId.slice("wf-production-gate-".length);
