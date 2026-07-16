@@ -89,7 +89,8 @@ function verificationUnit(config) {
     "RestrictSUIDSGID=yes",
     "RuntimeMaxSec=5s",
     "SystemCallArchitectures=native",
-    "SystemCallFilter=@system-service ~@mount ~@privileged ~@resources ~@reboot",
+    "SystemCallFilter=@system-service",
+    "SystemCallFilter=~@mount @privileged @resources @reboot",
     "TasksMax=16",
     "TimeoutStopSec=5s",
     "UMask=0077",
@@ -149,7 +150,7 @@ export async function probeRealSystemdCapabilities(
     ["--man=no", "verify", unitPath],
     { timeoutMs: 5_000 },
   );
-  if (verified.code !== 0)
+  if (verified.code !== 0 || verified.stderr.trim().length !== 0)
     throw new Error("systemd_required_property_unsupported");
   const { discoverSystemdCapabilities } =
     await import("@workload-funnel/executor-systemd/capability-discovery");

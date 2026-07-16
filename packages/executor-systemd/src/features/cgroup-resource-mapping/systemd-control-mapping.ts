@@ -157,9 +157,7 @@ export function mapSystemdExecutionControls(
     RuntimeMaxUSec: resources.runtimeMaximumMicroseconds,
     SystemCallFilter: Object.freeze([
       "@system-service",
-      "~@mount",
-      "~@privileged",
-      "~@resources",
+      "~@mount @privileged @resources",
     ]),
     TasksMax: resources.processLimit,
     User: profile.user,

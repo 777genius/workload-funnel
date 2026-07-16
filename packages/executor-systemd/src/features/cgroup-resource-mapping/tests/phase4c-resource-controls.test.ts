@@ -109,12 +109,7 @@ describe("Phase 4C exact resource and sandbox mapping", () => {
         "/var/lib/workload-funnel/allocations/allocation-1/output",
       ],
       RuntimeMaxUSec: 300_000_000n,
-      SystemCallFilter: [
-        "@system-service",
-        "~@mount",
-        "~@privileged",
-        "~@resources",
-      ],
+      SystemCallFilter: ["@system-service", "~@mount @privileged @resources"],
       TasksMax: 64,
       User: "workload-funnel-synthetic",
     });

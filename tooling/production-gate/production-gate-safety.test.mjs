@@ -262,7 +262,7 @@ describe("production gate host safety", () => {
       SendSIGKILL: "yes",
       Slice: `${runId}.slice`,
       SystemCallArchitectures: "native",
-      SystemCallFilter: "@system-service ~@mount",
+      SystemCallFilter: "read write",
       TasksMax: "128",
       TimeoutStopUSec: "5s",
       UMask: "0077",
@@ -535,6 +535,7 @@ describe("production gate host safety", () => {
     );
     await mkdir(directory, { mode: 0o700 });
     const calls = [];
+    let verificationUnit;
     try {
       const result = await probeRealSystemdCapabilities(
         {
@@ -560,7 +561,10 @@ describe("production gate host safety", () => {
         {
           hostPlatform: () => "linux",
           read: () => Promise.resolve("cpu io memory pids\n"),
-          write: writeFile,
+          write: (path, contents, options) => {
+            verificationUnit = contents;
+            return writeFile(path, contents, options);
+          },
         },
       );
       expect(result.report.evidenceSource).toBe("disposable_linux_host");
@@ -573,9 +577,59 @@ describe("production gate host safety", () => {
         "--no-pager",
       ]);
       expect(calls[2][1].slice(0, 2)).toEqual(["--man=no", "verify"]);
+      expect(verificationUnit).toContain(
+        "SystemCallFilter=@system-service\nSystemCallFilter=~@mount @privileged @resources @reboot\n",
+      );
+      expect(verificationUnit).not.toContain(
+        "SystemCallFilter=@system-service ~@mount",
+      );
       expect(calls.flatMap(([, args]) => args)).not.toEqual(
         expect.arrayContaining(["start", "run"]),
       );
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects systemd verification warnings instead of treating them as support", async () => {
+    const directory = join(
+      tmpdir(),
+      `wf-systemd-warning-${process.pid}-${Date.now()}`,
+    );
+    await mkdir(directory, { mode: 0o700 });
+    try {
+      await expect(
+        probeRealSystemdCapabilities(
+          {
+            ioDevice: "/dev/vda",
+            nodeExecutable: "/usr/bin/node",
+            runner: {
+              run: async (executable, args) => {
+                if (executable === "/usr/bin/systemctl")
+                  return args[0] === "--version"
+                    ? { code: 0, stderr: "", stdout: "systemd 255 (255.1)\n" }
+                    : { code: 0, stderr: "", stdout: "255.1\n" };
+                return {
+                  code: 0,
+                  stderr: "System call filter token is not known, ignoring.\n",
+                  stdout: "",
+                };
+              },
+            },
+            sandboxRoot: directory,
+            systemctlExecutable: "/usr/bin/systemctl",
+            systemdAnalyzeExecutable: "/usr/bin/systemd-analyze",
+            workloadGroup: "workload-funnel-synthetic",
+            workloadRoot: `/var/lib/workload-funnel/allocations/${runId}`,
+            workloadUser: "workload-funnel-synthetic",
+          },
+          {
+            hostPlatform: () => "linux",
+            read: () => Promise.resolve("cpu io memory pids\n"),
+            write: writeFile,
+          },
+        ),
+      ).rejects.toThrow("systemd_required_property_unsupported");
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

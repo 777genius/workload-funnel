@@ -39,7 +39,11 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     !Array.isArray(properties.AmbientCapabilities) ||
     properties.AmbientCapabilities.length !== 0 ||
     !Array.isArray(properties.CapabilityBoundingSet) ||
-    properties.CapabilityBoundingSet.length !== 0
+    properties.CapabilityBoundingSet.length !== 0 ||
+    !Array.isArray(properties.SystemCallFilter) ||
+    properties.SystemCallFilter.length !== 2 ||
+    properties.SystemCallFilter[0] !== "@system-service" ||
+    properties.SystemCallFilter[1] !== "~@mount @privileged @resources"
   )
     throw new Error("systemd_gate_mapping_relaxed");
   const readLimit = properties.IOReadBandwidthMax.find(
@@ -90,7 +94,9 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     "RestrictRealtime=yes",
     "RestrictSUIDSGID=yes",
     "SystemCallArchitectures=native",
-    `SystemCallFilter=${properties.SystemCallFilter.join(" ")}`,
+    ...properties.SystemCallFilter.map(
+      (filter) => `SystemCallFilter=${filter}`,
+    ),
     `TasksMax=${String(properties.TasksMax)}`,
     "TimeoutStopSec=5s",
     "UMask=0077",

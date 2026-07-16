@@ -881,7 +881,7 @@ describe("systemd and SLO contracts", () => {
     ProtectSystem: "strict",
     ReadWritePaths: [`/var/lib/workload-funnel/allocations/${runId}`],
     RuntimeMaxUSec: 5_000_000n,
-    SystemCallFilter: ["@system-service", "~@mount"],
+    SystemCallFilter: ["@system-service", "~@mount @privileged @resources"],
     TasksMax: 16,
     User: "workload-funnel-synthetic",
   };
@@ -901,10 +901,33 @@ describe("systemd and SLO contracts", () => {
         "--property=KillMode=control-group",
         "--property=RuntimeMaxSec=5000000us",
         "--property=MemorySwapMax=0",
+        "--property=SystemCallFilter=@system-service",
+        "--property=SystemCallFilter=~@mount @privileged @resources",
         "--",
         "/usr/bin/node",
       ]),
     );
+    expect(args).not.toContain(
+      "--property=SystemCallFilter=@system-service ~@mount @privileged @resources",
+    );
+    expect(() =>
+      systemdRunArguments({
+        description: `WorkloadFunnel production gate ${runId} legacy-filter`,
+        executable: "/usr/bin/node",
+        ioDevice: "/dev/vda",
+        properties: {
+          ...properties,
+          SystemCallFilter: [
+            "@system-service",
+            "~@mount",
+            "~@privileged",
+            "~@resources",
+          ],
+        },
+        slice: `${runId}.slice`,
+        unit: `${runId}-legacy-filter.service`,
+      }),
+    ).toThrow("systemd_gate_mapping_relaxed");
     expect(args.join(" ")).not.toContain("sh -c");
     expect(() =>
       systemdRunArguments({

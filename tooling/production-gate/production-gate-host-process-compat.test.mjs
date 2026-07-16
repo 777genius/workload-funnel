@@ -75,7 +75,7 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     SendSIGKILL: "yes",
     Slice: `${runId}.slice`,
     SystemCallArchitectures: "native",
-    SystemCallFilter: "@system-service ~@mount",
+    SystemCallFilter: "read write",
     TasksMax: "128",
     TimeoutStopUSec: "5s",
     UMask: "0077",
@@ -409,8 +409,15 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
 
     expect(defaultHarness.runner.run).toHaveBeenCalledWith(
       "/usr/bin/systemd-run",
-      expect.arrayContaining(["--property=RuntimeMaxSec=30s"]),
+      expect.arrayContaining([
+        "--property=RuntimeMaxSec=30s",
+        "--property=SystemCallFilter=@system-service",
+        "--property=SystemCallFilter=~@mount @privileged @resources @reboot",
+      ]),
       { timeoutMs: 10_000 },
+    );
+    expect(defaultHarness.runner.run.mock.calls[0][1]).not.toContain(
+      "--property=SystemCallFilter=@system-service ~@mount ~@privileged ~@resources ~@reboot",
     );
     expect(defaultHarness.observedUnitProperties).toHaveLength(1);
     expect(defaultHarness.observedUnitProperties[0]).toContain(
