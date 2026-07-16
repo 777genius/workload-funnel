@@ -8,6 +8,7 @@ import {
   encodePressureFixtureReadiness,
   parsePressureFixtureReadiness,
   pressureFixturePrimedState,
+  runMemoryPressureFixture,
   PRESSURE_FIXTURE_CPU_WORKER_COUNT,
   PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
@@ -94,27 +95,38 @@ describe("pressure fixture priming and bounded lifetime", () => {
     ).toThrow("pressure_fixture_readiness_malformed");
   });
 
-  it("keeps the memory fixture and strict protocol on one 22 x 16 MiB target", async () => {
+  it("keeps exact bounded primed and post-ready memory targets", async () => {
     expect(PRESSURE_FIXTURE_MEMORY_TARGET).toStrictEqual({
       chunkBytes: 16 * 1024 * 1024,
-      chunkCount: 22,
-      retainedBytes: 352 * 1024 * 1024,
+      primedChunkCount: 22,
+      primedRetainedBytes: 352 * 1024 * 1024,
+      postReadyChunkCount: 25,
+      postReadyRetainedBytes: 400 * 1024 * 1024,
     });
     expect(Object.isFrozen(PRESSURE_FIXTURE_MEMORY_TARGET)).toBe(true);
+    expect(PRESSURE_FIXTURE_MEMORY_TARGET.primedRetainedBytes).toBeLessThan(
+      384 * 1024 * 1024,
+    );
+    expect(
+      PRESSURE_FIXTURE_MEMORY_TARGET.postReadyRetainedBytes,
+    ).toBeGreaterThan(384 * 1024 * 1024);
+    expect(PRESSURE_FIXTURE_MEMORY_TARGET.postReadyRetainedBytes).toBeLessThan(
+      512 * 1024 * 1024,
+    );
     expect(pressureFixturePrimedState("memory")).toStrictEqual({
-      retainedBytes: PRESSURE_FIXTURE_MEMORY_TARGET.retainedBytes,
+      retainedBytes: PRESSURE_FIXTURE_MEMORY_TARGET.primedRetainedBytes,
     });
 
     const fixtureSource = await readFile(
       new URL("./fixtures/pressure-load.mjs", import.meta.url),
       "utf8",
     );
-    expect(fixtureSource).toContain(
-      "index < PRESSURE_FIXTURE_MEMORY_TARGET.chunkCount",
-    );
+    expect(fixtureSource).toContain("await runMemoryPressureFixture({");
     expect(fixtureSource).toContain(
       "Buffer.alloc(PRESSURE_FIXTURE_MEMORY_TARGET.chunkBytes, 1)",
     );
+    expect(fixtureSource).toContain("markReady: ready");
+    expect(fixtureSource).not.toContain("28 * 16 * 1024 * 1024");
 
     expect(() =>
       parsePressureFixtureReadiness(
@@ -126,6 +138,58 @@ describe("pressure fixture priming and bounded lifetime", () => {
         "memory",
       ),
     ).toThrow("pressure_fixture_readiness_malformed");
+  });
+
+  it("publishes truthful readiness before bounded memory escalation", async () => {
+    const events = [];
+    await runMemoryPressureFixture({
+      allocateChunk: (index, stage) => {
+        events.push(`${stage}:${String(index)}`);
+        return Promise.resolve();
+      },
+      markReady: () => {
+        events.push("ready");
+        return Promise.resolve();
+      },
+    });
+
+    expect(events.slice(0, 22)).toEqual(
+      Array.from({ length: 22 }, (_, index) => `primed:${String(index)}`),
+    );
+    expect(events[22]).toBe("ready");
+    expect(events.slice(23)).toEqual([
+      "post-ready:22",
+      "post-ready:23",
+      "post-ready:24",
+    ]);
+  });
+
+  it("does not escalate memory when durable readiness publication fails", async () => {
+    const allocateChunk = vi.fn(() => Promise.resolve());
+    await expect(
+      runMemoryPressureFixture({
+        allocateChunk,
+        markReady: () => Promise.reject(new Error("marker_not_durable")),
+      }),
+    ).rejects.toThrow("marker_not_durable");
+    expect(allocateChunk).toHaveBeenCalledTimes(22);
+    expect(allocateChunk).not.toHaveBeenCalledWith(
+      expect.any(Number),
+      "post-ready",
+    );
+  });
+
+  it("keeps zero workload memory PSI fail-closed", async () => {
+    const pressureStageSource = await readFile(
+      new URL("./pressure-stage.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(pressureStageSource).toContain(
+      "evidence.maximumObserved.workloadMemoryPsiSome > 0",
+    );
+    expect(pressureStageSource).not.toMatch(
+      /maximumObserved\.workloadMemoryPsiSome\s*>=\s*0/u,
+    );
   });
 
   it("accepts only each mode's exact primed-state marker", () => {

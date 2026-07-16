@@ -8,6 +8,7 @@ import {
   PRESSURE_FIXTURE_CPU_WORKER_COUNT,
   PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
+  runMemoryPressureFixture,
 } from "../pressure-fixture-protocol.mjs";
 
 const [mode, root] = process.argv.slice(2);
@@ -56,18 +57,16 @@ if (mode === "cpu") {
   );
 }
 
-if (mode === "memory") {
-  for (
-    let index = 0;
-    index < PRESSURE_FIXTURE_MEMORY_TARGET.chunkCount;
-    index += 1
-  ) {
-    retainedMemory.push(
-      Buffer.alloc(PRESSURE_FIXTURE_MEMORY_TARGET.chunkBytes, 1),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
+if (mode === "memory")
+  await runMemoryPressureFixture({
+    allocateChunk: async () => {
+      retainedMemory.push(
+        Buffer.alloc(PRESSURE_FIXTURE_MEMORY_TARGET.chunkBytes, 1),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    },
+    markReady: ready,
+  });
 
 if (mode === "io") {
   const descriptor = await open(`${root}/io-pressure.bin`, "w", 0o600);
@@ -99,7 +98,7 @@ if (mode === "inodes") {
     });
 }
 
-if (mode !== "io") await ready();
+if (mode !== "io" && mode !== "memory") await ready();
 
 setInterval(() => retainedMemory.length + retainedWorkers.length, 1_000);
 await new Promise(() => undefined);

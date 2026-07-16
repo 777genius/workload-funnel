@@ -3,7 +3,10 @@ import { readFile, readdir } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
-import { PRESSURE_FIXTURE_CPU_WORKER_COUNT } from "../production-gate/pressure-fixture-protocol.mjs";
+import {
+  PRESSURE_FIXTURE_CPU_WORKER_COUNT,
+  PRESSURE_FIXTURE_MEMORY_TARGET,
+} from "../production-gate/pressure-fixture-protocol.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const failures = [];
@@ -478,7 +481,11 @@ for (const token of ['"cpu"', '"memory"', '"io"', '"disk"', '"inodes"'])
 for (const token of [
   "PRESSURE_FIXTURE_READY_SCHEMA",
   "workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT",
-  "retainedBytes: 28 * 16 * 1024 * 1024",
+  "primedRetainedBytes: MEMORY_PRIMED_CHUNK_COUNT * MEMORY_CHUNK_BYTES",
+  "postReadyRetainedBytes:",
+  'await allocateChunk(index, "primed")',
+  "await markReady()",
+  'await allocateChunk(index, "post-ready")',
   "syncedBytes: 8 * 1024 * 1024",
   "writtenBytes: 48 * 1024 * 1024",
   "createdFiles: 3_200",
@@ -488,6 +495,17 @@ for (const token of [
     failures.push(`pressure priming protocol is missing ${token}`);
 if (PRESSURE_FIXTURE_CPU_WORKER_COUNT !== 2)
   failures.push("pressure CPU fixture worker count is not exactly two");
+if (
+  PRESSURE_FIXTURE_MEMORY_TARGET.chunkBytes !== 16 * 1024 * 1024 ||
+  PRESSURE_FIXTURE_MEMORY_TARGET.primedChunkCount !== 22 ||
+  PRESSURE_FIXTURE_MEMORY_TARGET.primedRetainedBytes !== 352 * 1024 * 1024 ||
+  PRESSURE_FIXTURE_MEMORY_TARGET.postReadyChunkCount !== 25 ||
+  PRESSURE_FIXTURE_MEMORY_TARGET.postReadyRetainedBytes !== 400 * 1024 * 1024 ||
+  PRESSURE_FIXTURE_MEMORY_TARGET.primedRetainedBytes >= 384 * 1024 * 1024 ||
+  PRESSURE_FIXTURE_MEMORY_TARGET.postReadyRetainedBytes <= 384 * 1024 * 1024 ||
+  PRESSURE_FIXTURE_MEMORY_TARGET.postReadyRetainedBytes >= 512 * 1024 * 1024
+)
+  failures.push("pressure memory fixture two-stage bounds are not exact");
 for (const token of [
   "PRESSURE_FIXTURE_CPU_WORKER_COUNT",
   "length: PRESSURE_FIXTURE_CPU_WORKER_COUNT",
@@ -525,6 +543,7 @@ for (const token of [
   "pressure_fixture_runtime_budget_insufficient",
   "processManager.verify(process)",
   "Promise.allSettled",
+  "evidence.maximumObserved.workloadMemoryPsiSome > 0",
 ])
   if (!pressureStage.includes(token))
     failures.push(`real pressure stage is missing ${token}`);
@@ -532,7 +551,12 @@ if (pressureStage.includes("highObservationsToPause"))
   failures.push("real pressure stage overrides strict pause hysteresis");
 if (/`cancel-\$\{String\(/u.test(pressureStage))
   failures.push("real pressure stage creates one systemd unit per sample");
-for (const token of [".ready-${mode}", 'if (mode !== "io") await ready()'])
+for (const token of [
+  ".ready-${mode}",
+  'if (mode !== "io" && mode !== "memory") await ready()',
+  "await runMemoryPressureFixture({",
+  "markReady: ready",
+])
   if (!pressureFixture.includes(token))
     failures.push(`pressure fixture readiness is missing ${token}`);
 for (const token of [

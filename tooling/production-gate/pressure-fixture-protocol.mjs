@@ -11,14 +11,15 @@ export const PRESSURE_FIXTURE_MODES = Object.freeze([
   "inodes",
 ]);
 
-const MEMORY_CHUNK_COUNT = 22;
 const MEMORY_CHUNK_BYTES = 16 * 1024 * 1024;
-// The former `retainedBytes: 28 * 16 * 1024 * 1024` target can stall under
-// cgroup reclaim before readiness; keep allocation and proof on this one target.
+const MEMORY_PRIMED_CHUNK_COUNT = 22;
+const MEMORY_POST_READY_CHUNK_COUNT = 25;
 export const PRESSURE_FIXTURE_MEMORY_TARGET = Object.freeze({
   chunkBytes: MEMORY_CHUNK_BYTES,
-  chunkCount: MEMORY_CHUNK_COUNT,
-  retainedBytes: MEMORY_CHUNK_COUNT * MEMORY_CHUNK_BYTES,
+  primedChunkCount: MEMORY_PRIMED_CHUNK_COUNT,
+  primedRetainedBytes: MEMORY_PRIMED_CHUNK_COUNT * MEMORY_CHUNK_BYTES,
+  postReadyChunkCount: MEMORY_POST_READY_CHUNK_COUNT,
+  postReadyRetainedBytes: MEMORY_POST_READY_CHUNK_COUNT * MEMORY_CHUNK_BYTES,
 });
 
 const PRIMED_STATES = Object.freeze({
@@ -29,9 +30,27 @@ const PRIMED_STATES = Object.freeze({
   inodes: Object.freeze({ createdFiles: 3_200 }),
   io: Object.freeze({ syncedBytes: 8 * 1024 * 1024 }),
   memory: Object.freeze({
-    retainedBytes: PRESSURE_FIXTURE_MEMORY_TARGET.retainedBytes,
+    retainedBytes: PRESSURE_FIXTURE_MEMORY_TARGET.primedRetainedBytes,
   }),
 });
+
+export async function runMemoryPressureFixture({ allocateChunk, markReady }) {
+  if (typeof allocateChunk !== "function" || typeof markReady !== "function")
+    throw new Error("pressure_memory_fixture_input_invalid");
+  for (
+    let index = 0;
+    index < PRESSURE_FIXTURE_MEMORY_TARGET.primedChunkCount;
+    index += 1
+  )
+    await allocateChunk(index, "primed");
+  await markReady();
+  for (
+    let index = PRESSURE_FIXTURE_MEMORY_TARGET.primedChunkCount;
+    index < PRESSURE_FIXTURE_MEMORY_TARGET.postReadyChunkCount;
+    index += 1
+  )
+    await allocateChunk(index, "post-ready");
+}
 
 function exactObject(value, expected) {
   return (
