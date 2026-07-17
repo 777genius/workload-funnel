@@ -69,6 +69,7 @@ import { evaluateMixedWorkloadSlo, percentile99 } from "./slo.mjs";
 import {
   exactSystemdPropertiesObserved,
   parseSystemctlShow,
+  systemdMemoryProbeProperties,
   systemctlShowArguments,
   systemdRunArguments,
 } from "./systemd-contract.mjs";
@@ -942,6 +943,7 @@ describe("systemd and SLO contracts", () => {
       expect.arrayContaining([
         "--property=KillMode=control-group",
         "--property=PrivateMounts=yes",
+        "--property=ProtectProc=invisible",
         "--property=RuntimeMaxSec=5000000us",
         "--property=MemorySwapMax=0",
         "--property=CPUQuota=50%",
@@ -956,6 +958,16 @@ describe("systemd and SLO contracts", () => {
         argument.startsWith("--property=CPUQuotaPerSecUSec="),
       ),
     ).toBe(false);
+    expect(args).not.toContain("--collect");
+    const memoryProperties = systemdMemoryProbeProperties(properties);
+    expect(memoryProperties).toMatchObject({
+      MemoryHigh: properties.MemoryMax,
+      MemoryMax: properties.MemoryMax,
+    });
+    expect(memoryProperties).not.toBe(properties);
+    expect(() =>
+      systemdMemoryProbeProperties({ ...properties, MemoryMax: 0n }),
+    ).toThrow("systemd_memory_max_invalid");
     for (const [quota, assignment] of [
       [100n, "--property=CPUQuota=0.01%"],
       [1_500_000n, "--property=CPUQuota=150%"],

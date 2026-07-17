@@ -15,8 +15,7 @@ await mkdir(root, { recursive: true });
 if (mode === "memory") {
   const blocks = [];
   for (;;) {
-    blocks.push(Buffer.alloc(16 * 1024 * 1024, 1));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    blocks.push(Buffer.alloc(64 * 1024 * 1024, 1));
   }
 }
 

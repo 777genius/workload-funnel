@@ -176,9 +176,14 @@ export function createSystemdProbeIo(config) {
       }
     },
     async readDescendantPids(root) {
-      const value = JSON.parse(
-        await readFile(`${root}/descendants.json`, "utf8"),
-      );
+      let serialized;
+      try {
+        serialized = await readFile(`${root}/descendants.json`, "utf8");
+      } catch (error) {
+        if (error?.code === "ENOENT") return undefined;
+        throw error;
+      }
+      const value = JSON.parse(serialized);
       if (
         !Array.isArray(value) ||
         value.length < 2 ||

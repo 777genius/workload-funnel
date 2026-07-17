@@ -96,6 +96,7 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     "ProcSubset=pid",
     "ProtectClock=yes",
     "ProtectHome=yes",
+    "ProtectProc=invisible",
     "ProtectHostname=yes",
     "ProtectKernelLogs=yes",
     `ProtectControlGroups=${yesNo(properties.ProtectControlGroups)}`,
@@ -120,6 +121,15 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     `Group=${properties.Group}`,
   ];
   return Object.freeze(assignments);
+}
+
+export function systemdMemoryProbeProperties(properties) {
+  if (typeof properties?.MemoryMax !== "bigint" || properties.MemoryMax <= 0n)
+    throw new Error("systemd_memory_max_invalid");
+  return Object.freeze({
+    ...properties,
+    MemoryHigh: properties.MemoryMax,
+  });
 }
 
 export function systemdRunArguments({
@@ -148,7 +158,6 @@ export function systemdRunArguments({
     `--unit=${unit}`,
     `--slice=${slice}`,
     `--description=${description}`,
-    "--collect",
     "--quiet",
     "--setenv=HOME=/nonexistent",
     "--setenv=LANG=C.UTF-8",
@@ -369,7 +378,7 @@ export async function runSystemdGateProbe(config) {
     );
     return result.code === 0 ? parseSystemctlShow(result.stdout) : undefined;
   };
-  const start = async (mode) => {
+  const start = async (mode, mappedProperties = properties) => {
     await config.reviewedExecutables.assertUnchanged(config.nodeExecutable);
     const unit = `${config.runId}-${mode}.service`;
     const description = `WorkloadFunnel production gate ${config.runId} ${mode}`;
@@ -382,7 +391,7 @@ export async function runSystemdGateProbe(config) {
         executable: config.nodeExecutable,
         executableArguments: [config.fixturePath, mode, plan.diskQuota.root],
         ioDevice: config.ioDevice,
-        properties,
+        properties: mappedProperties,
         slice,
         unit,
       }),
@@ -427,18 +436,23 @@ export async function runSystemdGateProbe(config) {
     properties,
     slice,
   });
-  const descendantPids = await config.readDescendantPids(plan.diskQuota.root);
+  const descendantPids = await waitFor(
+    config,
+    () => config.readDescendantPids(plan.diskQuota.root),
+    "systemd_descendant_manifest_timeout",
+  );
   const cancelStarted = config.preciseClock();
   await stop(tree.unit);
   const cancelLatencyMs = config.preciseClock() - cancelStarted;
   if (descendantPids.some(config.pidExists))
     throw new Error("systemd_descendant_survived_control_group_stop");
 
-  const memory = await start("memory");
+  const memoryProperties = systemdMemoryProbeProperties(properties);
+  const memory = await start("memory", memoryProperties);
   exactSystemdPropertiesObserved(memory.values, {
     description: `WorkloadFunnel production gate ${config.runId} memory`,
     ioDevice: config.ioDevice,
-    properties,
+    properties: memoryProperties,
     slice,
   });
   const memoryTerminal = await waitFor(
