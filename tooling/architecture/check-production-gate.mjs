@@ -5,8 +5,14 @@ import { fileURLToPath, URL } from "node:url";
 
 import {
   PRESSURE_FIXTURE_CPU_WORKER_COUNT,
+  PRESSURE_FIXTURE_DISK_TARGET_BYTES,
+  PRESSURE_FIXTURE_IO_TARGET_BYTES,
   PRESSURE_FIXTURE_MEMORY_TARGET,
 } from "../production-gate/pressure-fixture-protocol.mjs";
+import {
+  SYSTEMD_GATE_PROJECT_QUOTA_BYTES,
+  SYSTEMD_IO_PROBE_MAX_BYTES,
+} from "../production-gate/systemd-contract.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const failures = [];
@@ -700,6 +706,9 @@ if (
   !systemdProbe.includes("systemdAnalyzeExecutable") ||
   !systemdProbe.includes('"--property=Version"') ||
   !systemdProbe.includes('"verify"') ||
+  !systemdProbe.includes(
+    "maximumBytes: BigInt(SYSTEMD_GATE_PROJECT_QUOTA_BYTES)",
+  ) ||
   systemdProbe.includes("syntheticDisposableLinuxProbe")
 )
   failures.push("systemd capability evidence is not a real non-mutating probe");
@@ -721,8 +730,8 @@ for (const token of [
   'await allocateChunk(index, "primed")',
   "await markReady()",
   'await allocateChunk(index, "post-ready")',
-  "syncedBytes: 8 * 1024 * 1024",
-  "writtenBytes: 48 * 1024 * 1024",
+  "syncedBytes: PRESSURE_FIXTURE_IO_TARGET_BYTES",
+  "writtenBytes: PRESSURE_FIXTURE_DISK_TARGET_BYTES",
   "createdFiles: 3_200",
   "parsePressureFixtureReadiness",
 ])
@@ -730,6 +739,16 @@ for (const token of [
     failures.push(`pressure priming protocol is missing ${token}`);
 if (PRESSURE_FIXTURE_CPU_WORKER_COUNT !== 2)
   failures.push("pressure CPU fixture worker count is not exactly two");
+const pressurePrimedBytes =
+  PRESSURE_FIXTURE_DISK_TARGET_BYTES + PRESSURE_FIXTURE_IO_TARGET_BYTES;
+const combinedQuotaBytes = pressurePrimedBytes + SYSTEMD_IO_PROBE_MAX_BYTES;
+if (
+  PRESSURE_FIXTURE_DISK_TARGET_BYTES !== 40 * 1024 * 1024 ||
+  pressurePrimedBytes < SYSTEMD_GATE_PROJECT_QUOTA_BYTES * 0.7 ||
+  combinedQuotaBytes >= SYSTEMD_GATE_PROJECT_QUOTA_BYTES ||
+  SYSTEMD_GATE_PROJECT_QUOTA_BYTES - combinedQuotaBytes < 8 * 1024 * 1024
+)
+  failures.push("pressure fixture project-quota headroom is not exact");
 if (
   PRESSURE_FIXTURE_MEMORY_TARGET.chunkBytes !== 16 * 1024 * 1024 ||
   PRESSURE_FIXTURE_MEMORY_TARGET.primedChunkCount !== 22 ||
@@ -743,6 +762,8 @@ if (
   failures.push("pressure memory fixture two-stage bounds are not exact");
 for (const token of [
   "PRESSURE_FIXTURE_CPU_WORKER_COUNT",
+  "PRESSURE_FIXTURE_DISK_TARGET_BYTES",
+  "PRESSURE_FIXTURE_IO_TARGET_BYTES",
   "length: PRESSURE_FIXTURE_CPU_WORKER_COUNT",
 ])
   if (!pressureFixture.includes(token))
@@ -778,6 +799,7 @@ for (const token of [
   "pressure_fixture_runtime_budget_insufficient",
   "processManager.verify(process)",
   "Promise.allSettled",
+  "maximumBytes: SYSTEMD_GATE_PROJECT_QUOTA_BYTES",
   "evidence.maximumObserved.workloadMemoryPsiSome > 0",
 ])
   if (!pressureStage.includes(token))

@@ -3,7 +3,10 @@ import { Buffer } from "node:buffer";
 import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers";
 
-import { SYSTEMD_MEMORY_PROBE_BLOCK_BYTES } from "../systemd-contract.mjs";
+import {
+  SYSTEMD_IO_PROBE_MAX_BYTES,
+  SYSTEMD_MEMORY_PROBE_BLOCK_BYTES,
+} from "../systemd-contract.mjs";
 
 const [mode, root] = process.argv.slice(2);
 if (
@@ -40,7 +43,11 @@ if (mode === "pids") {
 
 if (mode === "io") {
   const block = Buffer.alloc(1024 * 1024, 1);
-  for (let index = 0; index < 8; index += 1)
+  for (
+    let offset = 0;
+    offset < SYSTEMD_IO_PROBE_MAX_BYTES;
+    offset += block.length
+  )
     await appendFile(`${root}/io-load.bin`, block);
   await new Promise((resolve) => setTimeout(resolve, 60_000));
 }

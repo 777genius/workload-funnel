@@ -1,5 +1,7 @@
 import { OWNED_NAME_PATTERN } from "./constants.mjs";
 
+export const SYSTEMD_GATE_PROJECT_QUOTA_BYTES = 64 * 1024 * 1024;
+export const SYSTEMD_IO_PROBE_MAX_BYTES = 8 * 1024 * 1024;
 export const SYSTEMD_MEMORY_PROBE_BLOCK_BYTES = 1024 * 1024;
 
 const servicePattern =
@@ -318,7 +320,7 @@ export async function createMappedSystemdGatePlan({
       ephemeralStorage: Object.freeze({
         ...base.resources.ephemeralStorage,
         inodeMaximum: 4_096n,
-        maximumBytes: 64n * 1024n * 1024n,
+        maximumBytes: BigInt(SYSTEMD_GATE_PROJECT_QUOTA_BYTES),
       }),
       io: Object.freeze({
         ...base.resources.io,
@@ -524,7 +526,7 @@ export async function runSystemdGateProbe(config) {
   if (ioTerminal.Result !== "timeout")
     throw new Error("systemd_runtime_limit_unclassified");
   const ioBytes = await config.ioBytesWritten(plan.diskQuota.root);
-  if (ioBytes <= 0 || ioBytes > 8 * 1024 * 1024)
+  if (ioBytes <= 0 || ioBytes > SYSTEMD_IO_PROBE_MAX_BYTES)
     throw new Error("systemd_io_limit_not_bounded");
 
   const cpu = await start("cpu");

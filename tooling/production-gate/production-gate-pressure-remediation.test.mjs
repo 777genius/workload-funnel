@@ -10,6 +10,8 @@ import {
   pressureFixturePrimedState,
   runMemoryPressureFixture,
   PRESSURE_FIXTURE_CPU_WORKER_COUNT,
+  PRESSURE_FIXTURE_DISK_TARGET_BYTES,
+  PRESSURE_FIXTURE_IO_TARGET_BYTES,
   PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
   PRESSURE_FIXTURE_READY_SCHEMA,
@@ -18,6 +20,10 @@ import {
   runPressureAdmissionStage,
   waitForPressureFixtureReadiness,
 } from "./pressure-stage.mjs";
+import {
+  SYSTEMD_GATE_PROJECT_QUOTA_BYTES,
+  SYSTEMD_IO_PROBE_MAX_BYTES,
+} from "./systemd-contract.mjs";
 
 function fixtures(runtimeDeadlineMs = 100_000) {
   return PRESSURE_FIXTURE_MODES.map((mode) => ({
@@ -91,6 +97,49 @@ describe("pressure fixture priming and bounded lifetime", () => {
           { unexpected: true },
         ),
         "cpu",
+      ),
+    ).toThrow("pressure_fixture_readiness_malformed");
+  });
+
+  it("leaves quota headroom after the preceding systemd IO probe", async () => {
+    const pressurePrimedBytes =
+      PRESSURE_FIXTURE_DISK_TARGET_BYTES + PRESSURE_FIXTURE_IO_TARGET_BYTES;
+    const combinedBytes = pressurePrimedBytes + SYSTEMD_IO_PROBE_MAX_BYTES;
+
+    expect(PRESSURE_FIXTURE_DISK_TARGET_BYTES).toBe(40 * 1024 * 1024);
+    expect(pressurePrimedBytes).toBeGreaterThanOrEqual(
+      SYSTEMD_GATE_PROJECT_QUOTA_BYTES * 0.7,
+    );
+    expect(combinedBytes).toBeLessThan(SYSTEMD_GATE_PROJECT_QUOTA_BYTES);
+    expect(
+      SYSTEMD_GATE_PROJECT_QUOTA_BYTES - combinedBytes,
+    ).toBeGreaterThanOrEqual(8 * 1024 * 1024);
+    expect(pressureFixturePrimedState("disk")).toStrictEqual({
+      writtenBytes: PRESSURE_FIXTURE_DISK_TARGET_BYTES,
+    });
+    expect(pressureFixturePrimedState("io")).toStrictEqual({
+      syncedBytes: PRESSURE_FIXTURE_IO_TARGET_BYTES,
+    });
+
+    const fixtureSource = await readFile(
+      new URL("./fixtures/pressure-load.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(fixtureSource).toContain(
+      "Buffer.alloc(PRESSURE_FIXTURE_DISK_TARGET_BYTES, 3)",
+    );
+    expect(fixtureSource).toContain(
+      "offset < PRESSURE_FIXTURE_IO_TARGET_BYTES",
+    );
+    expect(fixtureSource).not.toContain("Buffer.alloc(48 * 1024 * 1024, 3)");
+    expect(() =>
+      parsePressureFixtureReadiness(
+        JSON.stringify({
+          mode: "disk",
+          primed: { writtenBytes: 48 * 1024 * 1024 },
+          schemaVersion: PRESSURE_FIXTURE_READY_SCHEMA,
+        }),
+        "disk",
       ),
     ).toThrow("pressure_fixture_readiness_malformed");
   });

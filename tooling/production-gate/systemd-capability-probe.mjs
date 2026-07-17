@@ -7,6 +7,7 @@ import {
   serializeProjectQuotaControl,
   serializeProjectQuotaReceipt,
 } from "./project-quota-runtime.mjs";
+import { SYSTEMD_GATE_PROJECT_QUOTA_BYTES } from "./systemd-contract.mjs";
 
 const verifiedProperties = Object.freeze([
   "AmbientCapabilities",
@@ -205,7 +206,7 @@ export async function probeRealSystemdCapabilities(
     quotaControl = Object.freeze({
       allocationId: config.runId,
       inodeMaximum: 4_096n,
-      maximumBytes: 67_108_864n,
+      maximumBytes: BigInt(SYSTEMD_GATE_PROJECT_QUOTA_BYTES),
       projectId: quotaMapping.deterministicProjectQuotaId(config.runId),
       root: config.workloadRoot,
     });
