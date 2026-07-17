@@ -3,6 +3,8 @@ import { Buffer } from "node:buffer";
 import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers";
 
+import { SYSTEMD_MEMORY_PROBE_BLOCK_BYTES } from "../systemd-contract.mjs";
+
 const [mode, root] = process.argv.slice(2);
 if (
   !new Set(["cpu", "io", "memory", "pids", "tree"]).has(mode) ||
@@ -15,7 +17,7 @@ await mkdir(root, { recursive: true });
 if (mode === "memory") {
   const blocks = [];
   for (;;) {
-    blocks.push(Buffer.alloc(64 * 1024 * 1024, 1));
+    blocks.push(Buffer.alloc(SYSTEMD_MEMORY_PROBE_BLOCK_BYTES, 1));
   }
 }
 

@@ -1,5 +1,7 @@
 import { OWNED_NAME_PATTERN } from "./constants.mjs";
 
+export const SYSTEMD_MEMORY_PROBE_BLOCK_BYTES = 1024 * 1024;
+
 const servicePattern =
   /^(wf-production-gate-[a-f0-9]{32})-[a-z0-9-]{1,32}\.service$/u;
 const slicePattern = /^wf-production-gate-[a-f0-9]{32}\.slice$/u;
@@ -362,6 +364,20 @@ async function waitFor(config, predicate, code, maximumMs = 10_000) {
   }
 }
 
+export async function waitForSystemdDescendantExit(
+  config,
+  descendantPids,
+  maximumMs = 2_000,
+) {
+  return waitFor(
+    config,
+    () =>
+      descendantPids.every((pid) => !config.pidExists(pid)) ? true : undefined,
+    "systemd_descendant_survived_control_group_stop",
+    maximumMs,
+  );
+}
+
 export async function runSystemdGateProbe(config) {
   const plan = await createMappedSystemdGatePlan({
     capabilityReport: config.capabilityReport,
@@ -444,8 +460,7 @@ export async function runSystemdGateProbe(config) {
   const cancelStarted = config.preciseClock();
   await stop(tree.unit);
   const cancelLatencyMs = config.preciseClock() - cancelStarted;
-  if (descendantPids.some(config.pidExists))
-    throw new Error("systemd_descendant_survived_control_group_stop");
+  await waitForSystemdDescendantExit(config, descendantPids);
 
   const memoryProperties = systemdMemoryProbeProperties(properties);
   const memory = await start("memory", memoryProperties);

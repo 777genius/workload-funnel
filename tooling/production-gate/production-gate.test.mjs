@@ -69,9 +69,11 @@ import { evaluateMixedWorkloadSlo, percentile99 } from "./slo.mjs";
 import {
   exactSystemdPropertiesObserved,
   parseSystemctlShow,
+  SYSTEMD_MEMORY_PROBE_BLOCK_BYTES,
   systemdMemoryProbeProperties,
   systemctlShowArguments,
   systemdRunArguments,
+  waitForSystemdDescendantExit,
 } from "./systemd-contract.mjs";
 import { createSystemdSliceOwnership } from "./systemd-slice-ledger.mjs";
 
@@ -965,6 +967,7 @@ describe("systemd and SLO contracts", () => {
       MemoryMax: properties.MemoryMax,
     });
     expect(memoryProperties).not.toBe(properties);
+    expect(SYSTEMD_MEMORY_PROBE_BLOCK_BYTES).toBe(1024 * 1024);
     expect(() =>
       systemdMemoryProbeProperties({ ...properties, MemoryMax: 0n }),
     ).toThrow("systemd_memory_max_invalid");
@@ -1055,6 +1058,35 @@ describe("systemd and SLO contracts", () => {
         slice: `${runId}.slice`,
       }),
     ).toBe(true);
+  });
+
+  it("waits for transient descendant process entries after a cgroup stop", async () => {
+    let now = 0;
+    let probes = 0;
+    const config = {
+      clock: () => now,
+      pidExists: () => {
+        probes += 1;
+        return probes < 3;
+      },
+      wait: async (milliseconds) => {
+        now += milliseconds;
+      },
+    };
+
+    await expect(waitForSystemdDescendantExit(config, [41])).resolves.toBe(
+      true,
+    );
+    expect(probes).toBe(3);
+
+    now = 0;
+    await expect(
+      waitForSystemdDescendantExit(
+        { ...config, pidExists: () => true },
+        [42],
+        200,
+      ),
+    ).rejects.toThrow("systemd_descendant_survived_control_group_stop");
   });
 
   it("computes bounded p99 and rejects failed protected control", () => {
