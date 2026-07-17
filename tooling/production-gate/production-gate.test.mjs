@@ -69,6 +69,7 @@ import { evaluateMixedWorkloadSlo, percentile99 } from "./slo.mjs";
 import {
   exactSystemdPropertiesObserved,
   parseSystemctlShow,
+  systemctlShowArguments,
   systemdRunArguments,
 } from "./systemd-contract.mjs";
 import { createSystemdSliceOwnership } from "./systemd-slice-ledger.mjs";
@@ -943,11 +944,50 @@ describe("systemd and SLO contracts", () => {
         "--property=PrivateMounts=yes",
         "--property=RuntimeMaxSec=5000000us",
         "--property=MemorySwapMax=0",
+        "--property=CPUQuota=50%",
         "--property=SystemCallFilter=@system-service",
         "--property=SystemCallFilter=~@mount @privileged @resources",
         "--",
         "/usr/bin/node",
       ]),
+    );
+    expect(
+      args.some((argument) =>
+        argument.startsWith("--property=CPUQuotaPerSecUSec="),
+      ),
+    ).toBe(false);
+    for (const [quota, assignment] of [
+      [100n, "--property=CPUQuota=0.01%"],
+      [1_500_000n, "--property=CPUQuota=150%"],
+    ]) {
+      expect(
+        systemdRunArguments({
+          description: `WorkloadFunnel production gate ${runId} quota`,
+          executable: "/usr/bin/node",
+          ioDevice: "/dev/vda",
+          properties: { ...properties, CPUQuotaPerSecUSec: quota },
+          slice: `${runId}.slice`,
+          unit: `${runId}-quota.service`,
+        }),
+      ).toContain(assignment);
+    }
+    for (const quota of [0n, 1n, 500_001n])
+      expect(() =>
+        systemdRunArguments({
+          description: `WorkloadFunnel production gate ${runId} quota`,
+          executable: "/usr/bin/node",
+          ioDevice: "/dev/vda",
+          properties: { ...properties, CPUQuotaPerSecUSec: quota },
+          slice: `${runId}.slice`,
+          unit: `${runId}-quota.service`,
+        }),
+      ).toThrow(
+        quota === 0n
+          ? "systemd_cpu_quota_invalid"
+          : "systemd_cpu_quota_precision_unsupported",
+      );
+    expect(systemctlShowArguments(`${runId}-tree.service`)).toEqual(
+      expect.arrayContaining([expect.stringContaining("CPUQuotaPerSecUSec")]),
     );
     expect(args).not.toContain(
       "--property=SystemCallFilter=@system-service ~@mount @privileged @resources",

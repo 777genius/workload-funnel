@@ -16,6 +16,20 @@ function microseconds(value) {
   return `${String(value)}us`;
 }
 
+function cpuQuotaPercentage(value) {
+  if (typeof value !== "bigint" || value <= 0n)
+    throw new Error("systemd_cpu_quota_invalid");
+  if (value % 100n !== 0n)
+    throw new Error("systemd_cpu_quota_precision_unsupported");
+  const wholePercent = value / 10_000n;
+  const hundredths = (value % 10_000n) / 100n;
+  if (hundredths === 0n) return `${String(wholePercent)}%`;
+  const fractionalPercent = String(hundredths)
+    .padStart(2, "0")
+    .replace(/0+$/u, "");
+  return `${String(wholePercent)}.${fractionalPercent}%`;
+}
+
 function bytes(value, allowInfinity = false) {
   if (allowInfinity && value === "infinity") return "infinity";
   if (typeof value !== "bigint" || value < 0n)
@@ -60,7 +74,7 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     "CapabilityBoundingSet=",
     ...(properties.CPUQuotaPerSecUSec === undefined
       ? []
-      : [`CPUQuotaPerSecUSec=${microseconds(properties.CPUQuotaPerSecUSec)}`]),
+      : [`CPUQuota=${cpuQuotaPercentage(properties.CPUQuotaPerSecUSec)}`]),
     `CPUWeight=${String(properties.CPUWeight)}`,
     `DevicePolicy=${properties.DevicePolicy}`,
     "FinalKillSignal=SIGKILL",
