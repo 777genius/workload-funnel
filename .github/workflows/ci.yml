@@ -18,7 +18,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up Node.js
-        uses: actions/setup-node@1e60f620b9541d8db1aa67f7f03b2a70a2e891 # v4.0.3
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
           node-version: 24.16.0
       - name: Enable pinned pnpm
