@@ -229,10 +229,10 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
     const retention: ObjectRetentionClient = {
       capabilities: Object.freeze({
         finalMutationFencing: true,
-        prefixDeleteOnly: true,
+        exactResourceDeleteOnly: true,
         retentionCredential: true,
       }),
-      deletePrefixOnce(input) {
+      deleteExactSetOnce(input) {
         for (const key of [...objects.keys()])
           if (key.startsWith(input.identity)) objects.delete(key);
         return Promise.resolve({
@@ -247,7 +247,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
           status: "deleted" as const,
         });
       },
-      reconcilePrefix(input) {
+      reconcileExactSet(input) {
         const absent = ![...objects.keys()].some((key) =>
           key.startsWith(input.identity),
         );
@@ -418,10 +418,10 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
           client: {
             capabilities: Object.freeze({
               finalMutationFencing: true,
-              prefixDeleteOnly: true,
+              exactResourceDeleteOnly: true,
               retentionCredential: true,
             }),
-            deletePrefixOnce(input) {
+            deleteExactSetOnce(input) {
               deleteCalls += 1;
               return Promise.resolve({
                 mutationFence: input.mutationFence,
@@ -435,7 +435,7 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
                 status: "unknown" as const,
               });
             },
-            reconcilePrefix(input) {
+            reconcileExactSet(input) {
               return Promise.resolve({
                 mutationFence: input.mutationFence,
                 mutationFenceFingerprint: fingerprintMutationFence(
@@ -498,6 +498,107 @@ describe("Phase 4D production object-store artifact adapter contract", () => {
     expect(reconciled.manifest).toMatchObject({
       artifactOperation: { state: "retryable" },
       retentionState: "deleting",
+    });
+  });
+
+  it("requires an explicit exact entry set for delete and reconciliation", async () => {
+    const stagingFence = command().mutationFence;
+    const deleteFence = fence(
+      "artifact_delete",
+      "artifact-delete:manifest-1",
+      "result_retention",
+    );
+    const durableAuthority = artifactAuthority(deleteFence);
+    let authorityCalls = 0;
+    let deleteCalls = 0;
+    let reconcileCalls = 0;
+    const provider = createDeleteProvider({
+      authority: {
+        authorize(mutationFence, now) {
+          authorityCalls += 1;
+          return durableAuthority.authorize(mutationFence, now);
+        },
+        install: (input) => durableAuthority.install(input),
+      },
+      client: {
+        capabilities: Object.freeze({
+          exactResourceDeleteOnly: true,
+          finalMutationFencing: true,
+          retentionCredential: true,
+        }),
+        deleteExactSetOnce(input) {
+          deleteCalls += 1;
+          expect(input.expectedEntries).toEqual([]);
+          return Promise.resolve({
+            mutationFence: input.mutationFence,
+            mutationFenceFingerprint: fingerprintMutationFence(
+              input.mutationFence,
+            ),
+            operationId: input.operationId,
+            providerId: "production-object",
+            providerReceiptId: `delete:${input.operationId}`,
+            resultManifestId: input.resultManifestId,
+            status: "deleted" as const,
+          });
+        },
+        reconcileExactSet(input) {
+          reconcileCalls += 1;
+          expect(input.expectedEntries).toEqual([]);
+          return Promise.resolve({
+            mutationFence: input.mutationFence,
+            mutationFenceFingerprint: fingerprintMutationFence(
+              input.mutationFence,
+            ),
+            operationId: input.operationId,
+            providerId: "production-object",
+            providerReceiptId: `reconcile:${input.operationId}`,
+            resultManifestId: input.resultManifestId,
+            status: "verified_absent" as const,
+          });
+        },
+      },
+      nowMs: () => 100,
+      providerId: "production-object",
+    });
+    if (provider.delete === undefined || provider.reconcileDelete === undefined)
+      throw new Error("object_retention_test_provider_incomplete");
+    const stagingFingerprint = fingerprintMutationFence(stagingFence);
+    const base = Object.freeze({
+      entryDigests: Object.freeze([] as string[]),
+      immutableStagingIdentity: `${stagingFence.allocationId ?? ""}/${stagingFence.executionGeneration}/${Buffer.from(stagingFingerprint).toString("base64url")}/${digest("manifest")}`,
+      mutationFence: deleteFence,
+      operationId: "delete-empty-manifest",
+      resultManifestId: "manifest-1",
+      stagingMutationFence: stagingFence,
+      stagingMutationFenceFingerprint: stagingFingerprint,
+    });
+
+    await expect(provider.delete(base)).rejects.toThrow(
+      "object_delete_entry_binding_mismatch",
+    );
+    await expect(provider.reconcileDelete(base)).rejects.toThrow(
+      "object_delete_entry_binding_mismatch",
+    );
+    expect({ authorityCalls, deleteCalls, reconcileCalls }).toEqual({
+      authorityCalls: 0,
+      deleteCalls: 0,
+      reconcileCalls: 0,
+    });
+
+    const explicitEmpty = Object.freeze({
+      ...base,
+      expectedEntries: Object.freeze([]),
+    });
+    await expect(provider.delete(explicitEmpty)).resolves.toMatchObject({
+      status: "deleted",
+    });
+    await expect(
+      provider.reconcileDelete(explicitEmpty),
+    ).resolves.toMatchObject({ status: "verified_absent" });
+    expect({ authorityCalls, deleteCalls, reconcileCalls }).toEqual({
+      authorityCalls: 2,
+      deleteCalls: 1,
+      reconcileCalls: 1,
     });
   });
 

@@ -14,6 +14,8 @@ export const POSTGRES_FIXTURE_IMAGE =
   "postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15";
 export const OBJECT_FIXTURE_IMAGE =
   "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2";
+export const AZURITE_FIXTURE_IMAGE =
+  "mcr.microsoft.com/azure-storage/azurite:3.35.0@sha256:647c63a91102a9d8e8000aab803436e1fc85fbb285e7ce830a82ee5d6661cf37";
 export const OWNED_NAME_PATTERN = /^wf-production-gate-[a-f0-9]{32}$/u;
 export const OWNED_RESOURCE_PATTERN =
   /^wf-production-gate-[a-f0-9]{32}(?:-[a-z0-9-]{1,40})?$/u;

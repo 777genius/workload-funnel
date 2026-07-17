@@ -98,6 +98,7 @@ export async function deleteAndTombstoneResult(
   );
   const deletion = await provider.delete?.({
     entryDigests: manifest.entries.map((entry) => entry.checksum),
+    expectedEntries: manifest.entries,
     immutableStagingIdentity: manifest.immutableStagingIdentity,
     mutationFence: command.mutationFence,
     operationId: operation.operationId,
@@ -148,6 +149,7 @@ export async function reconcileDeletionAndTombstoneResult(
   );
   const reconciliation = await provider.reconcileDelete?.({
     entryDigests: manifest.entries.map((entry) => entry.checksum),
+    expectedEntries: manifest.entries,
     immutableStagingIdentity: manifest.immutableStagingIdentity,
     mutationFence: command.mutationFence,
     operationId: operation.operationId,

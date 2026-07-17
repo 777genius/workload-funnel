@@ -11,6 +11,7 @@ import {
 } from "./attestation.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
 import {
+  AZURITE_FIXTURE_IMAGE,
   DECLARED_COMPONENTS,
   DISPOSABLE_HOST_ATTESTATION,
   GATE_SANDBOX_PARENT,
@@ -19,6 +20,7 @@ import {
 } from "./constants.mjs";
 import {
   assertSafeDockerArguments,
+  azuriteContainerArguments,
   isolatedNetworkArguments,
   postgresContainerArguments,
 } from "./docker-plan.mjs";
@@ -100,6 +102,8 @@ function argumentsFor(root) {
     DISPOSABLE_HOST_ATTESTATION,
     "--aws-executable",
     "/usr/bin/aws",
+    "--azurite-image",
+    AZURITE_FIXTURE_IMAGE,
     "--docker-executable",
     "/usr/bin/docker",
     "--evidence-path",
@@ -196,6 +200,12 @@ describe("manual production gate admission", () => {
         objectImage: `minio/minio:latest@sha256:${digest}`,
       }),
     ).toThrow("object_fixture_image_not_digest_pinned");
+    expect(() =>
+      validatePinnedImages({
+        ...config,
+        azuriteImage: `azurite:latest@sha256:${digest}`,
+      }),
+    ).toThrow("azurite_fixture_image_not_digest_pinned");
   });
 
   it("admits only the fixed production sandbox parent and replacement operation", () => {
@@ -268,6 +278,34 @@ describe("bounded resource plans", () => {
     expect(() =>
       assertSafeDockerArguments(["run", "--name", `${runId};touch-pwned`]),
     ).toThrow("unsafe_docker_resource_name");
+  });
+
+  it("keeps the Azurite fixture key file-bound and the blob endpoint private", () => {
+    const args = azuriteContainerArguments({
+      accountKeyFile: `${GATE_SANDBOX_PARENT}/${runId}/azurite-account-key`,
+      entrypointFile: "/reviewed/azurite-entrypoint.sh",
+      image: AZURITE_FIXTURE_IMAGE,
+      ioDevice: "/dev/vda",
+      name: `${runId}-azure`,
+      network: `${runId}-network`,
+    });
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--pull=never",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--entrypoint",
+        "/bin/sh",
+        AZURITE_FIXTURE_IMAGE,
+        "/gate/azurite-entrypoint.sh",
+      ]),
+    );
+    expect(args.join("\n")).toContain(
+      "dst=/run/secrets/azurite-account-key,readonly",
+    );
+    expect(args.join("\n")).not.toContain("AZURITE_ACCOUNTS=");
+    expect(args).not.toContain("--publish");
   });
 
   it("tracks reverse cleanup and reports partial cleanup without widening scope", async () => {

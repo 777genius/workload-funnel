@@ -50,6 +50,7 @@ top-level fields:
     "bootIdSha256": "<64 lowercase hex>"
   },
   "images": {
+    "azuriteFixture": "<exact accepted reference>",
     "postgresFixture": "<exact accepted reference>",
     "objectFixture": "<exact accepted reference>",
     "objectClient": "<exact reviewed reference with sha256 digest>"
@@ -126,6 +127,7 @@ pnpm production-gate:host -- \
   --io-device /dev/DISPOSABLE_DEVICE \
   --hq-archive /opt/wf-fixtures/hq-v0.26.2-linux-x64.tar.gz \
   --hq-binary /opt/wf-fixtures/hq \
+  --azurite-image 'mcr.microsoft.com/azure-storage/azurite:3.35.0@sha256:647c63a91102a9d8e8000aab803436e1fc85fbb285e7ce830a82ee5d6661cf37' \
   --postgres-image 'postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15' \
   --object-image 'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2' \
   --object-client-image "$REVIEWED_MINIO_CLIENT_IMAGE"
@@ -148,11 +150,17 @@ Docker uses an internal bridge with no host port publication, read-only
 filesystems, private IPC/UTS, init, no-new-privileges, all
 capabilities dropped, non-root users, exact platform, `--pull=never`, and
 fixed CPU, memory, swap, PID, file-size, file-descriptor, IO, command, and data
-budgets. Object data uses bounded tmpfs. A reviewed, read-only-mounted
-supervisor restarts only the MinIO server process, leaving the owned container
-and its data tmpfs alive; the gate requires a stable container/supervisor
+budgets. Object data uses bounded tmpfs. Reviewed, read-only-mounted supervisors
+restart only the MinIO or Azurite server process, leaving each owned container
+and its data tmpfs alive. The gate requires a stable container/supervisor
 boundary, a new server generation and PID, renewed readiness, unchanged
-confinement, and the same server checksum. PostgreSQL uses an exact-identity,
+confinement, and the same server checksum. Azurite's supervisor reads its
+generated fixture account key from a mode-0400 bind-mounted file and passes it
+only to the container-local server process environment; neither the key nor any
+SAS is written to Docker configuration, process arguments, or evidence. The
+fixture keeps server API-version validation enabled and pins the client request
+version. PostgreSQL uses an
+exact-identity,
 mode-0700 bind directory under the fixed sandbox so WAL recovery survives a
 forced server-process stop. Its image-declared `/var/lib/postgresql` parent
 remains an exact 64 MiB mode-0700 tmpfs around the nested durable data bind, and
@@ -206,10 +214,20 @@ Current repository closure is intentionally fail-closed:
   against the pinned MinIO KVM fixture found `s3:if-none-match`,
   `x-amz-content-sha256`, and `ExistingObjectTag` conditions unsupported for
   `PutObject`. An unconditional PUT of distinct bytes to the same key with the
-  same upload credential succeeds and changes the server checksum. The gate
-  therefore emits `object_provider_create_only_credential_unsupported`; MinIO
-  remains compatibility-only and is not an approved production provider. The
-  probe does not revoke or detach the upload policy after the first PUT;
+  same upload credential succeeds and changes the server checksum. This is a
+  passing negative compatibility proof, not production-provider evidence.
+  MinIO remains compatibility-only and is not an approved production provider;
+- the Azure Blob production adapter uses exact-resource blob SAS credentials:
+  upload gets only `sp=c,sr=b`, verification gets a separate `sp=r,sr=b`
+  credential, direct upload is single-request, `If-None-Match: *` is
+  defense-in-depth, Content-MD5 is server-validated, and immutable
+  `wfsha256` metadata is reconciled before an ambiguous outcome is accepted as
+  idempotent. The pinned Azurite fixture proves that the create credential
+  cannot overwrite, read, list, delete, mutate metadata, stage blocks, or reach
+  another blob; stale and write-capable SAS policies fail before network IO.
+  It also proves exact state across a server-process restart in a stable
+  container/tmpfs boundary. Azurite exercises the official Azure API permission
+  contract but is explicitly not claimed as full Azure cloud parity;
 - HyperQueue uses restart-durable fsynced ordering and exact post-cancel
   observation, but 0.26.2 lacks operation-ID lookup for ambiguous submit;
 - the running systemd manager, cgroup controllers, and required unit properties

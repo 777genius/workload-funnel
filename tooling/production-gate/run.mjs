@@ -13,6 +13,7 @@ import {
   validatePinnedImages,
   verifyReviewedHostInputs,
 } from "./attestation.mjs";
+import { runAzureObjectProductionStage } from "./azure-object-stage.mjs";
 import {
   cleanupBoundedSystemdUnit,
   createBoundedHostProcessManager,
@@ -67,6 +68,9 @@ import {
 import { probeRealSystemdCapabilities } from "./systemd-capability-probe.mjs";
 
 const startedAt = new Date().toISOString();
+const azuriteEntrypointScript = fileURLToPath(
+  new URL("./fixtures/azurite-entrypoint.sh", import.meta.url),
+);
 const minioBootstrapScript = fileURLToPath(
   new URL("./fixtures/minio-bootstrap.sh", import.meta.url),
 );
@@ -296,6 +300,7 @@ async function main() {
   if (components.get("preflight").status === "PASS") {
     docker = new GateDockerRuntime({
       allowedReadOnlyMounts: new Set([
+        azuriteEntrypointScript,
         minioBootstrapScript,
         minioSupervisorScript,
       ]),
@@ -593,17 +598,7 @@ async function main() {
           evidence.restartReconciled === true &&
           evidence.uploadCredentialCanOverwrite === true &&
           evidence.verificationIdentityDistinct === true
-          ? blocked(
-              "object_compatibility_fixture",
-              "object_provider_create_only_credential_unsupported",
-              [
-                evidenceRecord(
-                  "object_compatibility_real_evidence",
-                  true,
-                  recordedEvidence,
-                ),
-              ],
-            )
+          ? passed("object_compatibility_fixture", recordedEvidence)
           : blocked(
               "object_compatibility_fixture",
               "object_compatibility_evidence_incomplete",
@@ -622,13 +617,25 @@ async function main() {
         blocked("object_compatibility_fixture", reasonCode(error)),
       );
     }
-    components.set(
-      "object_production_provider",
-      blocked(
+    try {
+      const evidence = await runAzureObjectProductionStage({
+        config,
+        docker,
+        entrypointFile: azuriteEntrypointScript,
+        ledger,
+        secrets,
+        waitFor,
+      });
+      components.set(
         "object_production_provider",
-        "object_provider_create_only_credential_unsupported",
-      ),
-    );
+        passed("object_production_provider", evidence),
+      );
+    } catch (error) {
+      components.set(
+        "object_production_provider",
+        blocked("object_production_provider", reasonCode(error)),
+      );
+    }
 
     try {
       const allocation = await ensureSystemdAllocation();

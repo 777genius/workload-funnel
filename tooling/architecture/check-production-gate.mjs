@@ -93,10 +93,7 @@ if (
   );
 if (/writeFile\([^)]*\/sys\/fs\/cgroup/u.test(gate))
   failures.push("manual gate writes cgroupfs directly");
-for (const blocker of [
-  "ambiguous_submit_lookup_unsupported",
-  "object_provider_create_only_credential_unsupported",
-])
+for (const blocker of ["ambiguous_submit_lookup_unsupported"])
   if (!gate.includes(blocker))
     failures.push(`manual gate omits production-closure blocker ${blocker}`);
 
@@ -200,7 +197,8 @@ for (const token of [
   "inspectContainerConfinement",
   "inspectClientConfinement",
   "docker_container_metadata_contains_secret",
-  "MINIO_SUPERVISOR_COMMAND[0]",
+  "expectedCommand[0]",
+  "expectedEntrypoint",
   "MINIO_SUPERVISOR_ENTRYPOINT",
   "container?.Cmd",
   "container?.Entrypoint",
@@ -414,7 +412,7 @@ for (const token of [
   if (objectFixtureBootstrap.includes(token) || objectBootstrap.includes(token))
     failures.push(`rejected object upload revocation remains: ${token}`);
 for (const token of [
-  "object_provider_create_only_credential_unsupported",
+  'passed("object_compatibility_fixture", recordedEvidence)',
   "evidence.credentialEnforcedImmutability === false",
   "evidence.deleteIdentityDistinct === true",
   "evidence.uploadCredentialCanOverwrite === true",
@@ -433,6 +431,150 @@ for (const token of [
 ])
   if (gate.includes(token))
     failures.push(`manual gate retains rejected upload revocation: ${token}`);
+
+const azureAdapter = await source(
+  "packages/artifact-store-object/src/features/stage-upload/azure-blob-create-only-client.ts",
+);
+for (const token of [
+  "new BlockBlobClient(input.blobUrl).upload(",
+  'conditions: { ifNoneMatch: "*" }',
+  "blobContentMD5: input.contentMd5",
+  "metadata: { wfsha256: input.sha256 }",
+  'expectedPermission: "c"',
+  'expectedResourceType: "b"',
+  "config.verifier.verifyExact",
+  "const mutationAt = nowMs();",
+  "installed = input.reauthorize(mutationAt);",
+  "exactReauthorization(",
+  "nowMs >= fence.notAfter",
+  "azure_blob_create_outcome_ambiguous",
+])
+  if (!azureAdapter.includes(token))
+    failures.push(`Azure create-only adapter is missing ${token}`);
+for (const forbidden of ["uploadData(", ".stageBlock("])
+  if (azureAdapter.includes(forbidden))
+    failures.push(`Azure create-only adapter permits ${forbidden}`);
+for (const forbidden of ["readForKey", "new BlobClient("])
+  if (azureAdapter.includes(forbidden))
+    failures.push(`Azure uploader owns verification authority: ${forbidden}`);
+const azureSasPolicy = await source(
+  "packages/artifact-store-object/src/features/stage-upload/azure-sas-policy.ts",
+);
+for (const token of [
+  "actual.pathname !== expected.pathname",
+  "actual.searchParams.getAll(key).length !== 1",
+  "!VERSIONS.has(serviceVersion)",
+  "input.credential.expiresAtMs > input.latestExpiryMs",
+  "expiresAtMs > input.latestExpiryMs",
+])
+  if (!azureSasPolicy.includes(token))
+    failures.push(`Azure exact SAS policy is missing ${token}`);
+for (const adapterPath of [
+  "packages/artifact-store-object/src/features/verify-finalize/azure-blob-metadata-reader.ts",
+  "packages/artifact-store-object/src/features/retention-delete/azure-blob-exact-retention-client.ts",
+]) {
+  const adapter = await source(adapterPath);
+  if (!adapter.includes("validateScopedSas"))
+    failures.push(
+      `Azure scoped adapter lacks strict SAS policy: ${adapterPath}`,
+    );
+}
+const azureExactVerifier = await source(
+  "packages/artifact-store-object/src/features/verify-finalize/azure-blob-metadata-reader.ts",
+);
+for (const token of [
+  "createAzureBlobExactCreateOutcomeVerifier",
+  "properties.contentMD5",
+  "properties.blobType",
+  "storedContentMd5.byteLength !== 16",
+  "Buffer.from(storedContentMd5).equals",
+])
+  if (!azureExactVerifier.includes(token))
+    failures.push(`Azure exact create outcome verifier is missing ${token}`);
+const azureRetentionAdapter = await source(
+  "packages/artifact-store-object/src/features/retention-delete/azure-blob-exact-retention-client.ts",
+);
+for (const token of [
+  "command.reauthorize(nowMs)",
+  "nowMs >= fence.notAfter",
+  "sasExpiresAtMs > authorityNotAfterMs",
+])
+  if (!azureRetentionAdapter.includes(token))
+    failures.push(`Azure exact retention adapter is missing ${token}`);
+
+const azureProbe = await source(
+  "tooling/production-gate/azure-object-adapter-probe.mjs",
+);
+for (const token of [
+  "unconditionalOverwriteDenied",
+  "crossResourceCreateDenied",
+  "uploadReadDenied",
+  "uploadDeleteDenied",
+  "uploadMetadataMutationDenied",
+  "uploadListDenied",
+  "putBlockBypassDenied",
+  "staleCredentialRejectedBeforeIo",
+  "writeCapableCredentialRejectedBeforeIo",
+  "cloudParityNotClaimed: true",
+  'const SDK_VERSION = "12.33.0";',
+  "sdkVersion: SDK_VERSION",
+  'resourceType: "azure_blob_sas_sr_b"',
+  'deletePermission: "d"',
+  "createAzureBlobPrivateFixtureExactCreateOutcomeVerifier",
+  "createAzureBlobPrivateFixtureExactRetentionClient",
+  "forgedMetadataCannotFakeIdempotency",
+])
+  if (!azureProbe.includes(token))
+    failures.push(`Azure production probe is missing ${token}`);
+
+const azureStage = await source(
+  "tooling/production-gate/azure-object-stage.mjs",
+);
+for (const token of [
+  "path: `${config.sandboxRoot}/azurite-account-key`",
+  "restartAzuriteServerProcessWithDocker",
+  'forbiddenEnvironmentPrefixes: ["AZURITE_ACCOUNTS="]',
+  "sasAndAccountKeyExcludedFromEvidence",
+])
+  if (!azureStage.includes(token) && !azureProbe.includes(token))
+    failures.push(`Azure production stage is missing ${token}`);
+
+const azuriteSupervisor = await source(
+  "tooling/production-gate/fixtures/azurite-entrypoint.sh",
+);
+for (const token of [
+  "workload-funnel.azurite-supervisor.v1",
+  "trap request_restart USR1",
+  "AZURITE_ACCOUNTS=",
+  "/run/secrets/azurite-account-key",
+])
+  if (!azuriteSupervisor.includes(token))
+    failures.push(`Azurite supervisor is missing ${token}`);
+if (azuriteSupervisor.includes("--skipApiVersionCheck"))
+  failures.push("Azurite supervisor bypasses exact API-version validation");
+const azureFixturePipeline = await source(
+  "tooling/production-gate/azure-sdk-fixture-pipeline.mjs",
+);
+for (const token of [
+  'AZURITE_API_VERSION = "2025-11-05"',
+  'request.headers.set("x-ms-version", AZURITE_API_VERSION)',
+])
+  if (!azureFixturePipeline.includes(token))
+    failures.push(`Azure fixture pipeline is missing ${token}`);
+
+const artifactObjectPackage = await source(
+  "packages/artifact-store-object/package.json",
+);
+const rootPackage = await source("package.json");
+for (const manifest of [artifactObjectPackage, rootPackage])
+  if (!manifest.includes('"@azure/storage-blob": "12.33.0"'))
+    failures.push("Azure SDK is not exactly pinned to 12.33.0");
+for (const token of [
+  "runAzureObjectProductionStage",
+  'passed("object_production_provider", evidence)',
+])
+  if (!gate.includes(token))
+    failures.push(`manual gate Azure closure is missing ${token}`);
 
 const objectRegression = await source(
   "tooling/production-gate/production-gate-object.test.mjs",
@@ -458,7 +600,7 @@ for (const token of [
   "s3:if-none-match",
   "x-amz-content-sha256",
   "ExistingObjectTag",
-  "object_provider_create_only_credential_unsupported",
+  "full Azure cloud parity",
 ])
   if (!productionGateRunbook.includes(token))
     failures.push(

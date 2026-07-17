@@ -9,29 +9,35 @@ import type {
   ArtifactMutationAuthority,
   ArtifactMutationAuthorityReceipt,
   ArtifactProvider,
+  ResultEntry,
 } from "@workload-funnel/workload-control/result-management";
 
 export interface ObjectRetentionClient {
   readonly capabilities: Readonly<{
+    exactResourceDeleteOnly: boolean;
     finalMutationFencing: boolean;
-    prefixDeleteOnly: boolean;
     retentionCredential: boolean;
   }>;
-  deletePrefixOnce(
+  deleteExactSetOnce(
     command: ObjectRetentionMutation,
   ): Promise<ObjectDeleteProviderReceipt>;
-  reconcilePrefix(
+  reconcileExactSet(
     command: ObjectRetentionMutation,
   ): Promise<ObjectDeleteReconciliationProviderReceipt>;
 }
 
 export interface ObjectRetentionMutation {
   readonly authority: ArtifactMutationAuthorityReceipt;
+  readonly expectedEntries: readonly ResultEntry[];
   readonly identity: string;
   readonly mutationFence: MutationFence;
   readonly operationId: string;
+  readonly reauthorize: (now: number) => ArtifactMutationAuthorityReceipt;
   readonly resultManifestId: string;
 }
+
+type BoundArtifactDeleteCommand = ArtifactDeleteCommand &
+  Readonly<{ expectedEntries: readonly ResultEntry[] }>;
 
 export interface ObjectDeleteProviderReceipt {
   readonly mutationFence: MutationFence;
@@ -54,14 +60,17 @@ export interface ObjectDeleteReconciliationProviderReceipt {
 }
 
 function mutationFor(
-  command: ArtifactDeleteCommand,
+  command: BoundArtifactDeleteCommand,
   authority: ArtifactMutationAuthorityReceipt,
+  reauthorize: (now: number) => ArtifactMutationAuthorityReceipt,
 ): ObjectRetentionMutation {
   return Object.freeze({
     authority,
+    expectedEntries: Object.freeze([...command.expectedEntries]),
     identity: command.immutableStagingIdentity,
     mutationFence: command.mutationFence,
     operationId: command.operationId,
+    reauthorize,
     resultManifestId: command.resultManifestId,
   });
 }
@@ -103,7 +112,9 @@ function assertFence(fence: MutationFence, manifestId: string): void {
     throw new Error("object_delete_fence_mismatch");
 }
 
-function assertStagingIdentity(command: ArtifactDeleteCommand): void {
+function assertStagingIdentity(
+  command: ArtifactDeleteCommand,
+): asserts command is BoundArtifactDeleteCommand {
   const stagingFence = command.stagingMutationFence;
   validateMutationFence(stagingFence);
   if (
@@ -118,6 +129,14 @@ function assertStagingIdentity(command: ArtifactDeleteCommand): void {
       `${stagingFence.allocationId ?? ""}/${stagingFence.executionGeneration}/${Buffer.from(command.stagingMutationFenceFingerprint).toString("base64url")}/${command.immutableStagingIdentity.split("/").at(-1) ?? ""}`
   )
     throw new Error("object_delete_scope_mismatch");
+  const expectedEntries = command.expectedEntries;
+  if (
+    expectedEntries?.length !== command.entryDigests.length ||
+    expectedEntries.some(
+      (entry, index) => entry.checksum !== command.entryDigests[index],
+    )
+  )
+    throw new Error("object_delete_entry_binding_mismatch");
 }
 
 export function createProvider(
@@ -126,7 +145,7 @@ export function createProvider(
   const nowMs = config.nowMs ?? Date.now;
   if (
     !config.client.capabilities.finalMutationFencing ||
-    !config.client.capabilities.prefixDeleteOnly ||
+    !config.client.capabilities.exactResourceDeleteOnly ||
     !config.client.capabilities.retentionCredential
   )
     throw new Error("object_store_retention_capability_missing");
@@ -137,12 +156,11 @@ export function createProvider(
     ): Promise<ArtifactDeleteReceipt> {
       assertFence(command.mutationFence, command.resultManifestId);
       assertStagingIdentity(command);
-      const authority = config.authority.authorize(
-        command.mutationFence,
-        nowMs(),
-      );
-      const receipt = await config.client.deletePrefixOnce(
-        mutationFor(command, authority),
+      const reauthorize = (at: number) =>
+        config.authority.authorize(command.mutationFence, at);
+      const authority = reauthorize(nowMs());
+      const receipt = await config.client.deleteExactSetOnce(
+        mutationFor(command, authority, reauthorize),
       );
       assertProviderReceipt(config, command, receipt);
       return receipt;
@@ -150,11 +168,10 @@ export function createProvider(
     async reconcileDelete(command: ArtifactDeleteCommand) {
       assertFence(command.mutationFence, command.resultManifestId);
       assertStagingIdentity(command);
-      const receipt = await config.client.reconcilePrefix(
-        mutationFor(
-          command,
-          config.authority.authorize(command.mutationFence, nowMs()),
-        ),
+      const reauthorize = (at: number) =>
+        config.authority.authorize(command.mutationFence, at);
+      const receipt = await config.client.reconcileExactSet(
+        mutationFor(command, reauthorize(nowMs()), reauthorize),
       );
       assertProviderReceipt(config, command, receipt);
       return Object.freeze({ ...receipt, reconciledAtMs: nowMs() });
@@ -162,3 +179,15 @@ export function createProvider(
     providerId: config.providerId,
   });
 }
+
+export {
+  AzureBlobRetentionError,
+  createAzureBlobExactRetentionClient,
+  createAzureBlobPrivateFixtureExactRetentionClient,
+  type AzureBlobExactRetentionClientConfig,
+  type AzureBlobPrivateFixtureExactRetentionClientConfig,
+  type AzureBlobRetentionCredential,
+  type AzureBlobRetentionDeleteCredentialProvider,
+  type AzureBlobRetentionReadCredentialProvider,
+  type AzureBlobRetentionSdkPort,
+} from "./azure-blob-exact-retention-client.js";

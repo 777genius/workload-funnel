@@ -377,26 +377,41 @@ export class GateDockerRuntime {
       host?.Tmpfs,
       expectedWritableStorage,
     );
+    const expectedEntrypoint =
+      expectedProcess?.entrypoint ?? MINIO_SUPERVISOR_ENTRYPOINT;
+    const expectedCommand =
+      expectedProcess?.command ?? MINIO_SUPERVISOR_COMMAND;
+    const environmentProven =
+      expectedProcess?.requiredEnvironment === undefined &&
+      expectedProcess?.forbiddenEnvironmentPrefixes === undefined
+        ? exactMinioCredentialFileEnvironment(container?.Env)
+        : Array.isArray(container?.Env) &&
+          (expectedProcess.requiredEnvironment ?? []).every(
+            (entry) =>
+              container.Env.filter((value) => value === entry).length === 1,
+          ) &&
+          !(expectedProcess.forbiddenEnvironmentPrefixes ?? []).some((prefix) =>
+            container.Env.some((entry) => entry.startsWith(prefix)),
+          );
     const processProven =
       expectedProcess === undefined ||
       (Array.isArray(expectedProcess.readOnlyMounts) &&
         expectedProcess.readOnlyMounts.length === 1 &&
-        expectedProcess.readOnlyMounts[0].destination ===
-          MINIO_SUPERVISOR_COMMAND[0] &&
+        expectedProcess.readOnlyMounts[0].destination === expectedCommand[0] &&
         this.allowedReadOnlyMounts.has(
           expectedProcess.readOnlyMounts[0].source,
         ) &&
         Array.isArray(container?.Entrypoint) &&
-        container.Entrypoint.length === MINIO_SUPERVISOR_ENTRYPOINT.length &&
+        container.Entrypoint.length === expectedEntrypoint.length &&
         container.Entrypoint.every(
-          (argument, index) => argument === MINIO_SUPERVISOR_ENTRYPOINT[index],
+          (argument, index) => argument === expectedEntrypoint[index],
         ) &&
         Array.isArray(container?.Cmd) &&
-        container.Cmd.length === MINIO_SUPERVISOR_COMMAND.length &&
+        container.Cmd.length === expectedCommand.length &&
         container.Cmd.every(
-          (argument, index) => argument === MINIO_SUPERVISOR_COMMAND[index],
+          (argument, index) => argument === expectedCommand[index],
         ) &&
-        exactMinioCredentialFileEnvironment(container?.Env));
+        environmentProven);
     const expectedReadOnlyMounts = [
       ...(Array.isArray(expectedSecretMounts) ? expectedSecretMounts : []),
       ...(Array.isArray(expectedProcess?.readOnlyMounts)
@@ -506,8 +521,8 @@ export class GateDockerRuntime {
         ? {}
         : {
             processSupervisor: Object.freeze({
-              command: Object.freeze([...MINIO_SUPERVISOR_COMMAND]),
-              entrypoint: Object.freeze([...MINIO_SUPERVISOR_ENTRYPOINT]),
+              command: Object.freeze([...expectedCommand]),
+              entrypoint: Object.freeze([...expectedEntrypoint]),
               readOnlyMount: Object.freeze({
                 ...expectedProcess.readOnlyMounts[0],
               }),

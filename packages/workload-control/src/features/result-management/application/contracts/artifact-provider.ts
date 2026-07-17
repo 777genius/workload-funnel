@@ -31,6 +31,7 @@ export interface ArtifactDeleteCommand {
   readonly resultManifestId: string;
   readonly immutableStagingIdentity: string;
   readonly entryDigests: readonly string[];
+  readonly expectedEntries?: readonly ResultEntry[];
   readonly mutationFence: MutationFence;
   readonly stagingMutationFence: MutationFence;
   readonly stagingMutationFenceFingerprint: string;

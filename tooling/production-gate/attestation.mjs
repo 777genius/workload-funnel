@@ -13,6 +13,7 @@ import { arch, release } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import {
+  AZURITE_FIXTURE_IMAGE,
   ARCHITECTURE_PLAN_SHA256,
   DISPOSABLE_HOST_ATTESTATION,
   GATE_SANDBOX_PARENT,
@@ -68,6 +69,7 @@ export function parseManualGateArguments(argv, environment) {
   const allowed = new Set([
     "--attestation",
     "--aws-executable",
+    "--azurite-image",
     "--docker-executable",
     "--evidence-path",
     "--hq-archive",
@@ -136,6 +138,7 @@ export function parseManualGateArguments(argv, environment) {
   return Object.freeze({
     attestation,
     awsExecutable: absoluteOption("--aws-executable"),
+    azuriteImage: required(values, "--azurite-image"),
     dockerExecutable: absoluteOption("--docker-executable"),
     evidencePath,
     hqArchive: absoluteOption("--hq-archive"),
@@ -160,6 +163,8 @@ export function parseManualGateArguments(argv, environment) {
 }
 
 export function validatePinnedImages(config) {
+  if (config.azuriteImage !== AZURITE_FIXTURE_IMAGE)
+    throw new GateAdmissionError("azurite_fixture_image_not_digest_pinned");
   if (config.postgresImage !== POSTGRES_FIXTURE_IMAGE)
     throw new GateAdmissionError("postgres_image_not_18_4_digest_pinned");
   if (config.objectImage !== OBJECT_FIXTURE_IMAGE)
@@ -469,10 +474,11 @@ export async function verifyReviewedHostInputs(config) {
     throw new GateAdmissionError("reviewed_workload_executable_not_nonroot");
   const images = exactObject(
     manifest.images,
-    ["objectClient", "objectFixture", "postgresFixture"],
+    ["azuriteFixture", "objectClient", "objectFixture", "postgresFixture"],
     "review_manifest_image_inventory_invalid",
   );
   if (
+    images.azuriteFixture !== config.azuriteImage ||
     images.postgresFixture !== config.postgresImage ||
     images.objectFixture !== config.objectImage ||
     images.objectClient !== config.objectClientImage
