@@ -721,6 +721,7 @@ async function main() {
         preciseClock: monotonicMilliseconds,
         reviewedExecutables: reviewed.executableSet,
         runner,
+        sliceOwnership,
         wait,
       });
       components.set(

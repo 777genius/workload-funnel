@@ -379,6 +379,8 @@ export async function waitForSystemdDescendantExit(
 }
 
 export async function runSystemdGateProbe(config) {
+  if (typeof config.sliceOwnership?.admit !== "function")
+    throw new Error("systemd_gate_slice_ownership_missing");
   const plan = await createMappedSystemdGatePlan({
     capabilityReport: config.capabilityReport,
     ioDevice: config.ioDevice,

@@ -69,6 +69,7 @@ import { evaluateMixedWorkloadSlo, percentile99 } from "./slo.mjs";
 import {
   exactSystemdPropertiesObserved,
   parseSystemctlShow,
+  runSystemdGateProbe,
   SYSTEMD_MEMORY_PROBE_BLOCK_BYTES,
   systemdMemoryProbeProperties,
   systemctlShowArguments,
@@ -1087,6 +1088,12 @@ describe("systemd and SLO contracts", () => {
         200,
       ),
     ).rejects.toThrow("systemd_descendant_survived_control_group_stop");
+  });
+
+  it("fails closed when the systemd slice ownership dependency is missing", async () => {
+    await expect(runSystemdGateProbe({})).rejects.toThrow(
+      "systemd_gate_slice_ownership_missing",
+    );
   });
 
   it("computes bounded p99 and rejects failed protected control", () => {

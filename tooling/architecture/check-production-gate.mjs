@@ -84,6 +84,12 @@ if (/\bexec\s*\(/u.test(runner) || runner.includes("shell: true"))
 
 const gate = await source("tooling/production-gate/run.mjs");
 if (
+  !/runSystemdGateProbe\(\{[\s\S]*?\n\s*sliceOwnership,\n[\s\S]*?\}\);/u.test(
+    gate,
+  )
+)
+  failures.push("manual gate omits systemd slice ownership wiring");
+if (
   gate.indexOf("config = parseManualGateArguments") >
     gate.indexOf("new BoundedCommandRunner") ||
   !gate.includes("createOwnedSandbox")
