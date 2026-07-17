@@ -56,6 +56,13 @@ export async function runMemoryPressureFixture({ allocateChunk, markReady }) {
     await allocateChunk(index, "post-ready");
 }
 
+export async function primeIoPressureFixture({ markReady, writeCycle }) {
+  if (typeof markReady !== "function" || typeof writeCycle !== "function")
+    throw new Error("pressure_io_fixture_input_invalid");
+  await writeCycle();
+  await markReady();
+}
+
 function exactObject(value, expected) {
   return (
     value !== null &&

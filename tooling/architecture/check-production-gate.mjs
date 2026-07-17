@@ -734,6 +734,7 @@ for (const token of [
   "writtenBytes: PRESSURE_FIXTURE_DISK_TARGET_BYTES",
   "createdFiles: 3_200",
   "parsePressureFixtureReadiness",
+  "primeIoPressureFixture",
 ])
   if (!pressureFixtureProtocol.includes(token))
     failures.push(`pressure priming protocol is missing ${token}`);
@@ -765,9 +766,12 @@ for (const token of [
   "PRESSURE_FIXTURE_DISK_TARGET_BYTES",
   "PRESSURE_FIXTURE_IO_TARGET_BYTES",
   "length: PRESSURE_FIXTURE_CPU_WORKER_COUNT",
+  "primeIoPressureFixture",
 ])
   if (!pressureFixture.includes(token))
-    failures.push(`pressure CPU fixture is missing protocol-owned ${token}`);
+    failures.push(`pressure fixture is missing protocol-owned ${token}`);
+if (pressureFixture.includes("for (;;) await writeCycle()"))
+  failures.push("pressure IO fixture repeats the full sync cycle unboundedly");
 
 const mixedLoad = await source("tooling/production-gate/mixed-load.mjs");
 for (const token of [
@@ -818,12 +822,15 @@ for (const token of [
     failures.push(`pressure fixture readiness is missing ${token}`);
 for (const token of [
   "encodePressureFixtureReadiness(mode)",
-  "await writeCycle();\n  await ready();",
   "await rename(temporary, marker)",
   'parentPort.postMessage("primed")',
 ])
   if (!pressureFixture.includes(token))
     failures.push(`pressure fixture priming is missing ${token}`);
+if (
+  !pressureFixtureProtocol.includes("await writeCycle();\n  await markReady();")
+)
+  failures.push("pressure IO priming does not precede readiness exactly once");
 
 const hyperQueueContract = await source(
   "tooling/production-gate/hyperqueue-contract.mjs",

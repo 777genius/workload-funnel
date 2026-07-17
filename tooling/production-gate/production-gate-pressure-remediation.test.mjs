@@ -7,6 +7,7 @@ import { runMixedWorkloadMeasurement } from "./mixed-load.mjs";
 import {
   encodePressureFixtureReadiness,
   parsePressureFixtureReadiness,
+  primeIoPressureFixture,
   pressureFixturePrimedState,
   runMemoryPressureFixture,
   PRESSURE_FIXTURE_CPU_WORKER_COUNT,
@@ -40,6 +41,22 @@ function missingReady() {
 }
 
 describe("pressure fixture priming and bounded lifetime", () => {
+  it("performs one exact IO sync before readiness without a tight steady-state loop", async () => {
+    const events = [];
+    await primeIoPressureFixture({
+      markReady: async () => events.push("ready"),
+      writeCycle: async () => events.push("write"),
+    });
+    expect(events).toStrictEqual(["write", "ready"]);
+
+    const fixtureSource = await readFile(
+      new URL("./fixtures/pressure-load.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(fixtureSource).toContain("primeIoPressureFixture");
+    expect(fixtureSource).not.toContain("for (;;) await writeCycle()");
+  });
+
   it("uses the protocol-owned exact two-worker CPU target", async () => {
     expect(PRESSURE_FIXTURE_CPU_WORKER_COUNT).toBe(2);
     expect(pressureFixturePrimedState("cpu")).toStrictEqual({

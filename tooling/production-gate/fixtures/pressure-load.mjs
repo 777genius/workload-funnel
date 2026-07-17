@@ -10,6 +10,7 @@ import {
   PRESSURE_FIXTURE_IO_TARGET_BYTES,
   PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
+  primeIoPressureFixture,
   runMemoryPressureFixture,
 } from "../pressure-fixture-protocol.mjs";
 
@@ -82,9 +83,7 @@ if (mode === "io") {
       await descriptor.write(block, 0, block.byteLength, offset);
     await descriptor.sync();
   };
-  await writeCycle();
-  await ready();
-  for (;;) await writeCycle();
+  await primeIoPressureFixture({ markReady: ready, writeCycle });
 }
 
 if (mode === "disk")
