@@ -580,6 +580,10 @@ describe("systemd 255 production-gate compatibility", () => {
     try {
       const probeIo = createSystemdProbeIo({});
       await expect(probeIo.readDescendantPids(root)).resolves.toBeUndefined();
+      await writeFile(join(root, "descendants.json"), "");
+      await expect(probeIo.readDescendantPids(root)).rejects.toThrow(
+        "systemd_descendant_manifest_invalid",
+      );
       await writeFile(
         join(root, "descendants.json"),
         `${JSON.stringify([41, 42])}\n`,

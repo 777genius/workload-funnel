@@ -183,7 +183,12 @@ export function createSystemdProbeIo(config) {
         if (error?.code === "ENOENT") return undefined;
         throw error;
       }
-      const value = JSON.parse(serialized);
+      let value;
+      try {
+        value = JSON.parse(serialized);
+      } catch {
+        throw new Error("systemd_descendant_manifest_invalid");
+      }
       if (
         !Array.isArray(value) ||
         value.length < 2 ||

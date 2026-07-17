@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers";
 
 const [mode, root] = process.argv.slice(2);
@@ -55,9 +55,12 @@ const descendants = [
     stdio: "ignore",
   }),
 ];
+const descendantManifest = `${root}/descendants.json`;
+const pendingDescendantManifest = `${descendantManifest}.${String(process.pid)}.tmp`;
 await writeFile(
-  `${root}/descendants.json`,
+  pendingDescendantManifest,
   `${JSON.stringify(descendants.map((child) => child.pid))}\n`,
   { mode: 0o600 },
 );
+await rename(pendingDescendantManifest, descendantManifest);
 await new Promise(() => undefined);
