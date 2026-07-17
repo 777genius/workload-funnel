@@ -1,5 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import {
+  chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -80,6 +82,16 @@ import { exerciseTrustedLauncherFenceMatrix } from "./trusted-launcher-fence-mat
 let helperRoot = "";
 let artifactHelper = "";
 let sealerHelper = "";
+
+async function makeTreeRemovable(path: string): Promise<void> {
+  const metadata = await lstat(path);
+  if (!metadata.isDirectory()) return;
+  await chmod(path, (metadata.mode & 0o777) | 0o700);
+  const entries = await readdir(path);
+  await Promise.all(
+    entries.map((entry) => makeTreeRemovable(join(path, entry))),
+  );
+}
 
 beforeAll(async () => {
   helperRoot = await mkdtemp(join(tmpdir(), "wf-full-lifecycle-helpers-"));
@@ -792,6 +804,7 @@ describe("full synthetic WorkloadFunnel product lifecycle E2E", () => {
         ),
       ).toBe("current");
     } finally {
+      await makeTreeRemovable(root);
       await rm(root, { force: true, recursive: true });
     }
   });

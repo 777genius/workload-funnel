@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -56,6 +57,13 @@ const keys = generateKeyPairSync("ed25519");
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function makeTreeRemovable(path: string): void {
+  const metadata = lstatSync(path);
+  if (!metadata.isDirectory()) return;
+  chmodSync(path, (metadata.mode & 0o777) | 0o700);
+  for (const entry of readdirSync(path)) makeTreeRemovable(join(path, entry));
 }
 
 function fence(): MutationFence {
@@ -175,8 +183,10 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  for (const root of roots.splice(0))
+  for (const root of roots.splice(0)) {
+    makeTreeRemovable(root);
     rmSync(root, { force: true, recursive: true });
+  }
 });
 
 describe("Linux descriptor-pinned result sealing", () => {
