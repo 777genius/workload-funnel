@@ -3,6 +3,7 @@ export {
   SCHEDULER_GATEWAY_PROTOCOL,
   type AuthorizedHyperQueueMutation,
   type HyperQueueCancelMutation,
+  type HyperQueueDispatchMapping,
   type HyperQueueMutation,
   type HyperQueueSubmitMutation,
   type MutateHyperQueueRequest,
@@ -28,6 +29,14 @@ export {
   validateMutationRequest,
   validateSchedulerMutationScope,
 } from "./domain/gateway-validation.js";
+export {
+  canonicalHyperQueueOperationJobName,
+  HYPERQUEUE_ADAPTER_CONTRACT_VERSION,
+  HYPERQUEUE_ADAPTER_KEY,
+  HYPERQUEUE_OPERATION_NAME_CONTRACT,
+  validateCanonicalHyperQueueOperationJobName,
+  type HyperQueueSubmitOperationIdentity,
+} from "./application/operation-name.js";
 export {
   compareInstalledSchedulerFence,
   type InstalledFenceComparison,

@@ -9,7 +9,7 @@ export const GATE_SANDBOX_PARENT = "/var/data/workload-funnel/sandboxes";
 export const REVIEW_MANIFEST_SCHEMA =
   "workload-funnel.production-gate.review-manifest.v1";
 export const ARCHITECTURE_PLAN_SHA256 =
-  "63d0945eedc7884f4419597cb4e19c2c541b103f0458c011d557b24e4f1bccbf";
+  "73dffc99721b929e1e2b109d62f38263f433adb9534bb5fa545978a8c851ccdf";
 export const POSTGRES_FIXTURE_IMAGE =
   "postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15";
 export const OBJECT_FIXTURE_IMAGE =

@@ -59,18 +59,21 @@ describe(
       expect(capabilities.available).not.toEqual(
         expect.arrayContaining([
           "hard_process_ownership",
-          "lookup_by_operation_id",
           "never_restart",
           "process_tree_cancellation",
           "submit_idempotency",
           "tenant_isolation",
         ]),
       );
+      expect(capabilities.available).not.toContain("lookup_by_operation_id");
       expect(capabilities.refusalReasons).toEqual(
-        expect.arrayContaining([
-          "production_pin_unapproved",
-          "ambiguous_submit_lookup_unsupported",
-        ]),
+        expect.arrayContaining(["production_pin_unapproved"]),
+      );
+      expect(capabilities.refusalReasons).toContain(
+        "ambiguous_submit_disposable_probe_missing",
+      );
+      expect(capabilities.refusalReasons).toContain(
+        "ambiguous_live_submit_cancellation_unproven",
       );
       expect(capabilities.limitations).toEqual(
         expect.arrayContaining([
@@ -85,13 +88,17 @@ describe(
       expect(CHECKED_HYPERQUEUE_PRODUCTION_GATE).toMatchObject({
         approvedProductionChecksum: null,
         approvedProductionVersion: null,
+        ambiguousLiveSubmitCancellationProven: false,
         ambiguousSubmitLookupProven: false,
         cancellationProcessTreeProven: false,
         durableObservationSequenceProven: true,
+        mappingCreateOnlyProven: false,
         neverRestartProven: false,
+        operationNameContract: "workload-funnel.hq-operation-name.v1",
         productionPolicyProfileApproved: false,
         securityReviewApproved: false,
         upstreamRiskDecisionApproved: false,
+        unresolvedOperationRetentionProven: false,
       });
       const environment = createSyntheticGatewayEnvironment();
       environments.push(environment);
@@ -116,7 +123,6 @@ describe(
       const submitted = await submission.submitAfterInstall({
         acknowledgedInstall: submitAck,
         dispatchId: "dispatch-1",
-        jobName: "wf-dispatch-1",
         mappingFingerprint: "mapping-fingerprint-1",
         mutationFence: submitFence,
         operationId: "submit-operation-1",
@@ -256,7 +262,6 @@ describe(
       ).submitAfterInstall({
         acknowledgedInstall: acknowledgement,
         dispatchId: "dispatch-restart",
-        jobName: "wf-dispatch-restart",
         mappingFingerprint: "mapping-fingerprint-restart",
         mutationFence: submitFence,
         operationId: "submit-server-restart",
@@ -345,7 +350,7 @@ describe(
       });
       expect(decision).toEqual({
         disposition: "reconciliation_required",
-        reason: "ambiguous_submit_lookup_by_operation_unsupported",
+        reason: "deterministic_operation_lookup_unresolved",
         resubmit: false,
       });
     });

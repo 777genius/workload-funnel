@@ -21,7 +21,6 @@ import {
 export interface HyperQueueSubmissionInput {
   readonly acknowledgedInstall: SignedSchedulerFenceInstallAcknowledgement;
   readonly dispatchId: string;
-  readonly jobName: string;
   readonly mappingFingerprint: string;
   readonly mutationFence: MutationFence;
   readonly operationId: string;
@@ -63,7 +62,6 @@ export function createHyperQueueSubmitMutation(
     operationId: input.operationId,
     payload: Object.freeze({
       dispatchId: input.dispatchId,
-      jobName: input.jobName,
       kind: "submit",
       mappingFingerprint: input.mappingFingerprint,
       requestedCpuCount: input.requestedCpuCount,

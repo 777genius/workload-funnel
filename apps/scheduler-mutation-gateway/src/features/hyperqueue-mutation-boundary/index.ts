@@ -14,9 +14,16 @@ import {
   type CredentialedHyperQueueExecutor,
   type HyperQueueCliExecution,
   type HyperQueueCliLimits,
+  type HyperQueueCliMutationResult,
 } from "@workload-funnel/scheduler-hyperqueue/hyperqueue-cli-mutation";
 import {
+  ExactVersionHyperQueueOperationLookup,
+  validateCanonicalHyperQueueOperationJobName,
+} from "@workload-funnel/scheduler-hyperqueue/operation-lookup";
+import {
+  GatewayContractError,
   snapshotMutationRequest,
+  type AuthorizedHyperQueueMutation,
   type MutateHyperQueueRequest,
   type SchedulerMutationGatewayClient,
 } from "@workload-funnel/scheduler-hyperqueue/mutation-gateway-authority";
@@ -32,12 +39,15 @@ export interface GatewayCredentialConfig {
 export interface GatewayCliReleaseConfig {
   readonly exactVersion: string;
   readonly expectedBinarySha256: string;
-  readonly limits: HyperQueueCliLimits;
+  readonly limits: HyperQueueCliLimits & {
+    readonly maxRetainedJobs: number;
+  };
   readonly shimExecutable: string;
 }
 
 export interface GatewayMutationFaults {
   afterCliCall?(): void;
+  afterMappingPersist?(): void;
   beforeFinalValidationWait?(request: MutateHyperQueueRequest): Promise<void>;
 }
 
@@ -88,6 +98,13 @@ class GatewayCredentialedExecutor implements CredentialedHyperQueueExecutor {
     return Object.freeze(result);
   }
 
+  public async executeLookup(
+    args: readonly string[],
+    limits: HyperQueueCliLimits,
+  ): Promise<HyperQueueCliExecution> {
+    return this.executeMutation(args, limits);
+  }
+
   public async verifyRelease(
     expectedVersionOutput: string,
     expectedBinarySha256: string,
@@ -107,7 +124,7 @@ class GatewayCredentialedExecutor implements CredentialedHyperQueueExecutor {
       limits,
     );
     if (
-      result.stdout.trim() !== expectedVersionOutput ||
+      result.stdout !== `${expectedVersionOutput}\n` ||
       result.stderr.length > 0
     )
       throw new Error("hyperqueue_exact_version_mismatch");
@@ -218,6 +235,7 @@ export class HyperQueueMutationBoundary implements Pick<
   "mutate"
 > {
   readonly #cli: ExactVersionHyperQueueCliMutation;
+  readonly #lookup: ExactVersionHyperQueueOperationLookup;
 
   public constructor(
     private readonly registry: GatewayAuthorityRegistry,
@@ -225,12 +243,17 @@ export class HyperQueueMutationBoundary implements Pick<
     release: GatewayCliReleaseConfig,
     private readonly faults: GatewayMutationFaults = {},
   ) {
+    const executor = new GatewayCredentialedExecutor(credential);
     this.#cli = new ExactVersionHyperQueueCliMutation({
       exactVersion: release.exactVersion,
-      executor: new GatewayCredentialedExecutor(credential),
+      executor,
       expectedBinarySha256: release.expectedBinarySha256,
       limits: release.limits,
       shimExecutable: release.shimExecutable,
+    });
+    this.#lookup = new ExactVersionHyperQueueOperationLookup(executor, {
+      exactVersion: release.exactVersion,
+      limits: release.limits,
     });
   }
 
@@ -258,14 +281,33 @@ export class HyperQueueMutationBoundary implements Pick<
     return this.registry.queueMutation(immutableRequest, async () => {
       const prepared = this.registry.prepareMutation(immutableRequest);
       if (prepared.kind === "receipt") return prepared.receipt;
+      if (immutableRequest.payload.kind === "submit") {
+        try {
+          await this.#lookup.assertSubmitCapacity(
+            this.submitOperationIdentity(prepared.authorization),
+          );
+        } catch (error) {
+          if (error instanceof GatewayPreMutationRefusal)
+            return this.registry.completeMutation(prepared.authorization, {
+              outcome: "rejected",
+              reason: error.code,
+            });
+          const reason = this.lookupFailureReason(error);
+          if (reason === "hyperqueue_retained_history_ceiling_reached")
+            return this.registry.completeMutation(prepared.authorization, {
+              outcome: "rejected",
+              reason,
+            });
+          return this.registry.completeRejectedAndCordon(
+            prepared.authorization,
+            reason,
+          );
+        }
+      }
+      let result: HyperQueueCliMutationResult;
       try {
-        const result = await this.#cli.mutate(prepared.authorization);
+        result = await this.#cli.mutate(prepared.authorization);
         this.faults.afterCliCall?.();
-        return this.registry.completeMutation(prepared.authorization, {
-          externalMappingOrInvocationId: result.externalReference,
-          outcome: "applied",
-          reason: "hyperqueue_cli_applied",
-        });
       } catch (error) {
         if (error instanceof SimulatedGatewayCrash) throw error;
         if (error instanceof GatewayPreMutationRefusal)
@@ -273,11 +315,172 @@ export class HyperQueueMutationBoundary implements Pick<
             outcome: "rejected",
             reason: error.code,
           });
+        if (immutableRequest.payload.kind === "submit")
+          return this.reconcileAmbiguousSubmit(prepared.authorization);
         return this.registry.completeMutation(prepared.authorization, {
           outcome: "unknown",
           reason: "hyperqueue_cli_outcome_ambiguous",
         });
       }
+      if (immutableRequest.payload.kind === "submit") {
+        try {
+          this.persistSubmitMapping(prepared.authorization, {
+            canonicalJobName: prepared.authorization.canonicalJobName,
+            jobId: result.jobId,
+            taskId: "0",
+          });
+        } catch (error) {
+          if (error instanceof SimulatedGatewayCrash) throw error;
+          if (error instanceof GatewayContractError)
+            return this.registry.completeUnknownAndCordon(
+              prepared.authorization,
+              "ambiguous_submit_mapping_conflict",
+            );
+          throw error;
+        }
+      }
+      return this.registry.completeMutation(prepared.authorization, {
+        externalMappingOrInvocationId: result.externalReference,
+        outcome: "applied",
+        reason: "hyperqueue_cli_applied",
+      });
+    });
+  }
+
+  public async reconcileUnresolved(
+    authorization: AuthorizedHyperQueueMutation,
+  ) {
+    return this.registry.queueMutation(authorization.request, async () => {
+      const mapping = this.registry.dispatchMapping(
+        authorization.request.operationId,
+      );
+      if (mapping !== undefined)
+        return this.registry.completeMutation(authorization, {
+          externalMappingOrInvocationId: mapping.adapterReference,
+          outcome: "applied",
+          reason: "gateway_recovered_durable_dispatch_mapping",
+        });
+      if (authorization.request.payload.kind === "submit")
+        return await this.reconcileAmbiguousSubmit(authorization);
+      return this.registry.completeUnknownAndCordon(
+        authorization,
+        "gateway_recovered_unresolved_cli_intent",
+      );
+    });
+  }
+
+  private async reconcileAmbiguousSubmit(
+    authorization: AuthorizedHyperQueueMutation,
+  ) {
+    const jobName = authorization.canonicalJobName;
+    if (jobName === undefined)
+      return this.registry.completeUnknownAndCordon(
+        authorization,
+        "ambiguous_submit_job_name_missing",
+      );
+    try {
+      validateCanonicalHyperQueueOperationJobName(
+        this.submitOperationIdentity(authorization),
+        jobName,
+      );
+      const lookup = await this.#lookup.lookup(
+        this.submitOperationIdentity(authorization),
+      );
+      if (lookup.disposition === "zero")
+        return this.registry.completeUnknownAndCordon(
+          authorization,
+          "ambiguous_submit_lookup_zero_matches",
+        );
+      if (lookup.disposition === "multiple")
+        return this.registry.completeUnknownAndCordon(
+          authorization,
+          "ambiguous_submit_lookup_multiple_matches",
+        );
+      const match = lookup.matches[0];
+      if (match?.jobName !== jobName)
+        return this.registry.completeUnknownAndCordon(
+          authorization,
+          "ambiguous_submit_lookup_incomplete",
+        );
+      this.persistSubmitMapping(authorization, {
+        canonicalJobName: match.jobName,
+        jobId: match.jobId,
+        taskId: match.taskId,
+      });
+      return this.registry.completeMutation(authorization, {
+        externalMappingOrInvocationId: `hq://${match.jobId}`,
+        outcome: "applied",
+        reason: "hyperqueue_operation_name_correlated",
+      });
+    } catch (error) {
+      if (error instanceof SimulatedGatewayCrash) throw error;
+      if (error instanceof GatewayContractError)
+        return this.registry.completeUnknownAndCordon(
+          authorization,
+          "ambiguous_submit_mapping_conflict",
+        );
+      return this.registry.completeUnknownAndCordon(
+        authorization,
+        this.lookupFailureReason(error),
+      );
+    }
+  }
+
+  private persistSubmitMapping(
+    authorization: AuthorizedHyperQueueMutation,
+    result: Readonly<{
+      canonicalJobName: string | undefined;
+      jobId: string;
+      taskId: "0";
+    }>,
+  ): void {
+    if (result.canonicalJobName === undefined)
+      throw new GatewayContractError(
+        "operation_conflict",
+        "canonical_job_name_missing",
+      );
+    this.registry.persistDispatchMapping(authorization, {
+      canonicalJobName: result.canonicalJobName,
+      jobId: result.jobId,
+      taskId: result.taskId,
+    });
+    this.faults.afterMappingPersist?.();
+  }
+
+  private lookupFailureReason(error: unknown): string {
+    const message = error instanceof Error ? error.message : "";
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? (error as { readonly code?: unknown }).code
+        : undefined;
+    if (
+      message === "hyperqueue_operation_lookup_output_limit_exceeded" ||
+      code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+    )
+      return "ambiguous_submit_lookup_oversized";
+    if (message === "hyperqueue_operation_lookup_incomplete")
+      return "ambiguous_submit_lookup_incomplete";
+    if (message === "hyperqueue_operation_lookup_malformed")
+      return "ambiguous_submit_lookup_malformed";
+    if (message === "hyperqueue_retained_history_ceiling_reached")
+      return "hyperqueue_retained_history_ceiling_reached";
+    if (message === "hyperqueue_retained_history_ceiling_exceeded")
+      return "hyperqueue_retained_history_ceiling_exceeded";
+    if (message === "hyperqueue_operation_job_name_collision")
+      return "hyperqueue_operation_job_name_collision";
+    return "ambiguous_submit_lookup_invalid";
+  }
+
+  private submitOperationIdentity(authorization: AuthorizedHyperQueueMutation) {
+    const payload = authorization.request.payload;
+    if (payload.kind !== "submit")
+      throw new GatewayContractError("operation_conflict", "submit_identity");
+    return Object.freeze({
+      mappingFingerprint: payload.mappingFingerprint,
+      mutationFenceFingerprint: authorization.request.mutationFenceFingerprint,
+      operationId: authorization.request.operationId,
+      requestFingerprint: authorization.requestFingerprint,
+      schedulerInstanceId: authorization.request.scope.schedulerInstanceId,
     });
   }
 }

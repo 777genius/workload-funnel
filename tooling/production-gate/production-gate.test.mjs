@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { URL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -816,6 +817,56 @@ describe("S3-compatible contract", () => {
 });
 
 describe("official HyperQueue 0.26.2 translation", () => {
+  it("cannot bypass the built gateway and WAL lifecycle with standalone lookup", async () => {
+    const [contract, probe, runbook, runner] = await Promise.all([
+      readFile(new URL("./hyperqueue-contract.mjs", import.meta.url), "utf8"),
+      readFile(
+        new URL("./fixtures/hyperqueue-gateway-probe.mjs", import.meta.url),
+        "utf8",
+      ),
+      readFile(
+        new URL(
+          "../../docs/operations/disposable-host-production-readiness-gate.md",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(new URL("./run.mjs", import.meta.url), "utf8"),
+    ]);
+    const submitRecovery = probe.slice(
+      probe.indexOf("async function submitAndRecover"),
+      probe.indexOf("async function retainedLookup"),
+    );
+    expect(contract).not.toContain("operationLookupModuleUrl");
+    expect(contract).not.toContain("gateway_lookup_restarted");
+    expect(probe).not.toContain("ExactVersionHyperQueueOperationLookup");
+    expect(runner).toContain("hyperQueueGatewayProbeScript");
+    expect(submitRecovery).toContain("createSchedulerMutationGateway");
+    expect(submitRecovery).toContain("startSchedulerMutationGateway");
+    expect(submitRecovery).toContain("afterCliCall()");
+    expect(submitRecovery).toContain("await initial.mutate(request)");
+    expect(submitRecovery).toContain("await restarted.mutate(request)");
+    expect(submitRecovery).not.toContain(
+      "new ExactVersionHyperQueueOperationLookup",
+    );
+    expect(probe).toContain("retainedExactJobMatches: retained.matches.length");
+    expect(contract).toContain(
+      "postRestartGatewayEvidence.retainedExactJobMatches",
+    );
+    expect(contract).toContain(
+      'submitResponse: "lost_after_cli_result_before_mapping_persist"',
+    );
+    const dishonestCanceledLabel = ["retained", "CanceledMatches"].join("");
+    const inaccurateResponseLabel = ["discarded", "without", "inspection"].join(
+      "_",
+    );
+    expect(`${contract}\n${probe}\n${runbook}`).not.toContain(
+      dishonestCanceledLabel,
+    );
+    expect(contract).not.toContain(inaccurateResponseLabel);
+    expect(runbook).toContain("`retainedExactJobMatches=1`");
+  });
+
   it("stops the exact worker before its server and never advances past an uncertain worker stop", async () => {
     const server = Object.freeze({ invocationId: "server", role: "hq-server" });
     const worker = Object.freeze({ invocationId: "worker", role: "hq-worker" });
@@ -828,6 +879,13 @@ describe("official HyperQueue 0.26.2 translation", () => {
       stopHyperQueueCompatibilityProcesses({ server, stopProcess, worker }),
     ).resolves.toBeUndefined();
     expect(order).toEqual([worker, server]);
+    await expect(
+      stopHyperQueueCompatibilityProcesses({
+        server: undefined,
+        stopProcess,
+        worker: undefined,
+      }),
+    ).resolves.toBeUndefined();
 
     const uncertainStop = vi.fn((process) => {
       if (process === worker)

@@ -80,6 +80,12 @@ const minioSupervisorScript = fileURLToPath(
 const systemdFixturePath = fileURLToPath(
   new URL("./fixtures/systemd-workload.mjs", import.meta.url),
 );
+const hyperQueueGatewayProbeScript = fileURLToPath(
+  new URL("./fixtures/hyperqueue-gateway-probe.mjs", import.meta.url),
+);
+const hyperQueueSyntheticShim = fileURLToPath(
+  new URL("./fixtures/hyperqueue-synthetic-shim.mjs", import.meta.url),
+);
 const wait = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -642,6 +648,8 @@ async function main() {
       const serverDirectory = `${allocation.root}/hq-server`;
       await mkdir(serverDirectory, { mode: 0o700 });
       await chown(serverDirectory, allocation.uid, allocation.gid);
+      const gatewayWalPath = `${allocation.root}/hq-gateway/authority.wal`;
+      const operationKey = `${config.runId}-hq-job`;
       let hqServerUnit;
       let hqCommandSequence = 0;
       const confinedRunner = Object.freeze({
@@ -662,30 +670,55 @@ async function main() {
         archivePath: config.hqArchive,
         binaryPath: config.hqBinary,
         clock: Date.now,
-        jobName: `${config.runId}-hq-job`,
-        nodeExecutable: config.nodeExecutable,
+        executeGatewayProbe: (input) =>
+          processManager.execute(
+            config.nodeExecutable,
+            [
+              hyperQueueGatewayProbeScript,
+              "--binary",
+              config.hqBinary,
+              "--binary-sha256",
+              input.binarySha256,
+              "--operation",
+              input.operation,
+              "--operation-key",
+              operationKey,
+              "--server-directory",
+              serverDirectory,
+              "--shim-executable",
+              hyperQueueSyntheticShim,
+              "--wal-path",
+              gatewayWalPath,
+            ],
+            input.operation === "submit-and-recover"
+              ? "hq-gateway-submit"
+              : "hq-gateway-replay",
+            {
+              joinNetworkOf: hqServerUnit,
+              limits: { timeoutMs: 25_000 },
+            },
+          ),
+        gatewayWalPath,
+        jobName: operationKey,
         runner: confinedRunner,
         serverDirectory,
         startProcess: async (executable, args, role, options) => {
           const process = await processManager.start(executable, args, role, {
             ...options,
-            joinNetworkOf: role === "hq-server" ? undefined : hqServerUnit,
+            joinNetworkOf: role.startsWith("hq-server")
+              ? undefined
+              : hqServerUnit,
           });
-          if (role === "hq-server") hqServerUnit = process.unit;
+          if (role.startsWith("hq-server")) hqServerUnit = process.unit;
           return process;
         },
         stopProcess: (process) => processManager.stop(process),
+        syntheticShimExecutable: hyperQueueSyntheticShim,
         wait,
       });
       components.set(
         "hyperqueue_0_26_2",
-        blocked("hyperqueue_0_26_2", "ambiguous_submit_lookup_unsupported", [
-          evidenceRecord(
-            "hyperqueue_official_cli_real_evidence",
-            true,
-            evidence,
-          ),
-        ]),
+        passed("hyperqueue_0_26_2", evidence),
       );
     } catch (error) {
       components.set(

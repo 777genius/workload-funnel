@@ -25,7 +25,7 @@ The gate requires all of the following before its first host-side effect:
   the HyperQueue archive, excluding only VCS/session, dependency, coverage, and
   cache directories, with no reviewed-tree symlinks;
 - architecture-plan SHA-256
-  `63d0945eedc7884f4419597cb4e19c2c541b103f0458c011d557b24e4f1bccbf`;
+  `73dffc99721b929e1e2b109d62f38263f433adb9534bb5fa545978a8c851ccdf`;
 - canonical root-owned executable files and ancestor directories, no writable
   executable, exact mode and SHA-256, and identity revalidation before every
   spawn;
@@ -228,8 +228,32 @@ Current repository closure is intentionally fail-closed:
   It also proves exact state across a server-process restart in a stable
   container/tmpfs boundary. Azurite exercises the official Azure API permission
   contract but is explicitly not claimed as full Azure cloud parity;
-- HyperQueue uses restart-durable fsynced ordering and exact post-cancel
-  observation, but 0.26.2 lacks operation-ID lookup for ambiguous submit;
+- HyperQueue 0.26.2 uses restart-durable fsynced gateway intent and create-only
+  mapping ordering, a gateway-derived bounded non-secret digest name over the
+  complete persisted submit intent, exact pinned job-list rows, and exact
+  post-cancel observation. The digest has fail-closed collision handling and is
+  not claimed mathematically injective. The gate performs one real submit,
+  deliberately loses its response only after the actual built
+  `HyperQueueMutationBoundary` submit runner returns. It restarts the built
+  `SchedulerMutationGatewayClient` composition on the same fsynced WAL/mapping
+  state, resolves and replays the durable receipt through the public gateway
+  API, restarts the server on the same journal, and proves the same retained job,
+  the configured history ceiling, stable WAL on retry, and exactly one submit.
+  Its post-restart lookup evidence is `retainedExactJobMatches=1`: exact retained
+  name, job ID, count, and schema, without claiming that lookup re-proves the
+  canceled task state.
+  The response-loss path cannot be replaced by a standalone lookup probe.
+  Invalid output fails closed, zero is never absence, and no unresolved name is
+  eligible for pruning or forgetting. Gateway WAL v1 is intentionally
+  migration-blocked; only v2 carries this contract. The schema remains the
+  exact HyperQueue 0.26.2 evidence from upstream commit `dd15afd`. The repository
+  capability booleans stay false until that disposable evidence is reviewed.
+  Cancellation of an ambiguous live submit without one exact mapping remains
+  unproved and is a separate blocker.
+  The adapter does not claim native submit idempotency or exactly-once
+  execution. Broader HyperQueue production approval remains closed by the
+  separately reported pin, worker restart, process ownership, isolation,
+  security, fallback, and upstream-risk decisions;
 - the running systemd manager, cgroup controllers, and required unit properties
   are probed with read-only `systemctl` plus non-mutating `systemd-analyze
 verify`. The reviewed native helper then applies and reads back exact byte and

@@ -43,6 +43,7 @@ const expectedSchedulerFeatures = [
   "hyperqueue-cli-mutation",
   "hyperqueue-reconciliation",
   "mutation-gateway-authority",
+  "operation-lookup",
   "worker-inventory",
 ];
 const schedulerFeatures = readdirSync(schedulerRoot)
@@ -154,17 +155,21 @@ const capabilitySource = readFileSync(
 for (const required of [
   "approvedProductionChecksum: null",
   "approvedProductionVersion: null",
+  "ambiguousLiveSubmitCancellationProven: false",
   "ambiguousSubmitLookupProven: false",
   "cancellationProcessTreeProven: false",
   "credentialCustodyProven: false",
   "durableObservationSequenceProven: true",
   "fallbackExecutionTested: false",
+  "mappingCreateOnlyProven: false",
   "neverRestartProven: false",
+  'operationNameContract: "workload-funnel.hq-operation-name.v1"',
   "productionPolicyProfileApproved: false",
   "productionEnabled: false",
   "replayClassMappingApproved: false",
   "securityReviewApproved: false",
   "upstreamRiskDecisionApproved: false",
+  "unresolvedOperationRetentionProven: false",
 ]) {
   if (!capabilitySource.includes(required))
     fail(`fail-closed research capability is missing ${required}`);

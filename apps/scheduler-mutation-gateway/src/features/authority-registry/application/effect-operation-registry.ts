@@ -1,4 +1,7 @@
-import type { MutationFence } from "@workload-funnel/kernel";
+import {
+  fingerprintMutationFence,
+  type MutationFence,
+} from "@workload-funnel/kernel";
 import {
   GatewayContractError,
   authorizeHyperQueueMutation,
@@ -8,7 +11,12 @@ import {
   verifySchedulerFenceInstallAcknowledgement,
   type AuthorizedHyperQueueMutation,
   type EffectReceiptEvidence,
+  type HyperQueueDispatchMapping,
   type MutateHyperQueueRequest,
+  canonicalHyperQueueOperationJobName,
+  HYPERQUEUE_ADAPTER_CONTRACT_VERSION,
+  HYPERQUEUE_ADAPTER_KEY,
+  validateCanonicalHyperQueueOperationJobName,
 } from "@workload-funnel/scheduler-hyperqueue/mutation-gateway-authority";
 
 import { createEffectReceipt } from "./effect-receipt.js";
@@ -33,6 +41,8 @@ import type { GatewayWalRecord } from "../domain/gateway-wal-record.js";
 export type { PrepareGatewayMutation } from "./effect-operation-state.js";
 
 export class EffectOperationRegistry {
+  readonly #mappingOperationByJobName = new Map<string, string>();
+  readonly #mappingOperationByReference = new Map<string, string>();
   readonly #operations = new Map<string, OperationState>();
 
   public constructor(private readonly runtime: GatewayRegistryRuntime) {}
@@ -43,10 +53,43 @@ export class EffectOperationRegistry {
     );
   }
 
+  public unresolvedAuthorizations(): readonly AuthorizedHyperQueueMutation[] {
+    return Object.freeze(
+      this.unresolvedOperations().map((operation) =>
+        authorizeHyperQueueMutation(
+          operation.request,
+          operation.intentRegistrySequence,
+          operation.requestFingerprint,
+          operation.canonicalJobName,
+        ),
+      ),
+    );
+  }
+
+  public reconciliationRequiredOperationIds(): readonly string[] {
+    return Object.freeze(
+      [...this.#operations.values()]
+        .filter(
+          (operation) =>
+            operation.receipt === undefined ||
+            operation.receipt.outcome === "unknown",
+        )
+        .map((operation) => operation.request.operationId),
+    );
+  }
+
+  public dispatchMapping(
+    operationId: string,
+  ): HyperQueueDispatchMapping | undefined {
+    return this.#operations.get(operationId)?.mapping;
+  }
+
   public hasUnresolvedInScope(scopeKey: string): boolean {
-    return this.unresolvedOperations().some(
+    return [...this.#operations.values()].some(
       (operation) =>
-        schedulerMutationScopeKey(operation.request.scope) === scopeKey,
+        schedulerMutationScopeKey(operation.request.scope) === scopeKey &&
+        (operation.receipt === undefined ||
+          operation.receipt.outcome === "unknown"),
     );
   }
 
@@ -60,10 +103,19 @@ export class EffectOperationRegistry {
     if (prior !== undefined)
       return this.existingResult(prior, requestFingerprint);
     const key = schedulerMutationScopeKey(request.scope);
+    this.runtime.wal.assertAppendCapacity(
+      request.payload.kind === "submit" ? 3 : 2,
+    );
+    const canonicalJobName = this.canonicalJobName(request, requestFingerprint);
+    this.assertNoCanonicalJobNameCollision(
+      canonicalJobName,
+      request.operationId,
+    );
     const state = scopeState(this.runtime, key);
     const rejection = this.rejectBeforeMutation(request, state, key);
     if (rejection !== undefined) {
-      this.runtime.wal.append({
+      const sequence = this.runtime.wal.append({
+        canonicalJobName: canonicalJobName ?? null,
         kind: "cli_intent",
         request,
         requestFingerprint,
@@ -76,6 +128,8 @@ export class EffectOperationRegistry {
         this.runtime.wal.nextSequence,
       );
       this.#operations.set(request.operationId, {
+        ...(canonicalJobName === undefined ? {} : { canonicalJobName }),
+        intentRegistrySequence: sequence,
         receipt,
         request,
         requestFingerprint,
@@ -88,13 +142,24 @@ export class EffectOperationRegistry {
       return { kind: "receipt", receipt };
     }
     const sequence = this.runtime.wal.append({
+      canonicalJobName: canonicalJobName ?? null,
       kind: "cli_intent",
       request,
       requestFingerprint,
     });
-    this.#operations.set(request.operationId, { request, requestFingerprint });
+    this.#operations.set(request.operationId, {
+      ...(canonicalJobName === undefined ? {} : { canonicalJobName }),
+      intentRegistrySequence: sequence,
+      request,
+      requestFingerprint,
+    });
     return {
-      authorization: authorizeHyperQueueMutation(request, sequence),
+      authorization: authorizeHyperQueueMutation(
+        request,
+        sequence,
+        requestFingerprint,
+        canonicalJobName,
+      ),
       kind: "authorized",
       requestFingerprint,
     };
@@ -123,6 +188,15 @@ export class EffectOperationRegistry {
     const operation = this.#operations.get(request.operationId);
     if (operation === undefined || operation.receipt !== undefined)
       throw new GatewayContractError("operation_conflict", "completion");
+    if (
+      request.payload.kind === "submit" &&
+      result.outcome === "applied" &&
+      operation.mapping === undefined
+    )
+      throw new GatewayContractError(
+        "operation_conflict",
+        "dispatch_mapping_missing",
+      );
     const receipt = createEffectReceipt(
       request,
       result.outcome,
@@ -140,37 +214,119 @@ export class EffectOperationRegistry {
     return receipt;
   }
 
-  public recoverUnresolvedAsUnknown(): readonly EffectReceiptEvidence[] {
-    this.runtime.assertHealthy();
-    const receipts: EffectReceiptEvidence[] = [];
-    for (const operation of this.unresolvedOperations()) {
-      const state = scopeState(
-        this.runtime,
-        schedulerMutationScopeKey(operation.request.scope),
+  public persistDispatchMapping(
+    authorization: AuthorizedHyperQueueMutation,
+    result: Readonly<{
+      readonly canonicalJobName: string;
+      readonly jobId: string;
+      readonly taskId: "0";
+    }>,
+  ): HyperQueueDispatchMapping {
+    const request = authorization.request;
+    const operation = this.#operations.get(request.operationId);
+    if (
+      request.payload.kind !== "submit" ||
+      operation === undefined ||
+      operation.receipt !== undefined ||
+      authorization.registrySequence !== operation.intentRegistrySequence ||
+      authorization.canonicalJobName !== operation.canonicalJobName
+    )
+      throw new GatewayContractError(
+        "operation_conflict",
+        "dispatch_mapping_authority",
       );
-      state.closed = true;
-      state.cordonReason = "unresolved_cli_intent";
-      const receipt = createEffectReceipt(
-        operation.request,
-        "unknown",
-        "gateway_recovered_unresolved_cli_intent",
-        this.runtime.authorityId,
-        this.runtime.wal.nextSequence,
-      );
-      this.runtime.wal.append({
-        kind: "effect_receipt",
-        receipt,
+    validateMutationRequest(request);
+    validateCanonicalHyperQueueOperationJobName(
+      {
+        mappingFingerprint: request.payload.mappingFingerprint,
+        mutationFenceFingerprint: request.mutationFenceFingerprint,
+        operationId: request.operationId,
         requestFingerprint: operation.requestFingerprint,
-      });
-      operation.receipt = receipt;
-      this.runtime.wal.append({
-        kind: "scope_cordoned",
-        reason: "unresolved_cli_intent",
-        scope: operation.request.scope,
-      });
-      receipts.push(receipt);
+        schedulerInstanceId: request.scope.schedulerInstanceId,
+      },
+      result.canonicalJobName,
+    );
+    if (
+      operation.requestFingerprint !== fingerprint(request) ||
+      request.mutationFenceFingerprint !==
+        fingerprintMutationFence(request.mutationFence) ||
+      !/^(?:0|[1-9]\d*)$/u.test(result.jobId) ||
+      !Number.isSafeInteger(Number(result.jobId))
+    )
+      throw new GatewayContractError(
+        "operation_conflict",
+        "dispatch_mapping_validation",
+      );
+    const mapping = Object.freeze<HyperQueueDispatchMapping>({
+      adapterContractVersion: HYPERQUEUE_ADAPTER_CONTRACT_VERSION,
+      adapterKey: HYPERQUEUE_ADAPTER_KEY,
+      adapterReference: `hq://${result.jobId}`,
+      canonicalJobName: result.canonicalJobName,
+      dispatchId: request.payload.dispatchId,
+      jobId: result.jobId,
+      mappingFingerprint: request.payload.mappingFingerprint,
+      mutationFenceFingerprint: request.mutationFenceFingerprint,
+      operationId: request.operationId,
+      requestFingerprint: operation.requestFingerprint,
+      schedulerInstanceId: request.scope.schedulerInstanceId,
+      taskId: "0",
+    });
+    if (operation.mapping !== undefined) {
+      if (fingerprint(operation.mapping) !== fingerprint(mapping))
+        throw new GatewayContractError(
+          "operation_conflict",
+          "dispatch_mapping_create_only",
+        );
+      return operation.mapping;
     }
-    return Object.freeze(receipts);
+    this.assertMappingIndexes(mapping);
+    this.runtime.wal.append({
+      kind: "dispatch_mapping",
+      mapping,
+      requestFingerprint: operation.requestFingerprint,
+    });
+    operation.mapping = mapping;
+    this.indexMapping(mapping);
+    return mapping;
+  }
+
+  public completeUnknownAndCordon(
+    authorization: AuthorizedHyperQueueMutation,
+    reason: string,
+  ): EffectReceiptEvidence {
+    return this.completeAndCordon(authorization, "unknown", reason);
+  }
+
+  public completeRejectedAndCordon(
+    authorization: AuthorizedHyperQueueMutation,
+    reason: string,
+  ): EffectReceiptEvidence {
+    return this.completeAndCordon(authorization, "rejected", reason);
+  }
+
+  private completeAndCordon(
+    authorization: AuthorizedHyperQueueMutation,
+    outcome: "rejected" | "unknown",
+    reason: string,
+  ): EffectReceiptEvidence {
+    if (!/^[a-z0-9_]{1,128}$/u.test(reason))
+      throw new GatewayContractError("operation_conflict", "cordon_reason");
+    const request = authorization.request;
+    const state = scopeState(
+      this.runtime,
+      schedulerMutationScopeKey(request.scope),
+    );
+    this.runtime.wal.append({
+      kind: "scope_cordoned",
+      reason,
+      scope: request.scope,
+    });
+    state.closed = true;
+    state.cordonReason = reason;
+    return this.completeMutation(authorization, {
+      outcome,
+      reason,
+    });
   }
 
   public applyRecoveredRecord(
@@ -182,9 +338,25 @@ export class EffectOperationRegistry {
       if (this.#operations.has(record.request.operationId))
         throw new Error("gateway_cli_intent_operation_collision");
       this.#operations.set(record.request.operationId, {
+        ...(record.canonicalJobName === null
+          ? {}
+          : { canonicalJobName: record.canonicalJobName }),
+        intentRegistrySequence: sequence,
         request: record.request,
         requestFingerprint: record.requestFingerprint,
       });
+      const expectedJobName = this.canonicalJobName(
+        record.request,
+        record.requestFingerprint,
+      );
+      if (expectedJobName !== (record.canonicalJobName ?? undefined))
+        throw new Error("gateway_cli_intent_job_name_mismatch");
+      this.assertNoCanonicalJobNameCollision(
+        expectedJobName,
+        record.request.operationId,
+      );
+    } else if (record.kind === "dispatch_mapping") {
+      this.recoverDispatchMapping(record.mapping, record.requestFingerprint);
     } else if (record.kind === "effect_receipt") {
       const operation = this.#operations.get(record.receipt.operationId);
       if (
@@ -198,9 +370,15 @@ export class EffectOperationRegistry {
         this.runtime.authorityId,
         sequence,
       );
+      if (
+        operation.request.payload.kind === "submit" &&
+        record.receipt.outcome === "applied" &&
+        operation.mapping === undefined
+      )
+        throw new Error("gateway_receipt_without_dispatch_mapping");
       operation.receipt = record.receipt;
     } else if (record.kind === "scope_cordoned") {
-      if (record.reason !== "unresolved_cli_intent")
+      if (!/^[a-z0-9_]{1,128}$/u.test(record.reason))
         throw new Error("gateway_scope_cordon_reason_invalid");
       const state = scopeState(
         this.runtime,
@@ -222,6 +400,130 @@ export class EffectOperationRegistry {
     if (prior.receipt === undefined)
       throw new GatewayContractError("gateway_cordoned", "unresolved_intent");
     return { kind: "receipt", receipt: prior.receipt };
+  }
+
+  private canonicalJobName(
+    request: MutateHyperQueueRequest,
+    requestFingerprint: string,
+  ): string | undefined {
+    return request.payload.kind === "submit"
+      ? canonicalHyperQueueOperationJobName({
+          mappingFingerprint: request.payload.mappingFingerprint,
+          mutationFenceFingerprint: request.mutationFenceFingerprint,
+          operationId: request.operationId,
+          requestFingerprint,
+          schedulerInstanceId: request.scope.schedulerInstanceId,
+        })
+      : undefined;
+  }
+
+  private assertNoCanonicalJobNameCollision(
+    jobName: string | undefined,
+    operationId: string,
+  ): void {
+    if (jobName === undefined) return;
+    const prior = this.#mappingOperationByJobName.get(jobName);
+    if (prior !== undefined && prior !== operationId)
+      throw new GatewayContractError(
+        "operation_conflict",
+        "canonical_job_name_collision",
+      );
+    this.#mappingOperationByJobName.set(jobName, operationId);
+  }
+
+  private assertMappingIndexes(mapping: HyperQueueDispatchMapping): void {
+    const nameOperation = this.#mappingOperationByJobName.get(
+      mapping.canonicalJobName,
+    );
+    const referenceOperation = this.#mappingOperationByReference.get(
+      mapping.adapterReference,
+    );
+    if (
+      (nameOperation !== undefined && nameOperation !== mapping.operationId) ||
+      (referenceOperation !== undefined &&
+        referenceOperation !== mapping.operationId)
+    )
+      throw new GatewayContractError(
+        "operation_conflict",
+        "dispatch_mapping_conflict",
+      );
+  }
+
+  private indexMapping(mapping: HyperQueueDispatchMapping): void {
+    this.#mappingOperationByJobName.set(
+      mapping.canonicalJobName,
+      mapping.operationId,
+    );
+    this.#mappingOperationByReference.set(
+      mapping.adapterReference,
+      mapping.operationId,
+    );
+  }
+
+  private recoverDispatchMapping(
+    mapping: HyperQueueDispatchMapping,
+    requestFingerprint: string,
+  ): void {
+    const operation = this.#operations.get(mapping.operationId);
+    const recoveredAdapterIdentity: Readonly<{
+      adapterContractVersion: unknown;
+      adapterKey: unknown;
+      taskId: unknown;
+    }> = mapping;
+    if (
+      Object.keys(mapping).sort().join() !==
+        [
+          "adapterContractVersion",
+          "adapterKey",
+          "adapterReference",
+          "canonicalJobName",
+          "dispatchId",
+          "jobId",
+          "mappingFingerprint",
+          "mutationFenceFingerprint",
+          "operationId",
+          "requestFingerprint",
+          "schedulerInstanceId",
+          "taskId",
+        ]
+          .sort()
+          .join() ||
+      operation === undefined ||
+      operation.mapping !== undefined ||
+      operation.receipt !== undefined ||
+      operation.request.payload.kind !== "submit" ||
+      operation.requestFingerprint !== requestFingerprint ||
+      mapping.requestFingerprint !== requestFingerprint ||
+      mapping.dispatchId !== operation.request.payload.dispatchId ||
+      mapping.mappingFingerprint !==
+        operation.request.payload.mappingFingerprint ||
+      mapping.mutationFenceFingerprint !==
+        operation.request.mutationFenceFingerprint ||
+      mapping.schedulerInstanceId !==
+        operation.request.scope.schedulerInstanceId ||
+      mapping.canonicalJobName !== operation.canonicalJobName ||
+      recoveredAdapterIdentity.adapterKey !== HYPERQUEUE_ADAPTER_KEY ||
+      recoveredAdapterIdentity.adapterContractVersion !==
+        HYPERQUEUE_ADAPTER_CONTRACT_VERSION ||
+      mapping.adapterReference !== `hq://${mapping.jobId}` ||
+      recoveredAdapterIdentity.taskId !== "0" ||
+      !/^(?:0|[1-9]\d*)$/u.test(mapping.jobId) ||
+      !Number.isSafeInteger(Number(mapping.jobId))
+    )
+      throw new Error("gateway_dispatch_mapping_recovery_mismatch");
+    validateCanonicalHyperQueueOperationJobName(
+      {
+        mappingFingerprint: mapping.mappingFingerprint,
+        mutationFenceFingerprint: mapping.mutationFenceFingerprint,
+        operationId: mapping.operationId,
+        requestFingerprint: mapping.requestFingerprint,
+        schedulerInstanceId: mapping.schedulerInstanceId,
+      },
+      mapping.canonicalJobName,
+    );
+    this.assertMappingIndexes(mapping);
+    operation.mapping = mapping;
+    this.indexMapping(mapping);
   }
 
   private validateRequest(request: MutateHyperQueueRequest): void {

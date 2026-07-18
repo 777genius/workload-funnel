@@ -11,7 +11,10 @@ import {
 
 export function officialHyperQueueSubmitArguments(input) {
   if (
-    !OWNED_RESOURCE_PATTERN.test(input.jobName) ||
+    !(
+      OWNED_RESOURCE_PATTERN.test(input.jobName) ||
+      /^wf-hq-v1-[A-Za-z0-9_-]{86}$/u.test(input.jobName)
+    ) ||
     !Number.isSafeInteger(input.cpus) ||
     input.cpus < 1 ||
     input.cpus > 64 ||
@@ -289,14 +292,99 @@ export async function stopHyperQueueCompatibilityProcesses({
   worker,
 }) {
   if (
-    server === null ||
-    typeof server !== "object" ||
     typeof stopProcess !== "function" ||
+    (server !== undefined && (server === null || typeof server !== "object")) ||
     (worker !== undefined && (worker === null || typeof worker !== "object"))
   )
     throw new Error("hyperqueue_cleanup_input_invalid");
   if (worker !== undefined) await stopProcess(worker);
-  await stopProcess(server);
+  if (server !== undefined) await stopProcess(server);
+}
+
+function parseGatewayProbeResult(result, operation) {
+  if (
+    result === null ||
+    typeof result !== "object" ||
+    result.code !== 0 ||
+    result.stderr !== "" ||
+    typeof result.stdout !== "string" ||
+    !result.stdout.endsWith("\n") ||
+    result.stdout.slice(0, -1).includes("\n")
+  )
+    throw new Error("hyperqueue_gateway_probe_execution_failed");
+  let evidence;
+  try {
+    evidence = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("hyperqueue_gateway_probe_output_malformed");
+  }
+  if (
+    evidence === null ||
+    typeof evidence !== "object" ||
+    Array.isArray(evidence)
+  )
+    throw new Error("hyperqueue_gateway_probe_output_invalid");
+  const initial = operation === "submit-and-recover";
+  const expectedKeys = initial
+    ? [
+        "actualCliReturnCallbacks",
+        "durableReceiptReplayEqual",
+        "gatewayRestartRecoveryReason",
+        "jobId",
+        "mappingRecordCount",
+        "responseLossObserved",
+        "submitIntentRecordCount",
+        "walRecordCount",
+        "walRecordKinds",
+        "walSchemaVersion",
+      ]
+    : [
+        "durableReceiptReplayEqual",
+        "gatewayRecoveryReason",
+        "jobId",
+        "noResubmitOnRetry",
+        "retainedExactJobMatches",
+        "retainedHistoryCeiling",
+        "walDigestStableAcrossRetry",
+        "walRecordCount",
+        "walSchemaVersion",
+      ];
+  if (
+    Object.keys(evidence).sort().join() !== expectedKeys.sort().join() ||
+    !/^(?:0|[1-9]\d*)$/u.test(evidence.jobId) ||
+    evidence.durableReceiptReplayEqual !== true ||
+    evidence.walSchemaVersion !== 2 ||
+    !Number.isSafeInteger(evidence.walRecordCount) ||
+    evidence.walRecordCount < 1
+  )
+    throw new Error("hyperqueue_gateway_probe_output_invalid");
+  if (
+    initial &&
+    (evidence.actualCliReturnCallbacks !== 1 ||
+      evidence.gatewayRestartRecoveryReason !==
+        "authority_revalidation_required" ||
+      evidence.mappingRecordCount !== 1 ||
+      evidence.responseLossObserved !== true ||
+      evidence.submitIntentRecordCount !== 1 ||
+      !Array.isArray(evidence.walRecordKinds) ||
+      evidence.walRecordKinds.filter((kind) => kind === "cli_intent").length !==
+        1 ||
+      evidence.walRecordKinds.filter((kind) => kind === "dispatch_mapping")
+        .length !== 1 ||
+      evidence.walRecordKinds.filter((kind) => kind === "effect_receipt")
+        .length !== 1)
+  )
+    throw new Error("hyperqueue_gateway_probe_initial_evidence_invalid");
+  if (
+    !initial &&
+    (evidence.gatewayRecoveryReason !== "authority_revalidation_required" ||
+      evidence.noResubmitOnRetry !== true ||
+      evidence.retainedExactJobMatches !== 1 ||
+      evidence.retainedHistoryCeiling !== 1 ||
+      evidence.walDigestStableAcrossRetry !== true)
+  )
+    throw new Error("hyperqueue_gateway_probe_restart_evidence_invalid");
+  return Object.freeze(evidence);
 }
 
 export async function runHyperQueueCompatibilityProbe(config) {
@@ -307,11 +395,14 @@ export async function runHyperQueueCompatibilityProbe(config) {
   });
   if (
     !OWNED_RESOURCE_PATTERN.test(config.jobName) ||
-    !config.serverDirectory.startsWith("/")
+    !config.serverDirectory.startsWith("/") ||
+    !config.gatewayWalPath.startsWith("/") ||
+    !config.syntheticShimExecutable.startsWith("/") ||
+    typeof config.executeGatewayProbe !== "function"
   )
     throw new Error("unsafe_hyperqueue_gate_probe");
   const global = ["--server-dir", config.serverDirectory];
-  const server = await config.startProcess(
+  let server = await config.startProcess(
     config.binaryPath,
     [...global, "server", "start", "--host", "127.0.0.1"],
     "hq-server",
@@ -346,20 +437,17 @@ export async function runHyperQueueCompatibilityProbe(config) {
     const workers = parseOfficialArray(inventory.stdout, "worker_list");
     if (workers.length < 1)
       throw new Error("hyperqueue_worker_inventory_empty");
-    const submitted = await config.runner.run(
-      config.binaryPath,
-      officialHyperQueueSubmitArguments({
-        cpus: 1,
-        jobName: config.jobName,
-        serverDirectory: config.serverDirectory,
-        shimArguments: ["-e", "setInterval(() => {}, 1000)"],
-        shimExecutable: config.nodeExecutable,
+    const initialGatewayEvidence = parseGatewayProbeResult(
+      await config.executeGatewayProbe({
+        binarySha256: release.binarySha256,
+        operation: "submit-and-recover",
       }),
-      { timeoutMs: 10_000 },
+      "submit-and-recover",
     );
-    const mapping = parseOfficialSubmit(
-      successful(submitted, "hyperqueue_submit_failed"),
-    );
+    const mapping = Object.freeze({
+      jobId: initialGatewayEvidence.jobId,
+      taskId: "0",
+    });
     const info = await poll(
       config,
       () =>
@@ -378,13 +466,77 @@ export async function runHyperQueueCompatibilityProbe(config) {
     );
     parseOfficialCancel(successful(canceled, "hyperqueue_cancel_failed"));
     await observeCanceled(config, global, mapping);
+    await config.stopProcess(worker);
+    worker = undefined;
+    await config.stopProcess(server);
+    server = undefined;
+    server = await config.startProcess(
+      config.binaryPath,
+      [...global, "server", "start", "--host", "127.0.0.1"],
+      "hq-server",
+    );
+    await poll(
+      config,
+      () =>
+        config.runner.run(
+          config.binaryPath,
+          [...global, "server", "info", "--output-mode", "json"],
+          { timeoutMs: 2_000 },
+        ),
+      "hyperqueue_server_journal_restart_timeout",
+    );
+    worker = await config.startProcess(
+      config.binaryPath,
+      [...global, "worker", "start", "--cpus", "2"],
+      "hq-worker",
+    );
+    const restartedInventory = await poll(
+      config,
+      () =>
+        config.runner.run(
+          config.binaryPath,
+          [...global, "worker", "list", "--output-mode", "json"],
+          { timeoutMs: 2_000 },
+        ),
+      "hyperqueue_worker_journal_restart_timeout",
+    );
+    if (parseOfficialArray(restartedInventory.stdout, "worker_list").length < 1)
+      throw new Error("hyperqueue_worker_restart_inventory_empty");
+    const postRestartGatewayEvidence = parseGatewayProbeResult(
+      await config.executeGatewayProbe({
+        binarySha256: release.binarySha256,
+        operation: "replay-after-server-restart",
+      }),
+      "replay-after-server-restart",
+    );
+    if (
+      postRestartGatewayEvidence.jobId !== mapping.jobId ||
+      postRestartGatewayEvidence.walRecordCount !==
+        initialGatewayEvidence.walRecordCount
+    )
+      throw new Error("hyperqueue_gateway_journal_restart_identity_mismatch");
     return Object.freeze({
       ...release,
+      boundedHistoryCeiling: 1,
+      builtGatewayClient: "SchedulerMutationGatewayClient",
+      builtMutationBoundary: "HyperQueueMutationBoundary",
       cancelSchema: "empty_object",
       cancelTerminalObservation: "exact_job_and_task_canceled",
+      durableGatewayReceiptReplayed: true,
+      gatewayWalSchemaVersion: initialGatewayEvidence.walSchemaVersion,
       jobInfoSchema: "array_with_nested_info_id",
-      submitSchema: "numeric_id",
+      operationLookupContract:
+        "gateway_response_lost_then_wal_recovery_exact_name_one_match",
+      operationLookupSchema: "exact_hq_v0_26_2_job_list_row",
+      retainedExactJobMatches:
+        postRestartGatewayEvidence.retainedExactJobMatches,
+      retainedLookupAfterJournalRestart: true,
+      responseLossSimulated: true,
+      submitCalls: initialGatewayEvidence.actualCliReturnCallbacks,
+      submitResponse: "lost_after_cli_result_before_mapping_persist",
       submittedJobId: mapping.jobId,
+      walDigestStableAcrossRetry:
+        postRestartGatewayEvidence.walDigestStableAcrossRetry,
       workerListSchema: "array",
     });
   } finally {

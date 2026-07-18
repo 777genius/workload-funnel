@@ -1,6 +1,7 @@
 import type { MutationFence } from "@workload-funnel/kernel";
 import type {
   SchedulerAuthorityHighWatermarkRecord,
+  HyperQueueDispatchMapping,
   MutateHyperQueueRequest,
   SchedulerMutationScope,
   SchedulerScopeCloseAcknowledgement,
@@ -29,8 +30,14 @@ export type GatewayWalRecord =
       readonly requestFingerprint: string;
     }
   | {
+      readonly canonicalJobName: string | null;
       readonly kind: "cli_intent";
       readonly request: MutateHyperQueueRequest;
+      readonly requestFingerprint: string;
+    }
+  | {
+      readonly kind: "dispatch_mapping";
+      readonly mapping: HyperQueueDispatchMapping;
       readonly requestFingerprint: string;
     }
   | {
@@ -48,6 +55,6 @@ export interface RecoveredGatewayWalRecord {
   readonly checksum: string;
   readonly previousChecksum: string;
   readonly record: GatewayWalRecord;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly sequence: number;
 }

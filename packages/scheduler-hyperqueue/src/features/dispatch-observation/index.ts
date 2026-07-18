@@ -202,7 +202,8 @@ export function createProvider(
   if (order.durability !== "restart_durable")
     throw new Error("hyperqueue_observation_order_not_durable");
   return Object.freeze({
-    initialize: () => executor.verifyExactVersion(`hq ${exactVersion}`, limits),
+    initialize: () =>
+      executor.verifyExactVersion(`hyperqueue v${exactVersion}`, limits),
     observationOrderDurability: "restart_durable" as const,
     async observe(mapping: HyperQueueDispatchMapping) {
       const output = await executor.executeRead(

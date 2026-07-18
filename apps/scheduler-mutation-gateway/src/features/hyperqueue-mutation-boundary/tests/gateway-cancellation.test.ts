@@ -125,7 +125,6 @@ describe(
       await createSubmissionProvider(gateway).submitAfterInstall({
         acknowledgedInstall: submitAcknowledgement,
         dispatchId,
-        jobName: "wf-dispatch-cancel-observation",
         mappingFingerprint: "mapping-fingerprint-1",
         mutationFence: submitFence,
         operationId: "cancel-observation-submit",

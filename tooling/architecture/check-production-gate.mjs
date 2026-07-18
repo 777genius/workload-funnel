@@ -40,7 +40,7 @@ async function files(directory) {
 const plan = await source("docs/workload-funnel-architecture-plan.md");
 if (
   createHash("sha256").update(plan).digest("hex") !==
-  "63d0945eedc7884f4419597cb4e19c2c541b103f0458c011d557b24e4f1bccbf"
+  "73dffc99721b929e1e2b109d62f38263f433adb9534bb5fa545978a8c851ccdf"
 )
   failures.push("architecture plan differs from the production gate baseline");
 
@@ -105,9 +105,41 @@ if (
   );
 if (/writeFile\([^)]*\/sys\/fs\/cgroup/u.test(gate))
   failures.push("manual gate writes cgroupfs directly");
-for (const blocker of ["ambiguous_submit_lookup_unsupported"])
-  if (!gate.includes(blocker))
-    failures.push(`manual gate omits production-closure blocker ${blocker}`);
+const hyperQueueContractSource = await source(
+  "tooling/production-gate/hyperqueue-contract.mjs",
+);
+const hyperQueueGatewayProbe = await source(
+  "tooling/production-gate/fixtures/hyperqueue-gateway-probe.mjs",
+);
+const hyperQueueGate = `${gate}\n${hyperQueueContractSource}\n${hyperQueueGatewayProbe}`;
+if (hyperQueueGate.includes("ambiguous_submit_lookup_unsupported"))
+  failures.push("manual gate retains the closed ambiguous-submit blocker");
+for (const evidence of [
+  "createSchedulerMutationGateway",
+  "startSchedulerMutationGateway",
+  "SimulatedGatewayCrash",
+  "afterCliCall()",
+  "parseHyperQueueOperationLookup",
+  "RETAINED_HISTORY_CEILING",
+  "hyperqueue_gateway_probe_retry_mutated_state",
+  "hyperqueue_gateway_journal_restart_identity_mismatch",
+])
+  if (!hyperQueueGate.includes(evidence))
+    failures.push(`manual gate omits HyperQueue lookup evidence ${evidence}`);
+const gatewaySubmitRecovery = hyperQueueGatewayProbe.slice(
+  hyperQueueGatewayProbe.indexOf("async function submitAndRecover"),
+  hyperQueueGatewayProbe.indexOf("async function retainedLookup"),
+);
+if (
+  hyperQueueContractSource.includes("operationLookupModuleUrl") ||
+  hyperQueueContractSource.includes("gateway_lookup_restarted") ||
+  hyperQueueGatewayProbe.includes("ExactVersionHyperQueueOperationLookup") ||
+  !gatewaySubmitRecovery.includes("await initial.mutate(request)") ||
+  !gatewaySubmitRecovery.includes("await restarted.mutate(request)")
+)
+  failures.push(
+    "HyperQueue disposable response-loss probe bypasses the gateway/WAL lifecycle",
+  );
 
 const projectQuotaGate = [
   gate,

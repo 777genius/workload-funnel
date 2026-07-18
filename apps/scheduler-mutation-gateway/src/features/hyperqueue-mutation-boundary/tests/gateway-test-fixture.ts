@@ -57,7 +57,9 @@ export function createSyntheticGatewayEnvironment(): SyntheticGatewayEnvironment
   writeFileSync(
     statePath,
     `${JSON.stringify({
+      conflictingNextSubmit: false,
       jobs: {},
+      lookupCalls: 0,
       mutationCalls: 0,
       nextJobId: 1,
       serverEpoch: 1,
@@ -85,9 +87,21 @@ export function createSyntheticGateway(
   environment: SyntheticGatewayEnvironment,
   input: Readonly<{
     faults?: GatewayMutationFaults;
-    fixtureMode?: "malformed_submit" | "partition_after_submit";
+    fixtureMode?:
+      | "ambiguous_canceled"
+      | "ambiguous_duplicate"
+      | "ambiguous_finished"
+      | "ambiguous_incomplete_lookup"
+      | "ambiguous_malformed_lookup"
+      | "ambiguous_oversized_lookup"
+      | "ambiguous_running"
+      | "ambiguous_zero"
+      | "malformed_submit"
+      | "partition_after_submit";
     mode?: "production" | "synthetic_research";
+    maxRetainedJobs?: number;
     version?: string;
+    walCapacity?: number;
   }> = {},
 ) {
   const binaryDigest = createHash("sha256")
@@ -114,11 +128,15 @@ export function createSyntheticGateway(
     release: {
       exactVersion: "0.26.2",
       expectedBinarySha256: binaryDigest,
-      limits: { maxOutputBytes: 128 * 1024, timeoutMs: 5_000 },
+      limits: {
+        maxOutputBytes: 128 * 1024,
+        maxRetainedJobs: input.maxRetainedJobs ?? 100,
+        timeoutMs: 5_000,
+      },
       shimExecutable: "/opt/workload-funnel/bin/wf-hq-shim",
     },
     trustedInstallKeys: new Map([["issuer-1", issuerKey]]),
-    walCapacity: 1_000,
+    walCapacity: input.walCapacity ?? 1_000,
     walPath: environment.walPath,
   });
 }
@@ -259,7 +277,6 @@ export function submitRequest(
     operationId,
     payload: Object.freeze({
       dispatchId: targetScope.dispatchId,
-      jobName: "wf-dispatch-1",
       kind: "submit",
       mappingFingerprint: "mapping-fingerprint-1",
       requestedCpuCount: 1,
@@ -275,6 +292,7 @@ export function submitRequest(
 export function syntheticState(environment: SyntheticGatewayEnvironment) {
   return JSON.parse(readFileSync(environment.statePath, "utf8")) as {
     readonly jobs: Readonly<Record<string, unknown>>;
+    readonly lookupCalls: number;
     readonly mutationCalls: number;
     readonly serverEpoch: number;
     readonly submissions: Readonly<

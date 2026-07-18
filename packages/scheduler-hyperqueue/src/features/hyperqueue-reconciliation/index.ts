@@ -36,7 +36,7 @@ export function reconcileHyperQueueDispatch(
       disposition: "reconciliation_required",
       reason:
         input.submitReceipt.outcome === "unknown"
-          ? "ambiguous_submit_lookup_by_operation_unsupported"
+          ? "deterministic_operation_lookup_unresolved"
           : "dispatch_mapping_absent",
       resubmit: false,
     });

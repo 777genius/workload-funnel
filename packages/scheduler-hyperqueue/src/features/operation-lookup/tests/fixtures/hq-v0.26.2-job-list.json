@@ -1,0 +1,62 @@
+[
+  {
+    "cancel_reason": null,
+    "id": 10,
+    "name": "hq-upstream-waiting",
+    "task_count": 1,
+    "is_open": false,
+    "task_stats": {
+      "aborted": 0,
+      "waiting": 1,
+      "running": 0,
+      "finished": 0,
+      "failed": 0,
+      "canceled": 0
+    }
+  },
+  {
+    "cancel_reason": null,
+    "id": 11,
+    "name": "hq-upstream-running",
+    "task_count": 1,
+    "is_open": false,
+    "task_stats": {
+      "aborted": 0,
+      "waiting": 0,
+      "running": 1,
+      "finished": 0,
+      "failed": 0,
+      "canceled": 0
+    }
+  },
+  {
+    "cancel_reason": null,
+    "id": 12,
+    "name": "hq-upstream-finished",
+    "task_count": 1,
+    "is_open": false,
+    "task_stats": {
+      "aborted": 0,
+      "waiting": 0,
+      "running": 0,
+      "finished": 1,
+      "failed": 0,
+      "canceled": 0
+    }
+  },
+  {
+    "cancel_reason": "canceled by fixture",
+    "id": 13,
+    "name": "hq-upstream-canceled",
+    "task_count": 1,
+    "is_open": false,
+    "task_stats": {
+      "aborted": 0,
+      "waiting": 0,
+      "running": 0,
+      "finished": 0,
+      "failed": 0,
+      "canceled": 1
+    }
+  }
+]

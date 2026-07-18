@@ -2,8 +2,9 @@
 
 - Status: Accepted for synthetic evidence; host capabilities remain gated
 - Date: 2026-07-12
+- Amended: 2026-07-17 (Phase 7 deterministic HyperQueue operation lookup)
 - Owners: WorkloadFunnel maintainers
-- Plan references: Phase 0.5, sections 17.2, 18.3, 23.2, and 29.5
+- Plan references: Phase 0.5, sections 17.2, 18.3, 19, 23.2, 29.5, and 29.6
 
 ## Context
 
@@ -38,9 +39,30 @@ reason code and the exact evidence required on a disposable supported host.
 | Pressure and admission fail closed                     | Unsupported; policy model passes, host saturation isolation unproved       | WF-INV-013/015/019/023     |
 
 The HyperQueue baseline is exactly v0.26.2 for research evidence, not an
-approved production pin. Until exact operation-identity lookup proves ambiguous
-submit reconciliation, the scheduler capability is unsupported and any future
-adapter must be restricted to explicitly replayable workloads.
+approved production pin. The Phase 7 gateway implements the ambiguous-submit
+contract with a bounded digest name over the complete persisted submit intent,
+an exact v0.26.2 job-list row schema, create-only fsynced mapping recovery,
+pre-submit retained-history/output ceilings, and durable retention of zero-match
+or otherwise unresolved operations. The digest is not claimed mathematically
+injective; a collision fails closed. WAL v2 records this identity explicitly,
+and v1 data requires an offline audited migration instead of reinterpretation.
+This does not make submit idempotent: multiple matches fail closed, zero matches
+never prove absence, and no unknown operation is automatically resubmitted.
+
+All new checked capability fields remain false until the revised disposable
+gate runs the real pinned response-loss and same-journal restart probe through
+the built gateway client, `HyperQueueMutationBoundary`, and WAL authority path.
+The failpoint fires only after the actual submit runner returns; gateway restart,
+receipt resolution/replay, HQ journal restart, retained identity, and retry are
+then proved through the public gateway API and durable state. A standalone
+lookup is insufficient. The post-restart `retainedExactJobMatches=1` evidence
+means one exact retained name and job ID under the bounded schema; it does not
+claim that lookup re-proves canceled task state. The exact HyperQueue 0.26.2
+schema evidence remains bound to upstream commit `dd15afd`. Cancellation of an
+ambiguous live submit with no exact mapping is also not yet proved, so that
+limitation independently keeps production capability blocked. The isolated
+Phase 0.5 decision remains unsupported because this workspace did not run the
+pinned binary.
 
 The namespace gate accepts no `JoinsNamespaceOf=`, pathname reopen, private-only
 bind, or unpinned `/proc/<pid>/ns/mnt` downgrade. `pinnedExecutionPaths` remains
@@ -94,6 +116,6 @@ production stores, or host resource controllers.
 
 Replace an unsupported decision only with checked evidence from an isolated
 supported environment matching the emitted requirements. If a requested hard
-resource, exact namespace lifecycle, foreground ownership, or unique scheduler
-operation lookup cannot be enforced, retain the false capability and closed
-admission rather than weakening the invariant.
+resource, exact namespace lifecycle, foreground ownership, or deterministic
+scheduler correlation contract cannot be enforced, retain the false capability
+and closed admission rather than weakening the invariant.

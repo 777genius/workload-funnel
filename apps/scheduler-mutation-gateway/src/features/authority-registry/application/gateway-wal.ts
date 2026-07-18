@@ -6,7 +6,7 @@ import type {
   RecoveredGatewayWalRecord,
 } from "../domain/gateway-wal-record.js";
 
-const GATEWAY_WAL_SCHEMA_VERSION = 1 as const;
+export const GATEWAY_WAL_SCHEMA_VERSION = 2 as const;
 
 function checksumFor(
   sequence: number,
@@ -31,8 +31,9 @@ function exactRecordShape(record: unknown): record is GatewayWalRecord {
     return false;
   const value = record as Readonly<{ kind?: unknown }>;
   const keysByKind: Readonly<Record<string, readonly string[]>> = {
-    cli_intent: ["kind", "request", "requestFingerprint"],
+    cli_intent: ["canonicalJobName", "kind", "request", "requestFingerprint"],
     close: ["acknowledgement", "kind", "requestFingerprint"],
+    dispatch_mapping: ["kind", "mapping", "requestFingerprint"],
     effect_receipt: ["kind", "receipt", "requestFingerprint"],
     install: [
       "acknowledgement",
@@ -70,6 +71,7 @@ export class GatewayWalError extends Error {
     public readonly code:
       | "gateway_wal_corrupt"
       | "gateway_wal_full"
+      | "gateway_wal_migration_required"
       | "gateway_wal_write_failed",
   ) {
     super(code);
@@ -101,6 +103,17 @@ export class GatewayWal {
 
   public get records(): readonly RecoveredGatewayWalRecord[] {
     return this.#records;
+  }
+
+  public assertAppendCapacity(requiredRecords: number): void {
+    if (
+      !Number.isSafeInteger(requiredRecords) ||
+      requiredRecords < 1 ||
+      this.#records.length + requiredRecords > this.storage.capacity
+    ) {
+      this.#cordonReason = "gateway_wal_full";
+      throw new GatewayWalError("gateway_wal_full");
+    }
   }
 
   public append(record: GatewayWalRecord): number {
@@ -155,6 +168,10 @@ export class GatewayWal {
       }
       if (typeof decoded !== "object" || decoded === null)
         throw new GatewayWalError("gateway_wal_corrupt");
+      if (
+        (decoded as Readonly<{ schemaVersion?: unknown }>).schemaVersion === 1
+      )
+        throw new GatewayWalError("gateway_wal_migration_required");
       const envelope = decoded as Partial<RecoveredGatewayWalRecord>;
       const sequence = index + 1;
       if (

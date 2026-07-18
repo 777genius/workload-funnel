@@ -100,6 +100,20 @@ describe("Phase 7 closed scheduler fence boundary", { timeout: 20_000 }, () => {
     await expect(gateway.mutate(mismatchedFingerprint)).rejects.toThrow(
       "invalid_gateway_request:fingerprint",
     );
+    const valid = submitRequest(
+      targetScope,
+      fence,
+      acknowledgement,
+      "caller-job-name-override",
+    );
+    const callerNamed = {
+      ...valid,
+      payload: { ...valid.payload, jobName: "caller-controlled-name" },
+    };
+    await expect(gateway.mutate(callerNamed as never)).rejects.toThrow(
+      "invalid_gateway_request:submit_payload",
+    );
     expect(syntheticState(environment).mutationCalls).toBe(0);
+    expect(syntheticState(environment).lookupCalls).toBe(0);
   });
 });
