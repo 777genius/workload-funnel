@@ -219,9 +219,14 @@ export const HOSTED_RUNNER_USER_SERVICE_EXECUTABLES = Object.freeze([
 // surviving process outside the current Actions process ancestry is foreign.
 export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
   "ModemManager.service": Object.freeze({
-    executables: Object.freeze(["/usr/sbin/ModemManager"]),
-    maxProcesses: 1,
-    owner: "system",
+    tuples: Object.freeze([
+      Object.freeze({
+        comm: "ModemManager",
+        executable: "/usr/sbin/ModemManager",
+        maxProcesses: 1,
+        owner: "root",
+      }),
+    ]),
   }),
   "accounts-daemon.service": Object.freeze({
     executables: Object.freeze(["/usr/libexec/accounts-daemon"]),

@@ -10,6 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 
 import {
   ALLOCATION_MOUNT,
@@ -80,6 +81,68 @@ export function rejectedPrepareEvidence(
     runId: context.runId,
     schemaVersion: HOSTED_GATE_SCHEMA,
   });
+}
+
+export async function settleHostAdmission(
+  context,
+  {
+    maxObservations = 12,
+    observe = observePristineHost,
+    pause = wait,
+    recordObservation = () => undefined,
+    requiredStableObservations = 3,
+    retryDelayMs = 5_000,
+  } = {},
+) {
+  if (
+    !Number.isSafeInteger(maxObservations) ||
+    maxObservations < 1 ||
+    !Number.isSafeInteger(requiredStableObservations) ||
+    requiredStableObservations < 1 ||
+    requiredStableObservations > maxObservations ||
+    !Number.isSafeInteger(retryDelayMs) ||
+    retryDelayMs < 0
+  )
+    throw new HostedGateRefusal("host_admission_retry_policy_invalid");
+  const samples = [];
+  let consecutiveHealthy = 0;
+  let lastHeadroomError;
+  for (let index = 0; index < maxObservations; index += 1) {
+    const observation = await observe(context);
+    recordObservation(observation);
+    let reason = null;
+    try {
+      validateHostAdmission(observation);
+      consecutiveHealthy += 1;
+    } catch (error) {
+      if (
+        !(error instanceof HostedGateRefusal) ||
+        error.message !== "host_headroom_insufficient"
+      )
+        throw error;
+      consecutiveHealthy = 0;
+      lastHeadroomError = error;
+      reason = error.message;
+    }
+    samples.push(
+      Object.freeze({
+        admitted: reason === null,
+        attempt: index + 1,
+        reason,
+        resources: observation.resources,
+      }),
+    );
+    if (consecutiveHealthy >= requiredStableObservations)
+      return Object.freeze({
+        observation,
+        samples: Object.freeze(samples),
+      });
+    if (index + 1 < maxObservations) await pause(retryDelayMs);
+  }
+  throw (
+    lastHeadroomError ??
+    new HostedGateRefusal("host_headroom_not_stably_proven")
+  );
 }
 
 async function required(executable, arguments_, failure, options) {
@@ -558,10 +621,15 @@ export async function prepareHost(context) {
   const preparedAt = new Date().toISOString();
   let observation;
   try {
-    observation = await observePristineHost(context);
-    validateHostAdmission(observation);
+    const admission = await settleHostAdmission(context, {
+      recordObservation: (value) => {
+        observation = value;
+      },
+    });
+    observation = admission.observation;
     await assertExactBuiltCheckout(context);
     await writeJsonAtomically(`${context.artifactRoot}/preflight.json`, {
+      admissionSamples: admission.samples,
       admitted: true,
       observation,
       schemaVersion: HOSTED_GATE_SCHEMA,

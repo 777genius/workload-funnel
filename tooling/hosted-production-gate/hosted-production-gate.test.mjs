@@ -43,7 +43,7 @@ import {
   observePidHeadroom,
   processInventory,
 } from "./host-observation.mjs";
-import { rejectedPrepareEvidence } from "./host-setup.mjs";
+import { rejectedPrepareEvidence, settleHostAdmission } from "./host-setup.mjs";
 import {
   installRuntimeCustody,
   verifyRuntimeCustody,
@@ -90,6 +90,59 @@ describe("hosted gate fail-closed contracts", () => {
         new Error("bootstrap_tool_inventory_incomplete"),
       ).observation,
     ).toBeNull();
+  });
+
+  test("settles only transient headroom and requires consecutive healthy samples", async () => {
+    const busy = admittedObservation();
+    busy.resources.cpuPsiSome = 0.2;
+    const healthy = [
+      admittedObservation(),
+      admittedObservation(),
+      admittedObservation(),
+    ];
+    const observations = [busy, ...healthy];
+    const pause = vi.fn().mockResolvedValue(undefined);
+    const recordObservation = vi.fn();
+    await expect(
+      settleHostAdmission(
+        {},
+        {
+          maxObservations: 4,
+          observe: async () => observations.shift(),
+          pause,
+          recordObservation,
+          requiredStableObservations: 3,
+          retryDelayMs: 1,
+        },
+      ),
+    ).resolves.toEqual({
+      observation: healthy[2],
+      samples: [
+        expect.objectContaining({ admitted: false, attempt: 1 }),
+        expect.objectContaining({ admitted: true, attempt: 2 }),
+        expect.objectContaining({ admitted: true, attempt: 3 }),
+        expect.objectContaining({ admitted: true, attempt: 4 }),
+      ],
+    });
+    expect(pause).toHaveBeenCalledTimes(3);
+    expect(recordObservation).toHaveBeenCalledTimes(4);
+
+    const foreign = admittedObservation();
+    foreign.systemd.foreignUnits.push("foreign.service");
+    const foreignPause = vi.fn();
+    await expect(
+      settleHostAdmission(
+        {},
+        {
+          maxObservations: 4,
+          observe: async () => foreign,
+          pause: foreignPause,
+          requiredStableObservations: 3,
+          retryDelayMs: 1,
+        },
+      ),
+    ).rejects.toThrow("foreign_workload_service_state");
+    expect(foreignPause).not.toHaveBeenCalled();
   });
 
   test("derives only fixed owned paths from strict GitHub metadata", () => {
