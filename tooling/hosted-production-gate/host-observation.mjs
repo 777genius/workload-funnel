@@ -7,6 +7,7 @@ import {
   statfs,
 } from "node:fs/promises";
 import { availableParallelism, totalmem } from "node:os";
+import { dirname, normalize } from "node:path/posix";
 
 import {
   ALLOCATION_MOUNT,
@@ -44,6 +45,8 @@ const TOOL_CANDIDATES = Object.freeze({
   useradd: ["/usr/sbin/useradd"],
   userdel: ["/usr/sbin/userdel"],
 });
+
+const CGROUP_MOUNT = "/sys/fs/cgroup";
 
 async function resolveTool(candidates) {
   for (const candidate of candidates) {
@@ -102,6 +105,119 @@ function parseMemory(value) {
   if (!(total > 0) || !(available >= 0) || available > total)
     throw new HostedGateRefusal("host_memory_malformed");
   return Object.freeze({ available, total });
+}
+
+function parsePositiveInteger(value, code, { allowZero = false } = {}) {
+  const normalized = value.trim();
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(normalized))
+    throw new HostedGateRefusal(code);
+  const parsed = Number(normalized);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < 0 ||
+    (!allowZero && parsed === 0)
+  )
+    throw new HostedGateRefusal(code);
+  return parsed;
+}
+
+function unifiedCgroupPath(value) {
+  const entries = lines(value).map((line) => {
+    const match = line.match(/^([0-9]+):([^:]*):(\/.*)$/u);
+    if (match === null)
+      throw new HostedGateRefusal("host_cgroup_membership_malformed");
+    return Object.freeze({
+      controllers: match[2],
+      path: match[3],
+    });
+  });
+  const unified = entries.filter((entry) => entry.controllers === "");
+  if (
+    unified.length !== 1 ||
+    unified[0].path.includes("\0") ||
+    normalize(unified[0].path) !== unified[0].path
+  )
+    throw new HostedGateRefusal("host_cgroup_membership_malformed");
+  return unified[0].path;
+}
+
+async function optionalRead(path, read) {
+  try {
+    return await read(path, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function systemTaskCount(value) {
+  const field = value.trim().split(/\s+/u)[3];
+  const match = field?.match(/^[0-9]+\/([1-9][0-9]*)$/u);
+  if (match === null || match === undefined)
+    throw new HostedGateRefusal("host_system_task_count_malformed");
+  return parsePositiveInteger(match[1], "host_system_task_count_malformed");
+}
+
+export async function observePidHeadroom({
+  read = readFile,
+  resolve = realpath,
+} = {}) {
+  const [mount, membershipText, kernelMaximumText, loadText] =
+    await Promise.all([
+      resolve(CGROUP_MOUNT),
+      read("/proc/self/cgroup", "utf8"),
+      read("/proc/sys/kernel/pid_max", "utf8"),
+      read("/proc/loadavg", "utf8"),
+    ]);
+  if (mount !== CGROUP_MOUNT)
+    throw new HostedGateRefusal("host_cgroup_mount_identity_invalid");
+  const membership = unifiedCgroupPath(membershipText);
+  const requested =
+    membership === "/" ? CGROUP_MOUNT : `${CGROUP_MOUNT}${membership}`;
+  const current = await resolve(requested);
+  if (
+    current !== requested ||
+    (current !== CGROUP_MOUNT && !current.startsWith(`${CGROUP_MOUNT}/`))
+  )
+    throw new HostedGateRefusal("host_cgroup_scope_identity_invalid");
+
+  const kernelMaximum = parsePositiveInteger(
+    kernelMaximumText,
+    "host_kernel_pid_max_malformed",
+  );
+  const taskCount = systemTaskCount(loadText);
+  const headrooms = [Math.max(0, kernelMaximum - taskCount)];
+  for (let scope = current; ; scope = dirname(scope)) {
+    const [currentText, maximumText] = await Promise.all([
+      optionalRead(`${scope}/pids.current`, read),
+      optionalRead(`${scope}/pids.max`, read),
+    ]);
+    if (currentText === undefined && maximumText !== undefined)
+      throw new HostedGateRefusal("host_cgroup_pid_scope_malformed");
+    if (
+      currentText !== undefined &&
+      maximumText === undefined &&
+      scope !== CGROUP_MOUNT
+    )
+      throw new HostedGateRefusal("host_cgroup_pid_scope_malformed");
+    if (currentText !== undefined && maximumText !== undefined) {
+      const used = parsePositiveInteger(
+        currentText,
+        "host_cgroup_pid_scope_malformed",
+        { allowZero: true },
+      );
+      const normalizedMaximum = maximumText.trim();
+      if (normalizedMaximum !== "max") {
+        const maximum = parsePositiveInteger(
+          normalizedMaximum,
+          "host_cgroup_pid_scope_malformed",
+        );
+        headrooms.push(Math.max(0, maximum - used));
+      }
+    }
+    if (scope === CGROUP_MOUNT) break;
+  }
+  return Math.min(...headrooms);
 }
 
 async function pathExists(path) {
@@ -273,8 +389,7 @@ export async function observePristineHost(context) {
     ioPsi,
     memoryPsi,
     disk,
-    pidsCurrentText,
-    pidsMaxText,
+    pidHeadroom,
     processInventoryResult,
   ] = await Promise.all([
     readFile("/proc/1/comm", "utf8"),
@@ -319,17 +434,11 @@ export async function observePristineHost(context) {
     readFile("/proc/pressure/io", "utf8"),
     readFile("/proc/pressure/memory", "utf8"),
     statfs(context.runnerTemp),
-    readFile("/sys/fs/cgroup/pids.current", "utf8"),
-    readFile("/sys/fs/cgroup/pids.max", "utf8"),
+    observePidHeadroom(),
     processInventory(),
   ]);
   const memory = parseMemory(memoryText);
   const cpuCount = availableParallelism();
-  const pidsCurrent = Number(pidsCurrentText.trim());
-  const pidsMaximum =
-    pidsMaxText.trim() === "max"
-      ? Number((await readFile("/proc/sys/kernel/pid_max", "utf8")).trim())
-      : Number(pidsMaxText.trim());
   const systemdVersion = Number(
     systemdVersionText.match(/^systemd ([0-9]+)(?:\s|$)/u)?.[1],
   );
@@ -409,7 +518,7 @@ export async function observePristineHost(context) {
       memoryAvailableRatio: memory.available / memory.total,
       memoryPsiSome: parsePsi(memoryPsi),
       memoryTotalBytes: Math.min(memory.total, totalmem()),
-      pidHeadroom: pidsMaximum - pidsCurrent,
+      pidHeadroom,
     }),
     rootSudo: Object.freeze({
       effectiveUid: process.getuid?.(),

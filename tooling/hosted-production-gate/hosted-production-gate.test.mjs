@@ -38,6 +38,7 @@ import {
 import { executeCleanupSteps, requireCertainCleanup } from "./host-cleanup.mjs";
 import {
   classifyForeignProcesses,
+  observePidHeadroom,
   processInventory,
 } from "./host-observation.mjs";
 import {
@@ -248,6 +249,84 @@ describe("hosted gate fail-closed contracts", () => {
         },
       }),
     ).resolves.toEqual([]);
+  });
+
+  test("uses the tightest current cgroup ancestor PID limit", async () => {
+    const files = new Map([
+      ["/proc/self/cgroup", "0::/actions_job/runner\n"],
+      ["/proc/sys/kernel/pid_max", "4194304\n"],
+      ["/proc/loadavg", "0.00 0.01 0.02 1/200 42\n"],
+      ["/sys/fs/cgroup/actions_job/runner/pids.current", "100\n"],
+      ["/sys/fs/cgroup/actions_job/runner/pids.max", "1000\n"],
+      ["/sys/fs/cgroup/actions_job/pids.current", "150\n"],
+      ["/sys/fs/cgroup/actions_job/pids.max", "500\n"],
+      ["/sys/fs/cgroup/pids.current", "250\n"],
+    ]);
+    await expect(
+      observePidHeadroom({
+        read: async (path) => {
+          if (files.has(path)) return files.get(path);
+          const error = new Error("missing");
+          error.code = "ENOENT";
+          throw error;
+        },
+        resolve: async (path) => path,
+      }),
+    ).resolves.toBe(350);
+  });
+
+  test("uses kernel task headroom when the cgroup root has no PID files", async () => {
+    const files = new Map([
+      ["/proc/self/cgroup", "0::/\n"],
+      ["/proc/sys/kernel/pid_max", "5000\n"],
+      ["/proc/loadavg", "0.00 0.01 0.02 1/321 42\n"],
+    ]);
+    await expect(
+      observePidHeadroom({
+        read: async (path) => {
+          if (files.has(path)) return files.get(path);
+          const error = new Error("missing");
+          error.code = "ENOENT";
+          throw error;
+        },
+        resolve: async (path) => path,
+      }),
+    ).resolves.toBe(4679);
+  });
+
+  test("refuses escaped or incomplete cgroup PID scopes", async () => {
+    const base = new Map([
+      ["/proc/sys/kernel/pid_max", "5000\n"],
+      ["/proc/loadavg", "0.00 0.01 0.02 1/321 42\n"],
+    ]);
+    const observe = (entries) =>
+      observePidHeadroom({
+        read: async (path) => {
+          const value = entries.get(path);
+          if (value !== undefined) return value;
+          const error = new Error("missing");
+          error.code = "ENOENT";
+          throw error;
+        },
+        resolve: async (path) => path,
+      });
+    await expect(
+      observe(
+        new Map([
+          ...base,
+          ["/proc/self/cgroup", "0::/actions_job/../foreign\n"],
+        ]),
+      ),
+    ).rejects.toThrow("host_cgroup_membership_malformed");
+    await expect(
+      observe(
+        new Map([
+          ...base,
+          ["/proc/self/cgroup", "0::/actions_job/runner\n"],
+          ["/sys/fs/cgroup/actions_job/runner/pids.current", "10\n"],
+        ]),
+      ),
+    ).rejects.toThrow("host_cgroup_pid_scope_malformed");
   });
 });
 
