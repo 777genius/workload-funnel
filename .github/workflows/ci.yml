@@ -4,12 +4,19 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Commit SHA expected to receive the hosted gate dispatch
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   verify:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -46,3 +53,23 @@ jobs:
         run: pnpm changeset:status
       - name: Check patch whitespace
         run: git diff --check
+
+  hosted-gate-dispatch-bootstrap:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Validate dispatch and fail closed
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '%s\n' 'expected_sha must be exactly 40 lowercase hex characters.'
+            exit 1
+          fi
+          if [[ "$EXPECTED_SHA" != "$GITHUB_SHA" ]]; then
+            printf '%s\n' 'expected_sha does not match GITHUB_SHA.'
+            exit 1
+          fi
+          printf '%s\n' 'Fail closed: production gate is not installed on main.'
+          exit 1
