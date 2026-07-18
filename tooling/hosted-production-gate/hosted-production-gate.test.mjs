@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -16,6 +17,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
+
+import { ARCHITECTURE_PLAN_SHA256 } from "./constants.mjs";
 
 import {
   collectReviewedFiles,
@@ -64,6 +67,20 @@ afterEach(async () => {
 });
 
 describe("hosted gate fail-closed contracts", () => {
+  test("binds hosted review to the canonical architecture plan digest", async () => {
+    const plan = await readFile(
+      fileURLToPath(
+        new URL(
+          "../../docs/workload-funnel-architecture-plan.md",
+          import.meta.url,
+        ),
+      ),
+    );
+    expect(createHash("sha256").update(plan).digest("hex")).toBe(
+      ARCHITECTURE_PLAN_SHA256,
+    );
+  });
+
   test("preserves a sanitized rejected host observation", () => {
     const context = { runId: `wf-production-gate-${"a".repeat(32)}` };
     const observation = admittedObservation();

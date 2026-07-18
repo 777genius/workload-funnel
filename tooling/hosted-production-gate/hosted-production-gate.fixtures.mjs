@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import {
+  ARCHITECTURE_PLAN_SHA256,
   AWS_CLI,
   HOST_MINIMUMS,
   PINNED_IMAGES,
@@ -132,8 +133,7 @@ export function passingProductionEvidence(runId) {
 
 function exactReviewTuple(evidence) {
   return {
-    architecturePlanSha256:
-      "63d0945eedc7884f4419597cb4e19c2c541b103f0458c011d557b24e4f1bccbf",
+    architecturePlanSha256: ARCHITECTURE_PLAN_SHA256,
     executables: [{ path: "/opt/reviewed/node" }],
     host: {
       architecture: evidence.host.architecture,

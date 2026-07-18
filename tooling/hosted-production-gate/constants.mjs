@@ -1,3 +1,5 @@
+export { ARCHITECTURE_PLAN_SHA256 } from "../production-gate/constants.mjs";
+
 export const HOSTED_GATE_SCHEMA = "workload-funnel.hosted-production-gate.v1";
 export const HOSTED_VERDICT_SCHEMA =
   "workload-funnel.hosted-production-gate.verdict.v1";
@@ -24,9 +26,6 @@ export const DISPOSABLE_HOST_ATTESTATION =
 
 export const REVIEW_MANIFEST_SCHEMA =
   "workload-funnel.production-gate.review-manifest.v1";
-
-export const ARCHITECTURE_PLAN_SHA256 =
-  "63d0945eedc7884f4419597cb4e19c2c541b103f0458c011d557b24e4f1bccbf";
 
 export const HYPERQUEUE = Object.freeze({
   archiveName: "hq-v0.26.2-linux-x64.tar.gz",
