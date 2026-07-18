@@ -84,11 +84,15 @@ async function resolveInstalledPackage(packageName, start, workspacePackages) {
 }
 
 function packageDependencies(manifest) {
+  const requiredPeers = Object.keys(manifest.peerDependencies ?? {}).filter(
+    (name) => manifest.peerDependenciesMeta?.[name]?.optional !== true,
+  );
   return Object.freeze(
     [
       ...new Set([
         ...Object.keys(manifest.dependencies ?? {}),
         ...Object.keys(manifest.optionalDependencies ?? {}),
+        ...requiredPeers,
       ]),
     ].sort(),
   );

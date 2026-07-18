@@ -681,6 +681,8 @@ describe("generic review and cleanup evidence", () => {
     const reviewRoot = `${root}/review`;
     const storageBlob = `${root}/store/storage-blob`;
     const coreClient = `${root}/store/core-client`;
+    const coreHttpCompat = `${root}/store/core-http-compat`;
+    const coreRestPipeline = `${root}/store/core-rest-pipeline`;
     await mkdir(`${workspace}/node_modules/@azure`, { recursive: true });
     await mkdir(`${workspace}/packages/internal`, { recursive: true });
     const internalManifest = JSON.stringify({
@@ -708,11 +710,16 @@ describe("generic review and cleanup evidence", () => {
     };
     await prepareReview(reviewRoot);
     await mkdir(`${storageBlob}/node_modules/@azure`, { recursive: true });
+    await mkdir(`${coreHttpCompat}/node_modules/@azure`, { recursive: true });
     await mkdir(coreClient, { recursive: true });
+    await mkdir(coreRestPipeline, { recursive: true });
     await writeFile(
       `${storageBlob}/package.json`,
       JSON.stringify({
-        dependencies: { "@azure/core-client": "1.0.0" },
+        dependencies: {
+          "@azure/core-client": "1.0.0",
+          "@azure/core-http-compat": "2.5.0",
+        },
         name: "@azure/storage-blob",
         version: "12.33.0",
       }),
@@ -723,6 +730,36 @@ describe("generic review and cleanup evidence", () => {
       JSON.stringify({ name: "@azure/core-client", version: "1.0.0" }),
     );
     await writeFile(`${coreClient}/index.js`, "export const core = true;\n");
+    await writeFile(
+      `${coreHttpCompat}/package.json`,
+      JSON.stringify({
+        name: "@azure/core-http-compat",
+        peerDependencies: {
+          "@azure/core-client": "1.0.0",
+          "@azure/core-rest-pipeline": "1.0.0",
+          "@azure/optional-runtime": "1.0.0",
+        },
+        peerDependenciesMeta: {
+          "@azure/optional-runtime": { optional: true },
+        },
+        version: "2.5.0",
+      }),
+    );
+    await writeFile(
+      `${coreHttpCompat}/index.js`,
+      "export const compat = true;\n",
+    );
+    await writeFile(
+      `${coreRestPipeline}/package.json`,
+      JSON.stringify({
+        name: "@azure/core-rest-pipeline",
+        version: "1.0.0",
+      }),
+    );
+    await writeFile(
+      `${coreRestPipeline}/index.js`,
+      "export const pipeline = true;\n",
+    );
     await symlink(
       storageBlob,
       `${workspace}/node_modules/@azure/storage-blob`,
@@ -731,6 +768,21 @@ describe("generic review and cleanup evidence", () => {
     await symlink(
       coreClient,
       `${storageBlob}/node_modules/@azure/core-client`,
+      "dir",
+    );
+    await symlink(
+      coreHttpCompat,
+      `${storageBlob}/node_modules/@azure/core-http-compat`,
+      "dir",
+    );
+    await symlink(
+      coreClient,
+      `${coreHttpCompat}/node_modules/@azure/core-client`,
+      "dir",
+    );
+    await symlink(
+      coreRestPipeline,
+      `${coreHttpCompat}/node_modules/@azure/core-rest-pipeline`,
       "dir",
     );
     const custody = await installRuntimeCustody({
@@ -748,6 +800,8 @@ describe("generic review and cleanup evidence", () => {
     expect(secondCustody.bundle.sha256).toBe(custody.bundle.sha256);
     expect(custody.packages.map((item) => item.name).sort()).toEqual([
       "@azure/core-client",
+      "@azure/core-http-compat",
+      "@azure/core-rest-pipeline",
       "@azure/storage-blob",
       "@workload-funnel/internal",
     ]);
@@ -788,7 +842,7 @@ describe("generic review and cleanup evidence", () => {
         },
         { expectedGid: reviewIdentity.gid, expectedUid: reviewIdentity.uid },
       ),
-    ).resolves.toMatchObject({ fileCount: 6, linkCount: 3 });
+    ).resolves.toMatchObject({ fileCount: 10, linkCount: 6 });
     const internalTarget = `${reviewRoot}/packages/internal/index.js`;
     await chmod(internalTarget, 0o644);
     await writeFile(internalTarget, "export const internalDrift = true;\n");
