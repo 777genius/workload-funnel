@@ -351,10 +351,7 @@ export function validatePrepareEvidence(prepare, manifest, context) {
   );
   refuse(
     build.commit !== context.commit ||
-      typeof build.reviewRoot !== "string" ||
-      !build.reviewRoot.startsWith(
-        "/opt/workload-funnel-hosted-production-gate-",
-      ),
+      build.reviewRoot !== `${context.hostRoot}/source`,
     "prepare_evidence_invalid",
   );
   refuse(

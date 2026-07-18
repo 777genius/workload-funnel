@@ -79,7 +79,7 @@ test("bounds downloads with or without an honest content-length", async () => {
 });
 
 test("seals only trusted AWS CLI ancestors inside the owned root", async () => {
-  const ownedRoot = "/opt/workload-funnel/aws-cli";
+  const ownedRoot = "/var/lib/workload-funnel/aws-cli";
   const executable = `${ownedRoot}/v2/2.35.23/dist/aws`;
   const identities = new Map([
     [ownedRoot, directoryIdentity(ownedRoot)],
@@ -157,7 +157,7 @@ test("accepts only the official exact PostgreSQL 18.4 package identity", () => {
 });
 
 test("isolates PostgreSQL metadata, archives, keyring, and source configuration", () => {
-  const hostRoot = `/opt/workload-funnel-hosted-production-gate-${"a".repeat(32)}`;
+  const hostRoot = `/var/lib/workload-funnel-hosted-runtime-${"a".repeat(32)}`;
   const configuration = postgresAptConfiguration(hostRoot);
   expect(configuration).toEqual({
     aptSource: `deb [arch=amd64 signed-by=${hostRoot}/postgres-apt/ACCC4CF8.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main`,

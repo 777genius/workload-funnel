@@ -77,7 +77,7 @@ async function fixture() {
     artifactRoot: `${root}/evidence`,
     commit: "b".repeat(40),
     controlRoot: `${root}/control`,
-    hostRoot: `/opt/workload-funnel-hosted-production-gate-${suffix}`,
+    hostRoot: `/var/lib/workload-funnel-hosted-runtime-${suffix}`,
     runId: `wf-production-gate-${suffix}`,
   };
   await mkdir(context.artifactRoot);

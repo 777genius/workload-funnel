@@ -41,7 +41,7 @@ async function fixture(dockerBaseline = []) {
     artifactRoot,
     commit: "b".repeat(40),
     controlRoot,
-    hostRoot: `/opt/workload-funnel-hosted-production-gate-${suffix}`,
+    hostRoot: `/var/lib/workload-funnel-hosted-runtime-${suffix}`,
     runId: `wf-production-gate-${suffix}`,
   };
   const state = await createHostState(

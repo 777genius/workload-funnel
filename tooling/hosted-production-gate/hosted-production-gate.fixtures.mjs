@@ -164,7 +164,7 @@ export function certainRecovery(evidence) {
 }
 
 export function exactPrepareFixture(context) {
-  const hostRoot = `/opt/workload-funnel-hosted-production-gate-${"d".repeat(32)}`;
+  const hostRoot = context.hostRoot;
   const reviewRoot = `${hostRoot}/source`;
   const awsPath = `${hostRoot}/aws-cli/aws`;
   const psqlPath = "/usr/lib/postgresql/18/bin/psql";

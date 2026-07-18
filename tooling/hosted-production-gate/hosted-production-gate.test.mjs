@@ -156,6 +156,9 @@ describe("hosted gate fail-closed contracts", () => {
     expect(first.controlRoot).toBe(
       `/var/lib/workload-funnel-hosted-production-gate-${first.runId.slice(-32)}`,
     );
+    expect(first.hostRoot).toBe(
+      `/var/lib/workload-funnel-hosted-runtime-${first.runId.slice(-32)}`,
+    );
     expect(first.controlRoot.startsWith(first.artifactRoot)).toBe(false);
     expect(first.controlRoot.startsWith(first.hostRoot)).toBe(false);
     for (const hostile of [

@@ -13,6 +13,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 
 import {
   AWS_CLI,
+  HOST_ROOT_PREFIX,
   POSTGRES_CLIENT,
   POSTGRES_SIGNING_KEY,
 } from "./constants.mjs";
@@ -220,11 +221,12 @@ export function verifyPostgresNotPreinstalled(
 }
 
 export function postgresAptConfiguration(hostRoot) {
+  const suffix =
+    typeof hostRoot === "string" ? hostRoot.slice(HOST_ROOT_PREFIX.length) : "";
   refuse(
     typeof hostRoot !== "string" ||
-      !/^\/opt\/workload-funnel-hosted-production-gate-[a-f0-9]{32}$/u.test(
-        hostRoot,
-      ),
+      !hostRoot.startsWith(HOST_ROOT_PREFIX) ||
+      !/^[a-f0-9]{32}$/u.test(suffix),
     "postgres_apt_root_invalid",
   );
   const archivesPath = `${hostRoot}/postgres-apt/archives`;

@@ -462,7 +462,7 @@ export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
 });
 
 export const SYNTHETIC_USER = "workload-funnel-synthetic";
-export const HOST_ROOT_PREFIX = "/opt/workload-funnel-hosted-production-gate-";
+export const HOST_ROOT_PREFIX = "/var/lib/workload-funnel-hosted-runtime-";
 export const CONTROL_ROOT_PREFIX =
   "/var/lib/workload-funnel-hosted-production-gate-";
 export const SANDBOX_PARENT = "/var/data/workload-funnel/sandboxes";
