@@ -50,7 +50,7 @@ jobs:
         run: pnpm test:hosted-canary
       - name: Check release intent
         if: github.event_name == 'pull_request'
-        run: pnpm changeset:status
+        run: pnpm exec changeset status --since=origin/main
       - name: Check patch whitespace
         run: git diff --check
 
