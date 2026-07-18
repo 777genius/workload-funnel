@@ -154,7 +154,10 @@ export async function finalizeCleanedControlState(state, operations = {}) {
   }
 }
 
-export async function readCleanedEvidence(context) {
+export async function readCleanedEvidence(
+  context,
+  { expectedGid = 0, expectedUid = 0 } = {},
+) {
   const readExactJson = async (name) => {
     const path = `${context.artifactRoot}/${name}`;
     let descriptor;
@@ -167,8 +170,8 @@ export async function readCleanedEvidence(context) {
       if (
         identity.dev !== linkIdentity.dev ||
         identity.ino !== linkIdentity.ino ||
-        identity.uid !== 0 ||
-        identity.gid !== 0 ||
+        identity.uid !== expectedUid ||
+        identity.gid !== expectedGid ||
         (identity.mode & 0o7777) !== 0o444 ||
         (await realpath(path)) !== path
       )

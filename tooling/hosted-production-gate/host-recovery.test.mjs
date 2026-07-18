@@ -30,7 +30,9 @@ import {
 import {
   cleanupTombstonePath,
   finalizeCleanedControlState,
+  readCleanedEvidence,
 } from "./cleanup-finalization.mjs";
+import { removeFixtureTree } from "./fixture-cleanup.mjs";
 import {
   finishGateChild,
   gateChildPlan,
@@ -59,9 +61,12 @@ const execFileAsync = promisify(execFile);
 const roots = [];
 
 afterEach(async () => {
-  await Promise.all(
-    roots.splice(0).map((root) => rm(root, { force: true, recursive: true })),
-  );
+  await Promise.all(roots.splice(0).map((root) => removeFixtureTree(root)));
+});
+
+const fixtureIdentityOptions = Object.freeze({
+  expectedGid: process.getgid?.(),
+  expectedUid: process.getuid?.(),
 });
 
 async function fixture() {
@@ -495,9 +500,12 @@ test("replays final cleanup across state move, control rmdir, and tombstone unli
       },
     };
     await expect(
-      finalizeCleanedControlState(state, operations),
+      finalizeCleanedControlState(state, {
+        ...operations,
+        ...fixtureIdentityOptions,
+      }),
     ).rejects.toThrow(/^interrupted_/u);
-    await finalizeCleanedControlState(state);
+    await finalizeCleanedControlState(state, fixtureIdentityOptions);
     await expect(access(context.controlRoot)).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -512,6 +520,7 @@ test("refuses a recreated control directory while a cleanup tombstone is durable
   await markHostCleaned(state);
   await expect(
     finalizeCleanedControlState(state, {
+      ...fixtureIdentityOptions,
       removeControl: async (path) => {
         await rmdir(path);
         throw new Error("interrupted_rmdir_after");
@@ -519,9 +528,9 @@ test("refuses a recreated control directory while a cleanup tombstone is durable
     }),
   ).rejects.toThrow("interrupted_rmdir_after");
   await mkdir(context.controlRoot, { mode: 0o700 });
-  await expect(finalizeCleanedControlState(state)).rejects.toThrow(
-    "host_state_control_root_changed",
-  );
+  await expect(
+    finalizeCleanedControlState(state, fixtureIdentityOptions),
+  ).rejects.toThrow("host_state_control_root_changed");
 });
 
 test("a fully completed teardown is a no-op only with exact cleaned evidence", async () => {
@@ -545,10 +554,14 @@ test("a fully completed teardown is a no-op only with exact cleaned evidence", a
   );
   await chmod(`${context.artifactRoot}/host-state-evidence.json`, 0o444);
   await chmod(`${context.artifactRoot}/host-cleanup.json`, 0o444);
-  await finalizeCleanedControlState(state);
+  await finalizeCleanedControlState(state, fixtureIdentityOptions);
   const proveZeroResidue = vi.fn().mockResolvedValue({ zeroResidue: true });
   await expect(
-    cleanupHost(context, { proveZeroResidue }),
+    cleanupHost(context, {
+      proveZeroResidue,
+      readEvidence: (value) =>
+        readCleanedEvidence(value, fixtureIdentityOptions),
+    }),
   ).resolves.toMatchObject({ certain: true });
   expect(proveZeroResidue).toHaveBeenCalledOnce();
   await mkdir(context.controlRoot, { mode: 0o700 });

@@ -66,6 +66,22 @@ function code(error) {
     : "hosted_gate_prepare_failed";
 }
 
+export function rejectedPrepareEvidence(
+  context,
+  preparedAt,
+  error,
+  observation,
+) {
+  return Object.freeze({
+    observation: observation ?? null,
+    prepared: false,
+    preparedAt,
+    reason: code(error),
+    runId: context.runId,
+    schemaVersion: HOSTED_GATE_SCHEMA,
+  });
+}
+
 async function required(executable, arguments_, failure, options) {
   const result = await runCommand(executable, arguments_, options);
   if (result.code !== 0) throw new HostedGateRefusal(failure);
@@ -540,8 +556,9 @@ export async function initializeArtifacts(context) {
 
 export async function prepareHost(context) {
   const preparedAt = new Date().toISOString();
+  let observation;
   try {
-    const observation = await observePristineHost(context);
+    observation = await observePristineHost(context);
     validateHostAdmission(observation);
     await assertExactBuiltCheckout(context);
     await writeJsonAtomically(`${context.artifactRoot}/preflight.json`, {
@@ -736,13 +753,10 @@ export async function prepareHost(context) {
     await markHostPrepared(state);
     return state;
   } catch (error) {
-    await writeJsonAtomically(`${context.artifactRoot}/prepare.json`, {
-      prepared: false,
-      preparedAt,
-      reason: code(error),
-      runId: context.runId,
-      schemaVersion: HOSTED_GATE_SCHEMA,
-    }).catch(() => undefined);
+    await writeJsonAtomically(
+      `${context.artifactRoot}/prepare.json`,
+      rejectedPrepareEvidence(context, preparedAt, error, observation),
+    ).catch(() => undefined);
     throw error;
   }
 }

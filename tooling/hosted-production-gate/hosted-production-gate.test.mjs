@@ -36,12 +36,14 @@ import {
   validateRecoveryDocuments,
 } from "./artifacts.mjs";
 import { executeCleanupSteps, requireCertainCleanup } from "./host-cleanup.mjs";
+import { removeFixtureTree } from "./fixture-cleanup.mjs";
 import {
   classifyForeignProcesses,
   dockerImageInventory,
   observePidHeadroom,
   processInventory,
 } from "./host-observation.mjs";
+import { rejectedPrepareEvidence } from "./host-setup.mjs";
 import {
   installRuntimeCustody,
   verifyRuntimeCustody,
@@ -58,12 +60,38 @@ import {
 const roots = [];
 
 afterEach(async () => {
-  await Promise.all(
-    roots.splice(0).map((root) => rm(root, { force: true, recursive: true })),
-  );
+  await Promise.all(roots.splice(0).map((root) => removeFixtureTree(root)));
 });
 
 describe("hosted gate fail-closed contracts", () => {
+  test("preserves a sanitized rejected host observation", () => {
+    const context = { runId: `wf-production-gate-${"a".repeat(32)}` };
+    const observation = admittedObservation();
+    const preparedAt = "2026-07-18T00:00:00.000Z";
+    expect(
+      rejectedPrepareEvidence(
+        context,
+        preparedAt,
+        new Error("foreign_workload_service_state"),
+        observation,
+      ),
+    ).toEqual({
+      observation,
+      prepared: false,
+      preparedAt,
+      reason: "foreign_workload_service_state",
+      runId: context.runId,
+      schemaVersion: "workload-funnel.hosted-production-gate.v1",
+    });
+    expect(
+      rejectedPrepareEvidence(
+        context,
+        preparedAt,
+        new Error("bootstrap_tool_inventory_incomplete"),
+      ).observation,
+    ).toBeNull();
+  });
+
   test("derives only fixed owned paths from strict GitHub metadata", () => {
     const first = hostedContext(environment());
     const second = hostedContext(environment());

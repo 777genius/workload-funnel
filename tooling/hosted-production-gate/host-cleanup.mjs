@@ -438,16 +438,17 @@ export async function cleanupHost(context, dependencies = {}) {
     dependencies.writeEvidence ?? writeRecoverableJsonAtomically;
   const finalizeState =
     dependencies.finalizeState ?? finalizeCleanedControlState;
+  const readEvidence = dependencies.readEvidence ?? readCleanedEvidence;
   const tombstone = await readCleanupTombstone(context);
   if (tombstone !== undefined) {
-    const evidence = await readCleanedEvidence(context);
+    const evidence = await readEvidence(context);
     if (evidence.state.journalChecksum !== tombstone.journalChecksum)
       throw new HostedGateRefusal("cleanup_tombstone_evidence_mismatch");
     await finalizeState(tombstone);
     return evidence.cleanup;
   }
   if (!(await exists(context.controlRoot))) {
-    const evidence = await readCleanedEvidence(context);
+    const evidence = await readEvidence(context);
     await proveZeroResidue(context);
     return evidence.cleanup;
   }

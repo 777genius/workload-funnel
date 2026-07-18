@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,12 +11,13 @@ import {
   validateChecksumInventory,
 } from "./artifacts.mjs";
 import { sha256 } from "./contract.mjs";
+import { removeFixtureTree } from "./fixture-cleanup.mjs";
 import { sha256Sums } from "./review-manifest.mjs";
 
 let root;
 
 afterEach(async () => {
-  if (root !== undefined) await rm(root, { force: true, recursive: true });
+  if (root !== undefined) await removeFixtureTree(root);
   root = undefined;
 });
 
