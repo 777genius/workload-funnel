@@ -1,5 +1,6 @@
 import { lstat, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   ALLOCATION_MOUNT,
@@ -12,8 +13,10 @@ import {
 import { HostedGateRefusal } from "./contract.mjs";
 import {
   classifyForeignProcesses,
+  dockerImageInventory,
   processInventory,
 } from "./host-observation.mjs";
+import { normalizeDockerImageInventory } from "./docker-image-baseline.mjs";
 import {
   classifyOwnedPackagePlan,
   installedPackageInventory,
@@ -139,6 +142,18 @@ export async function verifyZeroResidue(context, options = {}) {
     if (result.code === 0) images.push(reference);
     else if (result.code !== 1) imageProbesCertain = false;
   }
+  let imageBaseline = [];
+  let imageInventory = [];
+  let imageBaselineMatches = false;
+  try {
+    imageBaseline = normalizeDockerImageInventory(
+      hostState?.dockerBaseline ?? [],
+    );
+    imageInventory = await dockerImageInventory();
+    imageBaselineMatches = isDeepStrictEqual(imageInventory, imageBaseline);
+  } catch {
+    imageProbesCertain = false;
+  }
   const containers = await runCommand("/usr/bin/docker", [
     "container",
     "ls",
@@ -169,17 +184,14 @@ export async function verifyZeroResidue(context, options = {}) {
     .split("\n")
     .filter(Boolean)
     .filter((name) => !new Set(["bridge", "host", "none"]).has(name));
-  const allImages = await runCommand("/usr/bin/docker", [
-    "image",
-    "ls",
-    "--all",
-    "--quiet",
-  ]);
   const evidence = Object.freeze({
     checks: Object.freeze({
       containers: containers.stdout.trim(),
       groupExists: group.code === 0,
       images: Object.freeze(images),
+      imageBaseline,
+      imageBaselineMatches,
+      imageInventory,
       imageProbesCertain,
       loopAbsent,
       mountAbsent,
@@ -210,8 +222,7 @@ export async function verifyZeroResidue(context, options = {}) {
       packageResidue.length === 0 &&
       imageProbesCertain &&
       images.length === 0 &&
-      allImages.code === 0 &&
-      allImages.stdout.trim() === "" &&
+      imageBaselineMatches &&
       containers.code === 0 &&
       containers.stdout.trim() === "" &&
       networks.code === 0 &&
@@ -264,6 +275,9 @@ export function validateResidue(residue, context) {
       "containers",
       "groupExists",
       "imageProbesCertain",
+      "imageBaseline",
+      "imageBaselineMatches",
+      "imageInventory",
       "images",
       "loopAbsent",
       "mountAbsent",
@@ -288,6 +302,7 @@ export function validateResidue(residue, context) {
       checks.containers !== "" ||
       checks.groupExists !== false ||
       checks.imageProbesCertain !== true ||
+      checks.imageBaselineMatches !== true ||
       !Array.isArray(checks.images) ||
       checks.images.length !== 0 ||
       checks.loopAbsent !== true ||
@@ -309,6 +324,20 @@ export function validateResidue(residue, context) {
       checks.units !== "" ||
       checks.userExists !== false ||
       checks.volumes !== "",
+    "residue_evidence_invalid",
+  );
+  let baseline;
+  let inventory;
+  try {
+    baseline = normalizeDockerImageInventory(checks.imageBaseline);
+    inventory = normalizeDockerImageInventory(checks.imageInventory);
+  } catch {
+    throw new HostedGateRefusal("residue_evidence_invalid");
+  }
+  refuse(
+    !isDeepStrictEqual(checks.imageBaseline, baseline) ||
+      !isDeepStrictEqual(checks.imageInventory, inventory) ||
+      !isDeepStrictEqual(baseline, inventory),
     "residue_evidence_invalid",
   );
 }

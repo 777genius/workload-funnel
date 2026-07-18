@@ -549,10 +549,15 @@ export async function prepareHost(context) {
       observation,
       schemaVersion: HOSTED_GATE_SCHEMA,
     });
-    const state = await createHostState(context, preparedAt, {
-      docker: observation.tools.docker.path,
-      systemctl: observation.tools.systemctl.path,
-    });
+    const state = await createHostState(
+      context,
+      preparedAt,
+      {
+        docker: observation.tools.docker.path,
+        systemctl: observation.tools.systemctl.path,
+      },
+      observation.docker.images,
+    );
     await prepareHostEffect(state, {
       id: "host-root",
       kind: "host-root",

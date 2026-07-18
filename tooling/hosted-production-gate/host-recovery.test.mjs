@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 
 import {
+  assertOwnedImageOutsideBaseline,
   CLEANUP_EFFECT_ORDER,
   cleanupHost,
   productionCleanupEvidenceRequired,
@@ -385,6 +386,22 @@ test("refuses recreated identity and image digest or multiplicity drift", () => 
         ]),
       }),
     ).toThrow("owned_image_identity_changed");
+  const inspected = {
+    Id: effect.imageId,
+    RepoDigests: [effect.repoDigest],
+    RepoTags: [],
+  };
+  expect(() => assertOwnedImageOutsideBaseline(inspected, [])).not.toThrow();
+  expect(() =>
+    assertOwnedImageOutsideBaseline(inspected, [
+      {
+        id: effect.imageId,
+        repoDigests: [],
+        repoTags: ["runner/cache:stable"],
+        size: 1024,
+      },
+    ]),
+  ).toThrow("owned_image_baseline_collision");
 });
 
 test("recovers a crash at every cleanup step and a second pass touches no foreign state", async () => {
@@ -546,6 +563,9 @@ function residueEvidence(context) {
       containers: "",
       foreignProcesses: [],
       groupExists: false,
+      imageBaseline: [],
+      imageBaselineMatches: true,
+      imageInventory: [],
       imageProbesCertain: true,
       images: [],
       loopAbsent: true,

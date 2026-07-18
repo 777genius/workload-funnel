@@ -219,6 +219,14 @@ export function validateOwnedImageInspection(effect, result) {
   return item;
 }
 
+export function assertOwnedImageOutsideBaseline(identity, baseline) {
+  if (
+    !Array.isArray(baseline) ||
+    baseline.some((item) => item?.id === identity?.Id)
+  )
+    throw new HostedGateRefusal("owned_image_baseline_collision");
+}
+
 export function validateOwnedMountInspection(effect, result) {
   if (result.code === 1 && result.stdout.trim() === "") return undefined;
   if (result.code !== 0)
@@ -482,6 +490,7 @@ export async function cleanupHost(context, dependencies = {}) {
         ]);
         const identity = validateOwnedImageInspection(recorded, inspected);
         if (identity === undefined) return;
+        assertOwnedImageOutsideBaseline(identity, state.dockerBaseline);
         const result = await runCommand(docker, [
           "image",
           "rm",

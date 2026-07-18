@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { isAbsolute, posix, resolve } from "node:path";
 
@@ -10,6 +11,10 @@ import {
   REQUIRED_CGROUP_CONTROLLERS,
   SANDBOX_PARENT,
 } from "./constants.mjs";
+import {
+  normalizeDockerImageInventory,
+  pinnedImageReferenceCollisions,
+} from "./docker-image-baseline.mjs";
 
 export class HostedGateRefusal extends Error {
   constructor(code) {
@@ -161,9 +166,24 @@ export function validateHostAdmission(observation) {
       observation.docker.serverVersion.length === 0,
     "docker_server_not_proven",
   );
+  let imageInventory;
+  try {
+    imageInventory = normalizeDockerImageInventory(observation.docker?.images);
+  } catch {
+    refuse(true, "foreign_image_state");
+  }
+  const imageCollisions = pinnedImageReferenceCollisions(imageInventory);
+  refuse(
+    !isDeepStrictEqual(observation.docker.images, imageInventory) ||
+      !isDeepStrictEqual(
+        observation.docker.pinnedReferenceCollisions,
+        imageCollisions,
+      ) ||
+      imageCollisions.length !== 0,
+    "foreign_image_state",
+  );
   for (const [field, code] of [
     ["containers", "foreign_container_state"],
-    ["images", "foreign_image_state"],
     ["nonDefaultNetworks", "foreign_docker_network_state"],
     ["volumes", "foreign_docker_volume_state"],
   ])

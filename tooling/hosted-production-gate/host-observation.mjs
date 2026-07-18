@@ -17,6 +17,10 @@ import {
   SYNTHETIC_USER,
 } from "./constants.mjs";
 import { HostedGateRefusal } from "./contract.mjs";
+import {
+  normalizeDockerImageInventory,
+  pinnedImageReferenceCollisions,
+} from "./docker-image-baseline.mjs";
 import { inspectExecutable } from "./review-manifest.mjs";
 import { runCommand } from "./process-runner.mjs";
 
@@ -81,6 +85,52 @@ async function successful(executable, arguments_, code) {
   const result = await runCommand(executable, arguments_);
   if (result.code !== 0) throw new HostedGateRefusal(code);
   return result.stdout;
+}
+
+export async function dockerImageInventory({
+  executable = "/usr/bin/docker",
+  run = runCommand,
+} = {}) {
+  const listed = await run(executable, [
+    "image",
+    "ls",
+    "--all",
+    "--no-trunc",
+    "--quiet",
+  ]);
+  if (listed.code !== 0) throw new HostedGateRefusal("docker_inventory_failed");
+  const ids = [...new Set(lines(listed.stdout))].sort();
+  if (ids.some((id) => !/^sha256:[a-f0-9]{64}$/u.test(id)))
+    throw new HostedGateRefusal("docker_image_inventory_malformed");
+  if (ids.length === 0) return Object.freeze([]);
+  const inspected = await run(executable, ["image", "inspect", ...ids]);
+  if (inspected.code !== 0)
+    throw new HostedGateRefusal("docker_inventory_failed");
+  let decoded;
+  try {
+    decoded = JSON.parse(inspected.stdout);
+  } catch {
+    throw new HostedGateRefusal("docker_image_inventory_malformed");
+  }
+  let inventory;
+  try {
+    inventory = normalizeDockerImageInventory(
+      decoded.map((item) => ({
+        id: item?.Id,
+        repoDigests: item?.RepoDigests ?? [],
+        repoTags: item?.RepoTags ?? [],
+        size: item?.Size,
+      })),
+    );
+  } catch {
+    throw new HostedGateRefusal("docker_image_inventory_malformed");
+  }
+  if (
+    inventory.length !== ids.length ||
+    inventory.some((item, index) => item.id !== ids[index])
+  )
+    throw new HostedGateRefusal("docker_image_inventory_malformed");
+  return inventory;
 }
 
 function parsePsi(value) {
@@ -406,11 +456,7 @@ export async function observePristineHost(context) {
       ["container", "ls", "--all", "--quiet"],
       "docker_inventory_failed",
     ),
-    successful(
-      docker,
-      ["image", "ls", "--all", "--quiet"],
-      "docker_inventory_failed",
-    ),
+    dockerImageInventory({ executable: docker }),
     successful(
       docker,
       ["network", "ls", "--format", "{{.Name}}"],
@@ -481,10 +527,11 @@ export async function observePristineHost(context) {
     }),
     docker: Object.freeze({
       containers: Object.freeze(lines(containers)),
-      images: Object.freeze([...new Set(lines(images))]),
+      images,
       nonDefaultNetworks: Object.freeze(
         lines(networks).filter((name) => !defaultNetworks.has(name)),
       ),
+      pinnedReferenceCollisions: pinnedImageReferenceCollisions(images),
       serverVersion: dockerVersion.trim(),
       volumes: Object.freeze(lines(volumes)),
     }),

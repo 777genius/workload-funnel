@@ -38,6 +38,7 @@ import {
 import { executeCleanupSteps, requireCertainCleanup } from "./host-cleanup.mjs";
 import {
   classifyForeignProcesses,
+  dockerImageInventory,
   observePidHeadroom,
   processInventory,
 } from "./host-observation.mjs";
@@ -140,6 +141,22 @@ describe("hosted gate fail-closed contracts", () => {
       mutate(value);
       expect(() => validateHostAdmission(value)).toThrow();
     }
+  });
+
+  test("admits an exact inert Docker image baseline and rejects pinned collisions", () => {
+    const image = {
+      id: `sha256:${"a".repeat(64)}`,
+      repoDigests: [`runner/cache@sha256:${"b".repeat(64)}`],
+      repoTags: ["runner/cache:stable"],
+      size: 1024,
+    };
+    const observation = admittedObservation();
+    observation.docker.images = [image];
+    expect(validateHostAdmission(observation).admitted).toBe(true);
+    observation.docker.pinnedReferenceCollisions = [image.id];
+    expect(() => validateHostAdmission(observation)).toThrow(
+      "foreign_image_state",
+    );
   });
 
   test("refuses insufficient headroom and a wrong HyperQueue digest", () => {
@@ -273,6 +290,52 @@ describe("hosted gate fail-closed contracts", () => {
         resolve: async (path) => path,
       }),
     ).resolves.toBe(350);
+  });
+
+  test("captures a canonical exact Docker image baseline", async () => {
+    const first = `sha256:${"a".repeat(64)}`;
+    const second = `sha256:${"b".repeat(64)}`;
+    const run = vi.fn(async (_executable, arguments_) => {
+      if (arguments_[1] === "ls")
+        return {
+          code: 0,
+          stderr: "",
+          stdout: `${second}\n${first}\n${second}\n`,
+        };
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify([
+          {
+            Id: second,
+            RepoDigests: [],
+            RepoTags: ["runner/cache:second"],
+            Size: 20,
+          },
+          {
+            Id: first,
+            RepoDigests: [`runner/cache@sha256:${"c".repeat(64)}`],
+            RepoTags: null,
+            Size: 10,
+          },
+        ]),
+      };
+    });
+    await expect(dockerImageInventory({ run })).resolves.toEqual([
+      {
+        id: first,
+        repoDigests: [`runner/cache@sha256:${"c".repeat(64)}`],
+        repoTags: [],
+        size: 10,
+      },
+      {
+        id: second,
+        repoDigests: [],
+        repoTags: ["runner/cache:second"],
+        size: 20,
+      },
+    ]);
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   test("uses kernel task headroom when the cgroup root has no PID files", async () => {

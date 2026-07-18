@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { HOSTED_GATE_SCHEMA } from "./constants.mjs";
 import { HostedGateRefusal, sha256 } from "./contract.mjs";
+import { normalizeDockerImageInventory } from "./docker-image-baseline.mjs";
 import { writeJsonAtomically } from "./review-manifest.mjs";
 
 const EFFECT_STATES = new Set(["applied", "cleaned", "prepared"]);
@@ -79,6 +80,12 @@ function journalChecksum(state) {
 
 function validateState(decoded, context, verifyChecksum = true) {
   const path = `${context.controlRoot}/host-state.json`;
+  let dockerBaseline;
+  try {
+    dockerBaseline = normalizeDockerImageInventory(decoded?.dockerBaseline);
+  } catch {
+    throw new HostedGateRefusal("host_state_docker_baseline_invalid");
+  }
   refuse(
     decoded === null ||
       typeof decoded !== "object" ||
@@ -104,6 +111,10 @@ function validateState(decoded, context, verifyChecksum = true) {
       decoded.revision < 0 ||
       !Array.isArray(decoded.effects),
     "host_state_identity_invalid",
+  );
+  refuse(
+    !isDeepStrictEqual(decoded.dockerBaseline, dockerBaseline),
+    "host_state_docker_baseline_invalid",
   );
   const ids = new Set();
   for (const effect of decoded.effects) {
@@ -195,6 +206,7 @@ export async function createHostState(
   context,
   preparedAt,
   bootstrapExecutables = {},
+  dockerBaseline = [],
 ) {
   const statePath = `${context.controlRoot}/host-state.json`;
   refuse(
@@ -245,6 +257,7 @@ export async function createHostState(
       ino: controlIdentity.ino,
     }),
     context,
+    dockerBaseline: normalizeDockerImageInventory(dockerBaseline),
     effects: [],
     gateInvocations: [],
     hostRoot: context.hostRoot,

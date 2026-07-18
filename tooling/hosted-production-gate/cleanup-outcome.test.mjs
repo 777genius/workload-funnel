@@ -17,6 +17,9 @@ test("requires certain hosted cleanup and exact zero-residue evidence", () => {
     checks: {
       containers: "",
       groupExists: false,
+      imageBaseline: [],
+      imageBaselineMatches: true,
+      imageInventory: [],
       imageProbesCertain: true,
       images: [],
       loopAbsent: true,

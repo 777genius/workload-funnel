@@ -30,7 +30,7 @@ afterEach(async () => {
   );
 });
 
-async function fixture() {
+async function fixture(dockerBaseline = []) {
   const root = await mkdtemp(join(tmpdir(), "host-state-journal-"));
   roots.push(root);
   const artifactRoot = `${root}/evidence`;
@@ -44,9 +44,26 @@ async function fixture() {
     hostRoot: `/opt/workload-funnel-hosted-production-gate-${suffix}`,
     runId: `wf-production-gate-${suffix}`,
   };
-  const state = await createHostState(context, "2026-07-18T00:00:00.000Z");
+  const state = await createHostState(
+    context,
+    "2026-07-18T00:00:00.000Z",
+    {},
+    dockerBaseline,
+  );
   return { context, state };
 }
+
+test("persists the exact canonical Docker image baseline", async () => {
+  const image = {
+    id: `sha256:${"a".repeat(64)}`,
+    repoDigests: [`runner/cache@sha256:${"b".repeat(64)}`],
+    repoTags: ["runner/cache:stable"],
+    size: 1024,
+  };
+  const { context, state } = await fixture([image]);
+  expect(state.dockerBaseline).toEqual([image]);
+  expect((await readHostState(context)).dockerBaseline).toEqual([image]);
+});
 
 test("persists prepare intent before an effect and cleans it idempotently", async () => {
   const { context, state } = await fixture();

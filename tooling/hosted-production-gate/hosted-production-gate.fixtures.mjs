@@ -60,6 +60,7 @@ export function admittedObservation() {
       containers: [],
       images: [],
       nonDefaultNetworks: [],
+      pinnedReferenceCollisions: [],
       serverVersion: "29.1.3",
       volumes: [],
     },
