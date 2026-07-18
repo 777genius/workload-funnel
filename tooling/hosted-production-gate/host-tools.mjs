@@ -9,14 +9,19 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 import {
   AWS_CLI,
   POSTGRES_CLIENT,
   POSTGRES_SIGNING_KEY,
 } from "./constants.mjs";
-import { HostedGateRefusal, sha256 } from "./contract.mjs";
-import { inspectExecutable } from "./review-manifest.mjs";
+import {
+  HostedGateRefusal,
+  sha256,
+  validateTrustedIdentity,
+} from "./contract.mjs";
+import { inspectExecutable, inspectPathIdentity } from "./review-manifest.mjs";
 import { runCommand } from "./process-runner.mjs";
 
 function refuse(condition, code) {
@@ -37,6 +42,53 @@ async function exists(path) {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
+}
+
+export async function sealOwnedExecutableAncestors(
+  executable,
+  ownedRoot,
+  { inspect = inspectPathIdentity, restrictMode = chmod } = {},
+) {
+  refuse(
+    !isAbsolute(executable) ||
+      resolve(executable) !== executable ||
+      !isAbsolute(ownedRoot) ||
+      resolve(ownedRoot) !== ownedRoot ||
+      !executable.startsWith(`${ownedRoot}/`),
+    "owned_tool_path_invalid",
+  );
+  const directories = [];
+  for (let directory = dirname(executable); ; directory = dirname(directory)) {
+    directories.push(directory);
+    if (directory === ownedRoot) break;
+    refuse(directory === "/", "owned_tool_path_invalid");
+  }
+  for (const directory of directories.reverse()) {
+    const identity = await inspect(directory, { includeDigest: false });
+    refuse(
+      identity.canonicalPath !== directory ||
+        identity.kind !== "directory" ||
+        identity.symlink === true ||
+        identity.uid !== 0 ||
+        identity.gid !== 0 ||
+        !Number.isSafeInteger(identity.mode) ||
+        (identity.mode & 0o500) !== 0o500,
+      "owned_tool_parent_identity_untrusted",
+    );
+    const sealedMode = identity.mode & ~0o022;
+    if (sealedMode !== identity.mode) await restrictMode(directory, sealedMode);
+    const sealed = await inspect(directory, { includeDigest: false });
+    refuse(
+      sealed.canonicalPath !== directory ||
+        sealed.kind !== "directory" ||
+        sealed.symlink === true ||
+        sealed.uid !== 0 ||
+        sealed.gid !== 0 ||
+        sealed.mode !== sealedMode,
+      "owned_tool_parent_seal_failed",
+    );
+  }
+  return Object.freeze(directories);
 }
 
 export async function downloadHttps(url, maximumBytes = 256 * 1024 * 1024) {
@@ -497,14 +549,12 @@ export async function installExactAwsCli(hostRoot) {
     executable !== `${hostRoot}/aws-cli/v2/${AWS_CLI.version}/dist/aws`,
     "aws_cli_canonical_binary_mismatch",
   );
+  await sealOwnedExecutableAncestors(executable, `${hostRoot}/aws-cli`);
   const identity = await inspectExecutable(executable);
-  refuse(
-    identity.uid !== 0 ||
-      identity.gid !== 0 ||
-      (identity.mode & 0o022) !== 0 ||
-      (identity.mode & 0o111) === 0,
-    "aws_cli_identity_untrusted",
-  );
+  validateTrustedIdentity(identity, {
+    executable: true,
+    expectedPath: executable,
+  });
   const versionResult = await required(
     executable,
     ["--version"],

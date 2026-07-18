@@ -11,6 +11,7 @@ import {
   downloadHttps,
   isolatedPostgresAptArguments,
   postgresAptConfiguration,
+  sealOwnedExecutableAncestors,
   verifyAwsArchiveSha256,
   verifyAwsCliVersion,
   verifyAwsKeyListing,
@@ -19,6 +20,20 @@ import {
   verifyPostgresNotPreinstalled,
   verifyPsqlVersion,
 } from "./host-tools.mjs";
+
+function directoryIdentity(path, mode = 0o755, overrides = {}) {
+  return {
+    canonicalPath: path,
+    gid: 0,
+    kind: "directory",
+    mode,
+    path,
+    size: 0,
+    symlink: false,
+    uid: 0,
+    ...overrides,
+  };
+}
 
 function downloadResponse(contentLength, bytes = Uint8Array.of(1, 2, 3)) {
   return {
@@ -61,6 +76,50 @@ test("bounds downloads with or without an honest content-length", async () => {
   } finally {
     fetch.mockRestore();
   }
+});
+
+test("seals only trusted AWS CLI ancestors inside the owned root", async () => {
+  const ownedRoot = "/opt/workload-funnel/aws-cli";
+  const executable = `${ownedRoot}/v2/2.35.23/dist/aws`;
+  const identities = new Map([
+    [ownedRoot, directoryIdentity(ownedRoot)],
+    [`${ownedRoot}/v2`, directoryIdentity(`${ownedRoot}/v2`, 0o775)],
+    [`${ownedRoot}/v2/2.35.23`, directoryIdentity(`${ownedRoot}/v2/2.35.23`)],
+    [
+      `${ownedRoot}/v2/2.35.23/dist`,
+      directoryIdentity(`${ownedRoot}/v2/2.35.23/dist`, 0o777),
+    ],
+  ]);
+  const inspect = vi.fn(async (path) => ({ ...identities.get(path) }));
+  const restrictMode = vi.fn(async (path, mode) => {
+    identities.set(path, { ...identities.get(path), mode });
+  });
+
+  await expect(
+    sealOwnedExecutableAncestors(executable, ownedRoot, {
+      inspect,
+      restrictMode,
+    }),
+  ).resolves.toEqual([
+    ownedRoot,
+    `${ownedRoot}/v2`,
+    `${ownedRoot}/v2/2.35.23`,
+    `${ownedRoot}/v2/2.35.23/dist`,
+  ]);
+  expect(restrictMode.mock.calls).toEqual([
+    [`${ownedRoot}/v2`, 0o755],
+    [`${ownedRoot}/v2/2.35.23/dist`, 0o755],
+  ]);
+
+  identities.set(ownedRoot, directoryIdentity(ownedRoot, 0o755, { uid: 1000 }));
+  restrictMode.mockClear();
+  await expect(
+    sealOwnedExecutableAncestors(executable, ownedRoot, {
+      inspect,
+      restrictMode,
+    }),
+  ).rejects.toThrow("owned_tool_parent_identity_untrusted");
+  expect(restrictMode).not.toHaveBeenCalled();
 });
 
 test("accepts only the official exact PostgreSQL 18.4 package identity", () => {
