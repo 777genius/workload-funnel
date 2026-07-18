@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { exactOfficialHyperQueueVersion } from "./hyperqueue-contract.mjs";
+import {
+  exactOfficialHyperQueueVersion,
+  officialHyperQueueVersionFailure,
+} from "./hyperqueue-contract.mjs";
 
 describe("HyperQueue 0.26.2 release compatibility", () => {
   it("accepts only the exact official release version output", () => {
@@ -21,5 +24,29 @@ describe("HyperQueue 0.26.2 release compatibility", () => {
       { code: 1, stderr: "", stdout: "hyperqueue v0.26.2\n" },
     ])
       expect(exactOfficialHyperQueueVersion(observed)).toBe(false);
+  });
+
+  it("distinguishes wrapper, stderr, and exact stdout failures", () => {
+    expect(
+      officialHyperQueueVersionFailure({
+        code: 1,
+        stderr: "",
+        stdout: "hyperqueue v0.26.2\n",
+      }),
+    ).toBe("hyperqueue_version_command_failed");
+    expect(
+      officialHyperQueueVersionFailure({
+        code: 0,
+        stderr: "warning\n",
+        stdout: "hyperqueue v0.26.2\n",
+      }),
+    ).toBe("hyperqueue_version_stderr_unexpected");
+    expect(
+      officialHyperQueueVersionFailure({
+        code: 0,
+        stderr: "",
+        stdout: "hyperqueue v0.26.3\n",
+      }),
+    ).toBe("hyperqueue_exact_version_mismatch");
   });
 });

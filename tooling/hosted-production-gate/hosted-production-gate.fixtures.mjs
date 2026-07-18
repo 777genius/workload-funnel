@@ -1,12 +1,14 @@
 import { Buffer } from "node:buffer";
 
 import {
+  ALLOCATION_PARENT_MODE,
   ARCHITECTURE_PLAN_SHA256,
   AWS_CLI,
   HOST_MINIMUMS,
   PINNED_IMAGES,
   POSTGRES_CLIENT,
   POSTGRES_SIGNING_KEY,
+  PROJECT_QUOTA_PARENT_MODE,
   PRODUCTION_GATE_RECOVERY_SCHEMA,
   PRODUCTION_GATE_SCHEMA,
   REQUIRED_BOOTSTRAP_TOOLS,
@@ -265,7 +267,10 @@ export function exactPrepareFixture(context) {
         ],
         removed: [],
       },
-      privateRootModes: { allocations: 0o700, projectQuota: 0o700 },
+      privateRootModes: {
+        allocations: ALLOCATION_PARENT_MODE,
+        projectQuota: PROJECT_QUOTA_PARENT_MODE,
+      },
       syntheticUser: "workload-funnel-synthetic",
     },
     images: PINNED_IMAGES,

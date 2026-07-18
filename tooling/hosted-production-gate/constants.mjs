@@ -149,6 +149,7 @@ export const RUNTIME_PACKAGE_NAMES = Object.freeze([
   "@workload-funnel/executor-systemd",
   "@workload-funnel/kernel",
   "@workload-funnel/node-execution",
+  "@workload-funnel/store-postgres",
 ]);
 
 // GitHub's ubuntu-24.04 image may omit entries from this baseline, but a
@@ -466,4 +467,6 @@ export const CONTROL_ROOT_PREFIX =
   "/var/lib/workload-funnel-hosted-production-gate-";
 export const SANDBOX_PARENT = "/var/data/workload-funnel/sandboxes";
 export const ALLOCATION_MOUNT = "/var/lib/workload-funnel";
+export const ALLOCATION_PARENT_MODE = 0o711;
+export const PROJECT_QUOTA_PARENT_MODE = 0o700;
 export const LOOP_IMAGE_BYTES = 2 * 1024 * 1024 * 1024;

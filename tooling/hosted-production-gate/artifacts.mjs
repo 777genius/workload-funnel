@@ -11,6 +11,7 @@ import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  ALLOCATION_PARENT_MODE,
   AWS_CLI,
   HOSTED_GATE_SCHEMA,
   HOSTED_VERDICT_SCHEMA,
@@ -18,6 +19,7 @@ import {
   PINNED_IMAGES,
   POSTGRES_CLIENT,
   POSTGRES_SIGNING_KEY,
+  PROJECT_QUOTA_PARENT_MODE,
   REVIEW_MANIFEST_SCHEMA,
   RUNTIME_PACKAGE_NAMES,
 } from "./constants.mjs";
@@ -468,8 +470,10 @@ export function validatePrepareEvidence(prepare, manifest, context) {
     "prepare_package_change_invalid",
   );
   refuse(
-    prepare.hostBootstrap?.privateRootModes?.allocations !== 0o700 ||
-      prepare.hostBootstrap?.privateRootModes?.projectQuota !== 0o700,
+    prepare.hostBootstrap?.privateRootModes?.allocations !==
+      ALLOCATION_PARENT_MODE ||
+      prepare.hostBootstrap?.privateRootModes?.projectQuota !==
+        PROJECT_QUOTA_PARENT_MODE,
     "prepare_private_root_mode_invalid",
   );
   exactObject(

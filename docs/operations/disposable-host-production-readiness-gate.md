@@ -80,10 +80,12 @@ host mismatch refuses admission.
 - x86-64 architecture, unified cgroup v2, systemd 250 or newer, Docker, the AWS
   CLI, PostgreSQL 18 client, and `systemd-analyze`;
 - a pre-created `workload-funnel-synthetic` non-root user and group;
-- root-owned `/var/lib/workload-funnel/allocations` and
+- root-owned search-only mode-`0711`
+  `/var/lib/workload-funnel/allocations` and private mode-`0700`
   `/var/lib/workload-funnel/project-quota` directories on the same reviewed
-  XFS (`prjquota` or `pquota`) or ext4 (`prjquota`) project-quota filesystem,
-  plus root-owned `/var/data/workload-funnel/sandboxes`;
+  XFS (`prjquota` or `pquota`) or ext4 (`prjquota`) project-quota filesystem;
+  each unguessable per-run allocation remains synthetic-owned mode-`0700`, and
+  `/var/data/workload-funnel/sandboxes` remains root-owned;
 - enough unused CPU, memory, IO, PID, byte, and inode headroom;
 - the reviewed HyperQueue 0.26.2 x64 archive with SHA-256
   `e15dae9113e1a307a97a66bfe90f74f78c6016239436b5d9f1e4efec480e84b5`;

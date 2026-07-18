@@ -21,6 +21,10 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     systemdArguments
       .find((argument) => argument.startsWith("--property=ExecStopPost="))
       ?.slice("--property=ExecStopPost=".length) ?? "";
+  const property = (name) =>
+    systemdArguments
+      .find((argument) => argument.startsWith(`--property=${name}=`))
+      .slice(`--property=${name}=`.length);
   const values = {
     ActiveState: execStopPost === "" ? "active" : "deactivating",
     AmbientCapabilities: "",
@@ -71,13 +75,13 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     RestrictNamespaces: "yes",
     RestrictRealtime: "yes",
     RestrictSUIDSGID: "yes",
-    RuntimeMaxUSec: "30s",
+    RuntimeMaxUSec: property("RuntimeMaxSec"),
     SendSIGKILL: "yes",
     Slice: `${runId}.slice`,
     SystemCallArchitectures: "native",
     SystemCallFilter: "read write",
     TasksMax: "128",
-    TimeoutStopUSec: "5s",
+    TimeoutStopUSec: property("TimeoutStopSec"),
     UMask: "0077",
     User: "workload-funnel-synthetic",
     WorkingDirectory: workloadRoot,
@@ -560,10 +564,12 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
           "--wait",
           "--pipe",
           expect.stringMatching(
-            /^--property=ExecStopPost=\/usr\/bin\/node .*systemd-observation-window\.mjs .*\.observed-hq-cli-1 4000$/u,
+            /^--property=ExecStopPost=\/usr\/bin\/node .*systemd-observation-window\.mjs .*\.observed-hq-cli-1 10000$/u,
           ),
+          "--property=RuntimeMaxSec=2s",
+          "--property=TimeoutStopSec=12s",
         ]),
-        { maxOutputBytes: 1024, timeoutMs: 2_000 },
+        { maxOutputBytes: 1024, timeoutMs: 17_000 },
       );
       expect(harness.runner.start.mock.calls[0][1]).not.toContain("/bin/sh");
     },

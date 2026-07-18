@@ -14,12 +14,14 @@ import { setTimeout as wait } from "node:timers/promises";
 
 import {
   ALLOCATION_MOUNT,
+  ALLOCATION_PARENT_MODE,
   AWS_CLI,
   HOSTED_GATE_SCHEMA,
   HYPERQUEUE,
   LOOP_IMAGE_BYTES,
   PINNED_IMAGES,
   POSTGRES_CLIENT,
+  PROJECT_QUOTA_PARENT_MODE,
   RUNTIME_PACKAGE_NAMES,
   SANDBOX_PARENT,
   SYNTHETIC_USER,
@@ -570,8 +572,12 @@ async function createQuotaFilesystem(state) {
     throw new HostedGateRefusal("xfs_prjquota_mount_unproven");
   }
   await applyHostEffect(state, "xfs-mount", { mountIdentity });
-  for (const name of ["allocations", "project-quota"])
-    await mkdir(`${ALLOCATION_MOUNT}/${name}`, { mode: 0o700 });
+  await mkdir(`${ALLOCATION_MOUNT}/allocations`, {
+    mode: ALLOCATION_PARENT_MODE,
+  });
+  await mkdir(`${ALLOCATION_MOUNT}/project-quota`, {
+    mode: PROJECT_QUOTA_PARENT_MODE,
+  });
   await prepareHostEffect(state, {
     id: "sandbox-parent",
     kind: "sandbox-parent",
@@ -803,8 +809,8 @@ export async function prepareHost(context) {
         mountOptions: Object.freeze(["nodev", "nosuid", "prjquota"]),
         packageChanges: state.packageChanges,
         privateRootModes: Object.freeze({
-          allocations: 0o700,
-          projectQuota: 0o700,
+          allocations: ALLOCATION_PARENT_MODE,
+          projectQuota: PROJECT_QUOTA_PARENT_MODE,
         }),
         syntheticUser: SYNTHETIC_USER,
       }),

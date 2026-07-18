@@ -44,13 +44,15 @@ root-owned review tree. The wrapper then:
    `e15dae9113e1a307a97a66bfe90f74f78c6016239436b5d9f1e4efec480e84b5`;
 4. pulls only the immutable Postgres, Azurite, MinIO, and MinIO Client image
    references used by the reviewed disposable-host gate;
-5. creates a dedicated loop-backed XFS filesystem mounted with `prjquota`,
-   mode-`0700` allocation and project-quota roots, and the synthetic non-login
-   user;
+5. creates a dedicated loop-backed XFS filesystem mounted with `prjquota`, a
+   root-owned search-only mode-`0711` allocation parent, a private mode-`0700`
+   project-quota root, and the synthetic non-login user; each unguessable
+   per-run allocation remains synthetic-owned mode-`0700`;
 6. copies or resolves every gate executable to a canonical root-owned identity;
 7. copies the complete runtime dependency closure, including
-   `@azure/storage-blob` and every transitive package target, into root-owned
-   custody, records every external target file digest and every internal
+   `@azure/storage-blob`, `@workload-funnel/store-postgres`, and every
+   transitive package target, into root-owned custody, records every external
+   target file digest and every internal
    and repository-owned target file digest plus every internal resolution
    link-to-target mapping in a non-writable integrity manifest,
    seals the same bytes in a deterministic reviewed bundle, and recreates only

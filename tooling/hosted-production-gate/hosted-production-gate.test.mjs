@@ -1064,6 +1064,11 @@ describe("strict immutable final outcome", () => {
           (item) => item.name !== "@azure/storage-blob",
         );
       },
+      (value) => {
+        value.runtimeCustody = value.runtimeCustody.filter(
+          (item) => item.name !== "@workload-funnel/store-postgres",
+        );
+      },
     ]) {
       const hostile = globalThis.structuredClone(prepare);
       mutate(hostile);

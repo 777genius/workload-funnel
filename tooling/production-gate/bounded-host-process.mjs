@@ -2,7 +2,10 @@ import { rm, writeFile } from "node:fs/promises";
 import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 
-const OBSERVATION_WINDOW_TIMEOUT_MS = 4_000;
+const OBSERVATION_WINDOW_TIMEOUT_MS = 10_000;
+const OBSERVATION_TIMEOUT_STOP_SEC = 12;
+const EXECUTION_WRAPPER_BUDGET_MS = 15_000;
+const MAX_EXECUTION_PAYLOAD_TIMEOUT_MS = 105_000;
 const DEFAULT_RUNTIME_MAX_SEC = 30;
 const PRESSURE_RUNTIME_MAX_SEC_RANGE = Object.freeze({
   maximum: 90,
@@ -194,7 +197,13 @@ export function exactBoundedHostPropertiesObserved(
     systemdRuntimeMicroseconds(values.RuntimeMaxUSec) !==
       BigInt(plan.runtimeMaxSec ?? DEFAULT_RUNTIME_MAX_SEC) * 1_000_000n ||
     systemdInteger(values.TimeoutStopUSec, SYSTEMD_DURATION_UNITS) !==
-      5_000_000n ||
+      BigInt(
+        plan.timeoutStopSec ??
+          (plan.observationWindow === undefined
+            ? 5
+            : OBSERVATION_TIMEOUT_STOP_SEC),
+      ) *
+        1_000_000n ||
     !new Set(["9", "SIGKILL", "kill"]).has(values.FinalKillSignal) ||
     !new Set(["15", "SIGTERM", "term"]).has(values.KillSignal) ||
     !sameWords(values.RestrictAddressFamilies, [
@@ -233,7 +242,7 @@ export async function cleanupBoundedSystemdUnit(config, record) {
   const stopped = await config.runner.run(
     config.systemctlExecutable,
     ["stop", record.name],
-    { timeoutMs: 2_000 },
+    { timeoutMs: EXECUTION_WRAPPER_BUDGET_MS },
   );
   if (stopped.code !== 0)
     throw new Error("bounded_host_process_cleanup_uncertain");
@@ -253,6 +262,13 @@ export async function cleanupBoundedSystemdUnit(config, record) {
 
 export function boundedHostSystemdArguments(config, input) {
   const runtimeMaxSec = input.runtimeMaxSec ?? DEFAULT_RUNTIME_MAX_SEC;
+  const observationExecution = input.observationWindow !== undefined;
+  const customRuntimeValid = PRESSURE_ROLES.has(input.role)
+    ? runtimeMaxSec >= PRESSURE_RUNTIME_MAX_SEC_RANGE.minimum &&
+      runtimeMaxSec <= PRESSURE_RUNTIME_MAX_SEC_RANGE.maximum
+    : observationExecution &&
+      runtimeMaxSec >= 1 &&
+      runtimeMaxSec <= Math.ceil(MAX_EXECUTION_PAYLOAD_TIMEOUT_MS / 1_000);
   if (
     !/^[a-z0-9-]{1,24}$/u.test(input.role) ||
     config.workloadUser !== "workload-funnel-synthetic" ||
@@ -275,13 +291,14 @@ export function boundedHostSystemdArguments(config, input) {
     !Number.isSafeInteger(runtimeMaxSec) ||
     (input.runtimeMaxSec === undefined
       ? runtimeMaxSec !== DEFAULT_RUNTIME_MAX_SEC
-      : !PRESSURE_ROLES.has(input.role) ||
-        runtimeMaxSec < PRESSURE_RUNTIME_MAX_SEC_RANGE.minimum ||
-        runtimeMaxSec > PRESSURE_RUNTIME_MAX_SEC_RANGE.maximum)
+      : !customRuntimeValid)
   )
     throw new Error("bounded_host_process_invocation_invalid");
   const unit = `${config.runId}-${input.role}.service`;
   const description = `WorkloadFunnel production gate ${config.runId} ${input.role}`;
+  const timeoutStopSec = observationExecution
+    ? OBSERVATION_TIMEOUT_STOP_SEC
+    : 5;
   return Object.freeze({
     arguments: Object.freeze([
       `--unit=${unit}`,
@@ -342,7 +359,7 @@ export function boundedHostSystemdArguments(config, input) {
       "--property=SystemCallFilter=@system-service",
       "--property=SystemCallFilter=~@mount @privileged @resources @reboot",
       "--property=TasksMax=128",
-      "--property=TimeoutStopSec=5s",
+      `--property=TimeoutStopSec=${String(timeoutStopSec)}s`,
       "--property=UMask=0077",
       `--property=User=${config.workloadUser}`,
       `--property=WorkingDirectory=${config.workloadRoot}`,
@@ -357,7 +374,25 @@ export function boundedHostSystemdArguments(config, input) {
     joinNetworkOf: input.joinNetworkOf,
     observationWindow: input.observationWindow,
     runtimeMaxSec,
+    timeoutStopSec,
     unit,
+  });
+}
+
+function synchronousExecutionTiming(limits) {
+  const payloadTimeoutMs = limits?.timeoutMs ?? DEFAULT_RUNTIME_MAX_SEC * 1_000;
+  if (
+    !Number.isSafeInteger(payloadTimeoutMs) ||
+    payloadTimeoutMs < 1 ||
+    payloadTimeoutMs > MAX_EXECUTION_PAYLOAD_TIMEOUT_MS
+  )
+    throw new Error("bounded_host_process_execution_timeout_invalid");
+  return Object.freeze({
+    runtimeMaxSec: Math.ceil(payloadTimeoutMs / 1_000),
+    wrapperLimits: Object.freeze({
+      ...limits,
+      timeoutMs: payloadTimeoutMs + EXECUTION_WRAPPER_BUDGET_MS,
+    }),
   });
 }
 
@@ -502,6 +537,7 @@ export function createBoundedHostProcessManager(config) {
       await config.reviewedExecutables.assertUnchanged(executable);
       await config.reviewedExecutables.assertUnchanged(config.nodeExecutable);
       const observationMarker = `${config.workloadRoot}/.observed-${role}`;
+      const timing = synchronousExecutionTiming(options.limits);
       const plan = boundedHostSystemdArguments(config, {
         executable,
         executableArguments,
@@ -512,6 +548,7 @@ export function createBoundedHostProcessManager(config) {
           script: observationWindowScript,
         },
         role,
+        runtimeMaxSec: timing.runtimeMaxSec,
       });
       const recordId = await config.ledger.prepare("systemd-unit", plan.unit, {
         description: plan.description,
@@ -537,7 +574,7 @@ export function createBoundedHostProcessManager(config) {
         execution = await config.runner.start(
           config.systemdRunExecutable,
           args,
-          options.limits,
+          timing.wrapperLimits,
         );
         const values = await observeStarted(plan, true, true);
         record = await finalize(recordId, plan, values);
