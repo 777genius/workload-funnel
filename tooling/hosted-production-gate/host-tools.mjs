@@ -60,11 +60,15 @@ export async function downloadHttps(url, maximumBytes = 256 * 1024 * 1024) {
     final.protocol !== "https:" || !allowedHosts.has(final.hostname),
     "download_redirect_untrusted",
   );
-  const length = Number(response.headers.get("content-length"));
-  refuse(
-    Number.isFinite(length) && (length < 1 || length > maximumBytes),
-    "download_size_invalid",
-  );
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    refuse(!/^[0-9]+$/u.test(contentLength), "download_size_invalid");
+    const length = Number(contentLength);
+    refuse(
+      !Number.isSafeInteger(length) || length < 1 || length > maximumBytes,
+      "download_size_invalid",
+    );
+  }
   const bytes = Buffer.from(await response.arrayBuffer());
   refuse(
     bytes.length < 1 || bytes.length > maximumBytes,

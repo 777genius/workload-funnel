@@ -1,4 +1,6 @@
-import { expect, test } from "vitest";
+import { Buffer } from "node:buffer";
+
+import { expect, test, vi } from "vitest";
 
 import {
   AWS_CLI,
@@ -6,6 +8,7 @@ import {
   POSTGRES_SIGNING_KEY,
 } from "./constants.mjs";
 import {
+  downloadHttps,
   isolatedPostgresAptArguments,
   postgresAptConfiguration,
   verifyAwsArchiveSha256,
@@ -16,6 +19,49 @@ import {
   verifyPostgresNotPreinstalled,
   verifyPsqlVersion,
 } from "./host-tools.mjs";
+
+function downloadResponse(contentLength, bytes = Uint8Array.of(1, 2, 3)) {
+  return {
+    arrayBuffer: async () => bytes.buffer,
+    body: {},
+    headers: {
+      get: (name) =>
+        name.toLowerCase() === "content-length" ? contentLength : null,
+    },
+    ok: true,
+    url: POSTGRES_SIGNING_KEY.url,
+  };
+}
+
+test("bounds downloads with or without an honest content-length", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch");
+  try {
+    fetch.mockResolvedValueOnce(downloadResponse(null));
+    await expect(downloadHttps(POSTGRES_SIGNING_KEY.url, 3)).resolves.toEqual(
+      Buffer.from([1, 2, 3]),
+    );
+    fetch.mockResolvedValueOnce(downloadResponse("0003"));
+    await expect(downloadHttps(POSTGRES_SIGNING_KEY.url, 3)).resolves.toEqual(
+      Buffer.from([1, 2, 3]),
+    );
+
+    for (const contentLength of ["0", "-1", "invalid", "4", "9".repeat(32)]) {
+      fetch.mockResolvedValueOnce(downloadResponse(contentLength));
+      await expect(downloadHttps(POSTGRES_SIGNING_KEY.url, 3)).rejects.toThrow(
+        "download_size_invalid",
+      );
+    }
+
+    fetch.mockResolvedValueOnce(
+      downloadResponse(null, Uint8Array.of(1, 2, 3, 4)),
+    );
+    await expect(downloadHttps(POSTGRES_SIGNING_KEY.url, 3)).rejects.toThrow(
+      "download_size_invalid",
+    );
+  } finally {
+    fetch.mockRestore();
+  }
+});
 
 test("accepts only the official exact PostgreSQL 18.4 package identity", () => {
   expect(verifyPostgresNotPreinstalled(false, 1)).toBe(true);
