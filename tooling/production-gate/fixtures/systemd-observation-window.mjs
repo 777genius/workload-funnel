@@ -1,18 +1,12 @@
 import { access } from "node:fs/promises";
 import { setTimeout as wait } from "node:timers/promises";
 
+import { exactSystemdObservationWindowInput } from "../systemd-observation-window-contract.mjs";
+
 const marker = process.argv[2];
 const timeoutMs = Number(process.argv[3]);
 
-if (
-  !/^\/var\/lib\/workload-funnel\/allocations\/wf-production-gate-[a-f0-9]{32}\/\.observed-[a-z0-9-]{1,24}$/u.test(
-    marker ?? "",
-  ) ||
-  !Number.isSafeInteger(timeoutMs) ||
-  timeoutMs < 1 ||
-  timeoutMs > 4_000
-)
-  process.exit(2);
+if (!exactSystemdObservationWindowInput(marker, timeoutMs)) process.exit(2);
 
 const deadline = Date.now() + timeoutMs;
 for (;;) {

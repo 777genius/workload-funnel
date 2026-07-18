@@ -6,6 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createBoundedHostProcessManager } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
+import {
+  exactSystemdObservationWindowInput,
+  SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS,
+} from "./systemd-observation-window-contract.mjs";
 
 const runId = "wf-production-gate-0123456789abcdef0123456789abcdef";
 const workloadRoot = `/var/lib/workload-funnel/allocations/${runId}`;
@@ -217,6 +221,19 @@ function processManagerHarness(
 }
 
 describe("systemd 255 bounded synchronous execution compatibility", () => {
+  it("binds the caller and observation fixture to one exact timeout", () => {
+    const marker = `${workloadRoot}/.observed-hq-cli-1`;
+    expect(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS).toBe(10_000);
+    expect(
+      exactSystemdObservationWindowInput(
+        marker,
+        SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS,
+      ),
+    ).toBe(true);
+    for (const timeoutMs of [4_000, 9_999, 10_001])
+      expect(exactSystemdObservationWindowInput(marker, timeoutMs)).toBe(false);
+  });
+
   it("forwards the exact pressure runtime through launch and observation", async () => {
     const harness = processManagerHarness(
       { code: 0, stderr: "", stdout: "" },

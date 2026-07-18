@@ -2,7 +2,8 @@ import { rm, writeFile } from "node:fs/promises";
 import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 
-const OBSERVATION_WINDOW_TIMEOUT_MS = 10_000;
+import { SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS } from "./systemd-observation-window-contract.mjs";
+
 const OBSERVATION_TIMEOUT_STOP_SEC = 12;
 const EXECUTION_WRAPPER_BUDGET_MS = 15_000;
 const MAX_EXECUTION_PAYLOAD_TIMEOUT_MS = 105_000;
@@ -109,7 +110,7 @@ function exactExecStopPostObserved(value, observationWindow) {
     observationWindow.nodeExecutable,
     observationWindow.script,
     observationWindow.marker,
-    String(OBSERVATION_WINDOW_TIMEOUT_MS),
+    String(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS),
   ].join(" ")} ; ignore_errors=no ;`;
   return (
     typeof value === "string" &&
@@ -319,7 +320,7 @@ export function boundedHostSystemdArguments(config, input) {
       ...(input.observationWindow === undefined
         ? []
         : [
-            `--property=ExecStopPost=${input.observationWindow.nodeExecutable} ${input.observationWindow.script} ${input.observationWindow.marker} ${String(OBSERVATION_WINDOW_TIMEOUT_MS)}`,
+            `--property=ExecStopPost=${input.observationWindow.nodeExecutable} ${input.observationWindow.script} ${input.observationWindow.marker} ${String(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS)}`,
           ]),
       "--property=FinalKillSignal=SIGKILL",
       `--property=Group=${config.workloadGroup}`,
