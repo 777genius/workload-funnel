@@ -4,12 +4,19 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Commit SHA expected to receive the hosted gate dispatch
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   verify:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -18,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up Node.js
-        uses: actions/setup-node@1e60f620b9541d8db1aa67f7f03b2a70a2e891 # v4.0.3
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
           node-version: 24.16.0
       - name: Enable pinned pnpm
@@ -43,6 +50,26 @@ jobs:
         run: pnpm test:hosted-canary
       - name: Check release intent
         if: github.event_name == 'pull_request'
-        run: pnpm changeset:status
+        run: pnpm exec changeset status --since=origin/main
       - name: Check patch whitespace
         run: git diff --check
+
+  hosted-gate-dispatch-bootstrap:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Validate dispatch and fail closed
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '%s\n' 'expected_sha must be exactly 40 lowercase hex characters.'
+            exit 1
+          fi
+          if [[ "$EXPECTED_SHA" != "$GITHUB_SHA" ]]; then
+            printf '%s\n' 'expected_sha does not match GITHUB_SHA.'
+            exit 1
+          fi
+          printf '%s\n' 'Fail closed: production gate is not installed on main.'
+          exit 1
