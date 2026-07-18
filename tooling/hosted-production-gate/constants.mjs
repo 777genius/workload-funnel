@@ -170,6 +170,8 @@ export const HOSTED_RUNNER_SERVICE_BASELINE = Object.freeze([
   "dbus.service",
   "docker.service",
   "getty@tty1.service",
+  "haveged.service",
+  "hosted-compute-agent.service",
   "hv-fcopy-daemon.service",
   "hv-kvp-daemon.service",
   "hv-vss-daemon.service",
@@ -179,6 +181,7 @@ export const HOSTED_RUNNER_SERVICE_BASELINE = Object.freeze([
   "multipathd.service",
   "networkd-dispatcher.service",
   "packagekit.service",
+  "php8.3-fpm.service",
   "polkit.service",
   "rsyslog.service",
   "runner-provisioner.service",
@@ -206,6 +209,7 @@ export const HOSTED_RUNNER_SERVICE_BASELINE = Object.freeze([
 export const HOSTED_RUNNER_USER_SERVICE_EXECUTABLES = Object.freeze([
   "/usr/bin/dbus-daemon",
   "/usr/lib/systemd/systemd",
+  "/usr/lib/systemd/systemd-executor",
   "/usr/libexec/dconf-service",
 ]);
 
@@ -231,7 +235,7 @@ export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
   }),
   "chrony.service": Object.freeze({
     executables: Object.freeze(["/usr/sbin/chronyd"]),
-    maxProcesses: 1,
+    maxProcesses: 2,
     owner: "system",
   }),
   "chronyd.service": Object.freeze({
@@ -264,15 +268,47 @@ export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
     maxProcesses: 1,
     owner: "root",
   }),
+  "haveged.service": Object.freeze({
+    tuples: Object.freeze([
+      Object.freeze({
+        comm: "haveged",
+        executable: "/usr/sbin/haveged",
+        maxProcesses: 1,
+        owner: "root",
+      }),
+    ]),
+  }),
+  "hosted-compute-agent.service": Object.freeze({
+    tuples: Object.freeze([
+      Object.freeze({
+        comm: "sudo",
+        executable: "/usr/bin/sudo",
+        maxProcesses: 1,
+        owner: "root",
+      }),
+      Object.freeze({
+        commPattern: /^provjobd[0-9]{1,7}$/u,
+        executable: null,
+        maxProcesses: 1,
+        owner: "root",
+      }),
+    ]),
+  }),
   "hv-fcopy-daemon.service": Object.freeze({
     executables: Object.freeze(["/usr/sbin/hv_fcopy_daemon"]),
     maxProcesses: 1,
     owner: "root",
   }),
   "hv-kvp-daemon.service": Object.freeze({
-    executables: Object.freeze(["/usr/sbin/hv_kvp_daemon"]),
-    maxProcesses: 1,
-    owner: "root",
+    tuples: Object.freeze([
+      Object.freeze({
+        comm: "hv_kvp_daemon",
+        executablePattern:
+          /^\/usr\/lib\/linux-azure-[0-9]+\.[0-9]+-tools-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+\/hv_kvp_daemon$/u,
+        maxProcesses: 1,
+        owner: "root",
+      }),
+    ]),
   }),
   "hv-vss-daemon.service": Object.freeze({
     executables: Object.freeze(["/usr/sbin/hv_vss_daemon"]),
@@ -309,6 +345,22 @@ export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
     maxProcesses: 1,
     owner: "root",
   }),
+  "php8.3-fpm.service": Object.freeze({
+    tuples: Object.freeze([
+      Object.freeze({
+        comm: "php-fpm8.3",
+        executable: "/usr/sbin/php-fpm8.3",
+        maxProcesses: 1,
+        owner: "root",
+      }),
+      Object.freeze({
+        comm: "php-fpm8.3",
+        executable: "/usr/sbin/php-fpm8.3",
+        maxProcesses: 2,
+        owner: "system",
+      }),
+    ]),
+  }),
   "polkit.service": Object.freeze({
     executables: Object.freeze(["/usr/lib/polkit-1/polkitd"]),
     maxProcesses: 1,
@@ -317,7 +369,7 @@ export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
   "rsyslog.service": Object.freeze({
     executables: Object.freeze(["/usr/sbin/rsyslogd"]),
     maxProcesses: 1,
-    owner: "root",
+    owner: "system",
   }),
   "serial-getty@ttyS0.service": Object.freeze({
     executables: Object.freeze(["/usr/sbin/agetty"]),
@@ -365,7 +417,10 @@ export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
     owner: "system",
   }),
   "systemd-udevd.service": Object.freeze({
-    executables: Object.freeze(["/usr/lib/systemd/systemd-udevd"]),
+    executables: Object.freeze([
+      "/usr/bin/udevadm",
+      "/usr/lib/systemd/systemd-udevd",
+    ]),
     maxProcesses: 1,
     owner: "root",
   }),
@@ -396,7 +451,7 @@ export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
   }),
   "walinuxagent.service": Object.freeze({
     executables: Object.freeze(["/usr/bin/python3.12"]),
-    maxProcesses: 1,
+    maxProcesses: 2,
     owner: "root",
   }),
 });

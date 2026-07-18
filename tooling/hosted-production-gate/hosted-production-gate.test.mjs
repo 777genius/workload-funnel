@@ -264,6 +264,158 @@ describe("hosted gate fail-closed contracts", () => {
           runnerUid: 1001,
         }),
       ).toContainEqual(foreign);
+
+    const image20260714240Processes = [
+      {
+        comm: "systemd-udevd",
+        executable: "/usr/bin/udevadm",
+        pid: 226,
+        ppid: 1,
+        uid: 0,
+        unit: "systemd-udevd.service",
+      },
+      {
+        comm: "hv_kvp_daemon",
+        executable: "/usr/lib/linux-azure-6.17-tools-6.17.0-1020/hv_kvp_daemon",
+        pid: 385,
+        ppid: 1,
+        uid: 0,
+        unit: "hv-kvp-daemon.service",
+      },
+      {
+        comm: "haveged",
+        executable: "/usr/sbin/haveged",
+        pid: 580,
+        ppid: 1,
+        uid: 0,
+        unit: "haveged.service",
+      },
+      {
+        comm: "php-fpm8.3",
+        executable: "/usr/sbin/php-fpm8.3",
+        pid: 964,
+        ppid: 1,
+        uid: 0,
+        unit: "php8.3-fpm.service",
+      },
+      {
+        comm: "python3",
+        executable: "/usr/bin/python3.12",
+        pid: 991,
+        ppid: 1,
+        uid: 0,
+        unit: "walinuxagent.service",
+      },
+      {
+        comm: "chronyd",
+        executable: "/usr/sbin/chronyd",
+        pid: 1116,
+        ppid: 1,
+        uid: 109,
+        unit: "chrony.service",
+      },
+      {
+        comm: "chronyd",
+        executable: "/usr/sbin/chronyd",
+        pid: 1118,
+        ppid: 1116,
+        uid: 109,
+        unit: "chrony.service",
+      },
+      {
+        comm: "rsyslogd",
+        executable: "/usr/sbin/rsyslogd",
+        pid: 1145,
+        ppid: 1,
+        uid: 102,
+        unit: "rsyslog.service",
+      },
+      {
+        comm: "(sd-pam)",
+        executable: "/usr/lib/systemd/systemd-executor",
+        pid: 1156,
+        ppid: 1113,
+        uid: 1001,
+        unit: "user@1001.service",
+      },
+      {
+        comm: "php-fpm8.3",
+        executable: "/usr/sbin/php-fpm8.3",
+        pid: 1281,
+        ppid: 964,
+        uid: 33,
+        unit: "php8.3-fpm.service",
+      },
+      {
+        comm: "php-fpm8.3",
+        executable: "/usr/sbin/php-fpm8.3",
+        pid: 1284,
+        ppid: 964,
+        uid: 33,
+        unit: "php8.3-fpm.service",
+      },
+      {
+        comm: "python3",
+        executable: "/usr/bin/python3.12",
+        pid: 1393,
+        ppid: 991,
+        uid: 0,
+        unit: "walinuxagent.service",
+      },
+      {
+        comm: "sudo",
+        executable: "/usr/bin/sudo",
+        pid: 2092,
+        ppid: 2079,
+        uid: 0,
+        unit: "hosted-compute-agent.service",
+      },
+      {
+        comm: "provjobd9593403",
+        executable: null,
+        pid: 2094,
+        ppid: 2092,
+        uid: 0,
+        unit: "hosted-compute-agent.service",
+      },
+    ];
+    expect(
+      classifyForeignProcesses([...processes, ...image20260714240Processes], {
+        currentPid: 100,
+        runnerUid: 1001,
+      }),
+    ).toEqual([]);
+    for (const [index, drift] of [
+      [1, { executable: "/usr/lib/linux-azure-tools/hv_kvp_daemon" }],
+      [7, { uid: 0 }],
+      [9, { uid: 1001 }],
+      [13, { comm: "provjobdabcdefg" }],
+    ]) {
+      const changed = {
+        ...image20260714240Processes[index],
+        ...drift,
+      };
+      const mutated = image20260714240Processes.with(index, changed);
+      expect(
+        classifyForeignProcesses([...processes, ...mutated], {
+          currentPid: 100,
+          runnerUid: 1001,
+        }),
+      ).toContainEqual(changed);
+    }
+    expect(
+      classifyForeignProcesses(
+        [
+          ...processes,
+          ...image20260714240Processes,
+          {
+            ...image20260714240Processes[10],
+            pid: 1285,
+          },
+        ],
+        { currentPid: 100, runnerUid: 1001 },
+      ),
+    ).not.toEqual([]);
   });
 
   test("ignores only an ENOENT process-exit race and refuses EACCES", async () => {

@@ -360,17 +360,55 @@ export function classifyForeignProcesses(
         changed = true;
       }
   }
+  const ownerMatches = (item, owner) =>
+    owner === "runner"
+      ? item.uid === runnerUid
+      : owner === "root"
+        ? item.uid === 0
+        : item.uid > 0 && item.uid < 1000 && item.uid !== runnerUid;
+  const matchingTupleIndexes = (item, baseline) =>
+    baseline.tuples?.flatMap((tuple, index) => {
+      const executableMatches = Object.hasOwn(tuple, "executable")
+        ? item.executable === tuple.executable
+        : typeof item.executable === "string" &&
+          tuple.executablePattern instanceof RegExp &&
+          tuple.executablePattern.test(item.executable);
+      const commandMatches = Object.hasOwn(tuple, "comm")
+        ? item.comm === tuple.comm
+        : tuple.commPattern instanceof RegExp &&
+          tuple.commPattern.test(item.comm);
+      return ownerMatches(item, tuple.owner) &&
+        executableMatches &&
+        commandMatches
+        ? [index]
+        : [];
+    });
   const serviceProcessCounts = new Map();
+  const tupleMatches = new Map();
+  const tupleProcessCounts = new Map();
   for (const item of processes)
     if (
       item.unit !== null &&
       !currentAncestry.has(item.pid) &&
       !kernelProcesses.has(item.pid)
-    )
+    ) {
       serviceProcessCounts.set(
         item.unit,
         (serviceProcessCounts.get(item.unit) ?? 0) + 1,
       );
+      const baseline = HOSTED_RUNNER_PROCESS_BASELINE[item.unit];
+      if (baseline?.tuples !== undefined) {
+        const matches = matchingTupleIndexes(item, baseline);
+        if (matches.length === 1) {
+          const key = `${item.unit}:${matches[0]}`;
+          tupleMatches.set(item.pid, {
+            key,
+            tuple: baseline.tuples[matches[0]],
+          });
+          tupleProcessCounts.set(key, (tupleProcessCounts.get(key) ?? 0) + 1);
+        }
+      }
+    }
   return Object.freeze(
     processes.filter((item) => {
       if (currentAncestry.has(item.pid)) return false;
@@ -390,14 +428,15 @@ export function classifyForeignProcesses(
         return false;
       const baseline = HOSTED_RUNNER_PROCESS_BASELINE[item.unit];
       if (baseline === undefined) return true;
-      const ownerMatches =
-        baseline.owner === "runner"
-          ? item.uid === runnerUid
-          : baseline.owner === "root"
-            ? item.uid === 0
-            : item.uid >= 0 && item.uid < 1000 && item.uid !== runnerUid;
+      if (baseline.tuples !== undefined) {
+        const match = tupleMatches.get(item.pid);
+        return (
+          match === undefined ||
+          tupleProcessCounts.get(match.key) > match.tuple.maxProcesses
+        );
+      }
       return (
-        !ownerMatches ||
+        !ownerMatches(item, baseline.owner) ||
         !baseline.executables.includes(item.executable) ||
         serviceProcessCounts.get(item.unit) > baseline.maxProcesses
       );
