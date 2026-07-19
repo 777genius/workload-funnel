@@ -346,7 +346,6 @@ function validateSubmitPayload(payload: HyperQueueMutation): void {
     payload,
     [
       "dispatchId",
-      "jobName",
       "kind",
       "mappingFingerprint",
       "requestedCpuCount",
@@ -359,7 +358,6 @@ function validateSubmitPayload(payload: HyperQueueMutation): void {
   const restartPolicy: unknown = payload.restartPolicy;
   if (restartPolicy !== "never")
     throw new GatewayContractError("invalid_gateway_request", "submit_payload");
-  assertIdentifier(payload.jobName, "job_name");
   assertPositive(payload.requestedCpuCount, "requested_cpu_count");
   const shimInvocationBase64: unknown = payload.shimInvocationBase64;
   if (
@@ -441,12 +439,29 @@ export function snapshotMutationRequest(
 export function authorizeHyperQueueMutation(
   request: MutateHyperQueueRequest,
   registrySequence: number,
+  requestFingerprint: string,
+  canonicalJobName?: string,
 ): AuthorizedHyperQueueMutation {
   validateMutationRequest(request);
   assertPositive(registrySequence, "registry_sequence");
+  if (!/^[a-f0-9]{64}$/u.test(requestFingerprint))
+    throw new GatewayContractError(
+      "invalid_gateway_request",
+      "request_fingerprint",
+    );
+  if (
+    (request.payload.kind === "submit" && canonicalJobName === undefined) ||
+    (request.payload.kind === "cancel" && canonicalJobName !== undefined)
+  )
+    throw new GatewayContractError(
+      "invalid_gateway_request",
+      "canonical_job_name",
+    );
   return Object.freeze({
     [authorizedMutationBrand]: true as const,
+    ...(canonicalJobName === undefined ? {} : { canonicalJobName }),
     registrySequence,
     request,
+    requestFingerprint,
   });
 }

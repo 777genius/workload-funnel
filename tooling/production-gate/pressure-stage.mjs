@@ -11,6 +11,7 @@ import {
   PRESSURE_FIXTURE_MODES,
 } from "./pressure-fixture-protocol.mjs";
 import { atomicAcceptanceSql, psqlArguments } from "./postgres-probe.mjs";
+import { SYSTEMD_GATE_PROJECT_QUOTA_BYTES } from "./systemd-contract.mjs";
 
 const pressureFixturePath = fileURLToPath(
   new URL("./fixtures/pressure-load.mjs", import.meta.url),
@@ -145,7 +146,10 @@ export async function runPressureAdmissionStage({
   if (postgres === undefined)
     throw new Error("postgres_fixture_required_for_mixed_load");
   if (
-    systemdCapabilityEvidence?.nonMutatingVerification !== true ||
+    systemdCapabilityEvidence?.systemdPropertyVerificationNonMutating !==
+      true ||
+    systemdCapabilityEvidence?.projectQuotaMutatingProbe !== true ||
+    systemdCapabilityEvidence?.projectQuota?.receipt === undefined ||
     !["cpu", "io", "memory", "pids"].every((controller) =>
       systemdCapabilityEvidence.cgroupV2Controllers?.includes(controller),
     )
@@ -229,7 +233,7 @@ export async function runPressureAdmissionStage({
       observe: () =>
         observeHost({
           gateStorage: {
-            maximumBytes: 64 * 1024 * 1024,
+            maximumBytes: SYSTEMD_GATE_PROJECT_QUOTA_BYTES,
             maximumInodes: 4_096,
             root: pressureRoot,
           },

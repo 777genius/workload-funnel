@@ -10,6 +10,7 @@ import {
   type CredentialedHyperQueueExecutor,
 } from "@workload-funnel/scheduler-hyperqueue/hyperqueue-cli-mutation";
 import type { AuthorizedHyperQueueMutation } from "@workload-funnel/scheduler-hyperqueue/mutation-gateway-authority";
+import { canonicalHyperQueueOperationJobName } from "@workload-funnel/scheduler-hyperqueue/mutation-gateway-authority";
 import { parseHyperQueueWorkerInventory } from "@workload-funnel/scheduler-hyperqueue/worker-inventory";
 
 const fence: MutationFence = Object.freeze({
@@ -33,12 +34,29 @@ const fence: MutationFence = Object.freeze({
 });
 
 function authorization(payload: unknown): AuthorizedHyperQueueMutation {
+  const requestFingerprint = "a".repeat(64);
+  const identity = {
+    mappingFingerprint:
+      (payload as { readonly mappingFingerprint?: string })
+        .mappingFingerprint ?? "mapping-fingerprint-1",
+    mutationFenceFingerprint: fingerprintMutationFence(fence),
+    operationId: "submit-operation-1",
+    requestFingerprint,
+    schedulerInstanceId: "scheduler-1",
+  };
   return {
+    canonicalJobName:
+      (payload as { readonly kind?: unknown }).kind === "submit"
+        ? canonicalHyperQueueOperationJobName(identity)
+        : undefined,
     registrySequence: 1,
+    requestFingerprint,
     request: {
       mutationFence: fence,
       mutationFenceFingerprint: fingerprintMutationFence(fence),
+      operationId: identity.operationId,
       payload,
+      scope: { schedulerInstanceId: identity.schedulerInstanceId },
     },
   } as unknown as AuthorizedHyperQueueMutation;
 }
@@ -52,9 +70,10 @@ describe("official HyperQueue v0.26.2 CLI schemas", () => {
           : { stderr: "", stdout: "{}" },
       ),
     );
+    const verifyRelease = vi.fn(() => Promise.resolve());
     const executor: CredentialedHyperQueueExecutor = {
       executeMutation,
-      verifyRelease: vi.fn(() => Promise.resolve()),
+      verifyRelease,
     };
     const cli = new ExactVersionHyperQueueCliMutation({
       exactVersion: "0.26.2",
@@ -65,11 +84,15 @@ describe("official HyperQueue v0.26.2 CLI schemas", () => {
       shimExecutable: "/opt/workload-funnel/bin/wf-hq-shim",
     });
     await cli.verifyExactRelease();
+    expect(verifyRelease).toHaveBeenCalledWith(
+      "hyperqueue v0.26.2",
+      "e15dae9113e1a307a97a66bfe90f74f78c6016239436b5d9f1e4efec480e84b5",
+      { maxOutputBytes: 128 * 1024, timeoutMs: 5_000 },
+    );
     await expect(
       cli.mutate(
         authorization({
           dispatchId: "dispatch-1",
-          jobName: "wf-dispatch-1",
           kind: "submit",
           mappingFingerprint: "mapping-fingerprint-1",
           requestedCpuCount: 1,
@@ -97,6 +120,31 @@ describe("official HyperQueue v0.26.2 CLI schemas", () => {
       jobId: "12",
       state: "cancel_acknowledged",
     });
+    const submitArguments = executeMutation.mock.calls[0]?.[0];
+    expect(submitArguments).toEqual([
+      "submit",
+      "--output-mode",
+      "json",
+      "--name",
+      expect.stringMatching(/^wf-hq-v1-[A-Za-z0-9_-]{86}$/u),
+      "--max-fails",
+      "0",
+      "--cpus",
+      "1",
+      "--",
+      "/opt/workload-funnel/bin/wf-hq-shim",
+      "--protocol",
+      "phase7.scheduler-shim.v1",
+      "--invocation-base64",
+      "e30",
+      "--restart-policy",
+      "never",
+      "--mapping-fingerprint",
+      "mapping-fingerprint-1",
+    ]);
+    expect(submitArguments).not.toEqual(
+      expect.arrayContaining(["--no-progress"]),
+    );
     const cancelArguments = executeMutation.mock.calls[1]?.[0];
     expect(cancelArguments).toEqual([
       "job",

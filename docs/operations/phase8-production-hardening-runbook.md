@@ -98,12 +98,13 @@ closed and never falls back.
 
 Object production capability requires create-only allocation-scoped upload,
 server checksum, scoped non-listing credentials, final mutation fencing, and a
-separate prefix-delete retention credential. Object staging verifies the
-privileged signed seal receipt, tree digest, complete seal/allocation/provider
-tuple, and scoped upload authority before any reader or client call. Artifact
-stage and delete require an installed durable authority record immediately
-before mutation. Sealing, quarantine, two-phase delete, verified absence, and
-tombstone rules remain unchanged.
+separate manifest-bound exact-resource delete credential (`sp=d`, `sr=b`) for
+each entry in the exact set. Prefix, container, and listing deletion authority
+is forbidden. Object staging verifies the privileged signed seal receipt, tree
+digest, complete seal/allocation/provider tuple, and scoped upload authority
+before any reader or client call. Artifact stage and delete require an installed
+durable authority record immediately before mutation. Sealing, quarantine,
+two-phase delete, verified absence, and tombstone rules remain unchanged.
 
 ## Backup and disaster restore
 

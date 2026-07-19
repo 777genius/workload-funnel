@@ -13,12 +13,17 @@ import {
   validatePinnedImages,
   verifyReviewedHostInputs,
 } from "./attestation.mjs";
+import { runAzureObjectProductionStage } from "./azure-object-stage.mjs";
 import {
   cleanupBoundedSystemdUnit,
   createBoundedHostProcessManager,
 } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
-import { DECLARED_COMPONENTS } from "./constants.mjs";
+import {
+  DECLARED_COMPONENTS,
+  HYPERQUEUE_GATEWAY_PROBE_TIMEOUT_MS,
+  HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
+} from "./constants.mjs";
 import {
   MINIO_SUPERVISOR_DESTINATION,
   objectContainerArguments,
@@ -47,6 +52,7 @@ import {
 import { admitPreflight } from "./pressure.mjs";
 import { runPressureAdmissionStage } from "./pressure-stage.mjs";
 import { runPostgresCompatibilityStage } from "./postgres-stage.mjs";
+import { cleanupProjectQuotaRecord } from "./project-quota-runtime.mjs";
 import { OwnedResourceLedger } from "./resource-ledger.mjs";
 import {
   cleanupSecretFileRecord,
@@ -66,6 +72,9 @@ import {
 import { probeRealSystemdCapabilities } from "./systemd-capability-probe.mjs";
 
 const startedAt = new Date().toISOString();
+const azuriteEntrypointScript = fileURLToPath(
+  new URL("./fixtures/azurite-entrypoint.sh", import.meta.url),
+);
 const minioBootstrapScript = fileURLToPath(
   new URL("./fixtures/minio-bootstrap.sh", import.meta.url),
 );
@@ -74,6 +83,12 @@ const minioSupervisorScript = fileURLToPath(
 );
 const systemdFixturePath = fileURLToPath(
   new URL("./fixtures/systemd-workload.mjs", import.meta.url),
+);
+const hyperQueueGatewayProbeScript = fileURLToPath(
+  new URL("./fixtures/hyperqueue-gateway-probe.mjs", import.meta.url),
+);
+const hyperQueueSyntheticShim = fileURLToPath(
+  new URL("./fixtures/hyperqueue-synthetic-shim.mjs", import.meta.url),
 );
 const wait = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -167,6 +182,7 @@ async function main() {
       ...dockerRecovery,
       "secret-file": cleanupSecretFileRecord,
       "owned-directory": cleanupOwnedDirectoryRecord,
+      "project-quota": cleanupProjectQuotaRecord,
       "systemd-allocation": cleanupSystemdAllocationRecord,
       "systemd-slice": (record) =>
         cleanupSystemdSlice(systemdCleanupConfig, record),
@@ -219,10 +235,17 @@ async function main() {
       runner,
     });
     try {
+      const projectQuotaHelper = reviewed.evidence.executables.find(
+        (identity) => identity.path === config.projectQuotaHelper,
+      );
+      if (projectQuotaHelper === undefined)
+        throw new Error("project_quota_helper_review_missing");
       systemdCapability = await probeRealSystemdCapabilities({
         ...config,
         ioDevice: config.ioDevice,
         runner,
+        ledger,
+        projectQuotaHelperSha256: projectQuotaHelper.sha256,
         workloadGroup: systemdAllocation.group,
         workloadRoot: systemdAllocation.root,
         workloadUser: systemdAllocation.user,
@@ -287,6 +310,7 @@ async function main() {
   if (components.get("preflight").status === "PASS") {
     docker = new GateDockerRuntime({
       allowedReadOnlyMounts: new Set([
+        azuriteEntrypointScript,
         minioBootstrapScript,
         minioSupervisorScript,
       ]),
@@ -313,20 +337,20 @@ async function main() {
         "postgres_fixture",
         passed("postgres_fixture", stage.evidence),
       );
+      components.set(
+        "postgres_production_adapter",
+        passed("postgres_production_adapter", stage.adapterEvidence),
+      );
     } catch (error) {
       components.set(
         "postgres_fixture",
         blocked("postgres_fixture", reasonCode(error)),
       );
-    }
-
-    components.set(
-      "postgres_production_adapter",
-      blocked(
+      components.set(
         "postgres_production_adapter",
-        "real_async_postgres_lifecycle_adapter_missing",
-      ),
-    );
+        blocked("postgres_production_adapter", reasonCode(error)),
+      );
+    }
 
     try {
       const suffix = config.runId.slice("wf-production-gate-".length);
@@ -584,17 +608,7 @@ async function main() {
           evidence.restartReconciled === true &&
           evidence.uploadCredentialCanOverwrite === true &&
           evidence.verificationIdentityDistinct === true
-          ? blocked(
-              "object_compatibility_fixture",
-              "object_provider_create_only_credential_unsupported",
-              [
-                evidenceRecord(
-                  "object_compatibility_real_evidence",
-                  true,
-                  recordedEvidence,
-                ),
-              ],
-            )
+          ? passed("object_compatibility_fixture", recordedEvidence)
           : blocked(
               "object_compatibility_fixture",
               "object_compatibility_evidence_incomplete",
@@ -613,19 +627,34 @@ async function main() {
         blocked("object_compatibility_fixture", reasonCode(error)),
       );
     }
-    components.set(
-      "object_production_provider",
-      blocked(
+    try {
+      const evidence = await runAzureObjectProductionStage({
+        config,
+        docker,
+        entrypointFile: azuriteEntrypointScript,
+        ledger,
+        secrets,
+        waitFor,
+      });
+      components.set(
         "object_production_provider",
-        "object_provider_create_only_credential_unsupported",
-      ),
-    );
+        passed("object_production_provider", evidence),
+      );
+    } catch (error) {
+      components.set(
+        "object_production_provider",
+        blocked("object_production_provider", reasonCode(error)),
+      );
+    }
 
     try {
       const allocation = await ensureSystemdAllocation();
       const serverDirectory = `${allocation.root}/hq-server`;
       await mkdir(serverDirectory, { mode: 0o700 });
       await chown(serverDirectory, allocation.uid, allocation.gid);
+      const gatewayWalPath = `${allocation.root}/hq-gateway/authority.wal`;
+      const serverJournalPath = `${allocation.root}/hq-server.journal`;
+      const operationKey = `${config.runId}-hq-job`;
       let hqServerUnit;
       let hqCommandSequence = 0;
       const confinedRunner = Object.freeze({
@@ -646,30 +675,57 @@ async function main() {
         archivePath: config.hqArchive,
         binaryPath: config.hqBinary,
         clock: Date.now,
-        jobName: `${config.runId}-hq-job`,
-        nodeExecutable: config.nodeExecutable,
+        executeGatewayProbe: (input) =>
+          processManager.execute(
+            config.nodeExecutable,
+            [
+              hyperQueueGatewayProbeScript,
+              "--binary",
+              config.hqBinary,
+              "--binary-sha256",
+              input.binarySha256,
+              "--operation",
+              input.operation,
+              "--operation-key",
+              operationKey,
+              "--server-directory",
+              serverDirectory,
+              "--shim-executable",
+              hyperQueueSyntheticShim,
+              "--wal-path",
+              gatewayWalPath,
+            ],
+            input.operation === "submit-and-recover"
+              ? "hq-gateway-submit"
+              : "hq-gateway-replay",
+            {
+              joinNetworkOf: hqServerUnit,
+              limits: { timeoutMs: HYPERQUEUE_GATEWAY_PROBE_TIMEOUT_MS },
+            },
+          ),
+        serviceRuntimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
+        gatewayWalPath,
+        jobName: operationKey,
         runner: confinedRunner,
+        serverJournalPath,
         serverDirectory,
         startProcess: async (executable, args, role, options) => {
           const process = await processManager.start(executable, args, role, {
             ...options,
-            joinNetworkOf: role === "hq-server" ? undefined : hqServerUnit,
+            joinNetworkOf: role.startsWith("hq-server")
+              ? undefined
+              : hqServerUnit,
           });
-          if (role === "hq-server") hqServerUnit = process.unit;
+          if (role.startsWith("hq-server")) hqServerUnit = process.unit;
           return process;
         },
         stopProcess: (process) => processManager.stop(process),
+        syntheticShimExecutable: hyperQueueSyntheticShim,
         wait,
       });
       components.set(
         "hyperqueue_0_26_2",
-        blocked("hyperqueue_0_26_2", "ambiguous_submit_lookup_unsupported", [
-          evidenceRecord(
-            "hyperqueue_official_cli_real_evidence",
-            true,
-            evidence,
-          ),
-        ]),
+        passed("hyperqueue_0_26_2", evidence),
       );
     } catch (error) {
       components.set(
@@ -687,7 +743,8 @@ async function main() {
         !capability.report.capabilities.ephemeral_disk_quota ||
         !capability.report.capabilities.ephemeral_disk_inode_quota
       )
-        throw new Error("project_quota_application_adapter_missing");
+        throw new Error("project_quota_capability_not_proven");
+      capability.verifyProjectQuota();
       const io = createSystemdProbeIo({
         ...config,
         ledger,
@@ -704,21 +761,15 @@ async function main() {
         preciseClock: monotonicMilliseconds,
         reviewedExecutables: reviewed.executableSet,
         runner,
+        sliceOwnership,
         wait,
       });
       components.set(
         "systemd_cgroup_v2",
-        blocked(
-          "systemd_cgroup_v2",
-          "project_quota_application_adapter_missing",
-          [
-            evidenceRecord(
-              "systemd_real_partial_evidence",
-              true,
-              systemdEvidence,
-            ),
-          ],
-        ),
+        passed("systemd_cgroup_v2", {
+          ...systemdEvidence,
+          projectQuota: capability.evidence.projectQuota,
+        }),
       );
     } catch (error) {
       const code = reasonCode(error);
@@ -728,6 +779,10 @@ async function main() {
         "systemd_manager_unavailable",
         "systemd_version_unsupported",
         "cgroup_v2_unsupported",
+        "project_quota_filesystem_unsupported",
+        "project_quota_kernel_capability_missing",
+        "project_quota_mount_option_missing",
+        "project_quota_quotactl_fd_unavailable",
         "systemd_required_property_unsupported",
       ]).has(code)
         ? "UNSUPPORTED"

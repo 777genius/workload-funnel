@@ -176,9 +176,19 @@ export function createSystemdProbeIo(config) {
       }
     },
     async readDescendantPids(root) {
-      const value = JSON.parse(
-        await readFile(`${root}/descendants.json`, "utf8"),
-      );
+      let serialized;
+      try {
+        serialized = await readFile(`${root}/descendants.json`, "utf8");
+      } catch (error) {
+        if (error?.code === "ENOENT") return undefined;
+        throw error;
+      }
+      let value;
+      try {
+        value = JSON.parse(serialized);
+      } catch {
+        throw new Error("systemd_descendant_manifest_invalid");
+      }
       if (
         !Array.isArray(value) ||
         value.length < 2 ||

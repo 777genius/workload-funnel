@@ -40,6 +40,7 @@ export interface ScopedCreateOnlyObjectClient {
       bytes: Uint8Array;
       checksum: string;
       authority: ArtifactMutationAuthorityReceipt;
+      reauthorize(now: number): ArtifactMutationAuthorityReceipt;
     }>,
   ): Promise<ObjectStagePutReceipt>;
 }
@@ -107,6 +108,55 @@ function safePath(path: string): readonly string[] {
   return segments;
 }
 
+export function objectArtifactKey(identity: string, path: string): string {
+  if (
+    identity.startsWith("/") ||
+    identity.endsWith("/") ||
+    identity.includes("\\") ||
+    identity.includes("\u0000") ||
+    identity !== identity.normalize("NFC") ||
+    identity
+      .split("/")
+      .some((segment) => segment === "" || segment === "." || segment === "..")
+  )
+    throw new Error("unsafe_object_staging_identity");
+  return `${identity}/${safePath(path)
+    .map((segment) => Buffer.from(segment).toString("base64url"))
+    .join("/")}`;
+}
+
+export function objectArtifactLocation(
+  providerId: string,
+  key: string,
+): string {
+  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(providerId))
+    throw new Error("unsafe_object_provider_id");
+  return `object+wf://${providerId}/${Buffer.from(key).toString("base64url")}`;
+}
+
+export function objectArtifactKeyFromLocation(
+  providerId: string,
+  location: string,
+): string {
+  const prefix = `object+wf://${providerId}/`;
+  if (!location.startsWith(prefix))
+    throw new Error("object_artifact_location_mismatch");
+  const encoded = location.slice(prefix.length);
+  const key = Buffer.from(encoded, "base64url").toString("utf8");
+  if (
+    encoded === "" ||
+    Buffer.from(key).toString("base64url") !== encoded ||
+    key.includes("\u0000") ||
+    key.includes("\\") ||
+    key !== key.normalize("NFC") ||
+    key
+      .split("/")
+      .some((segment) => segment === "" || segment === "." || segment === "..")
+  )
+    throw new Error("object_artifact_location_invalid");
+  return key;
+}
+
 export function createProvider(
   config: ObjectStageUploadConfig,
 ): ArtifactStageWriter {
@@ -142,8 +192,7 @@ export function createProvider(
       for (const entry of [...command.entries].sort((left, right) =>
         left.path.localeCompare(right.path),
       )) {
-        const segments = safePath(entry.path);
-        const key = `${immutableStagingIdentity}/${segments.map((segment) => Buffer.from(segment).toString("base64url")).join("/")}`;
+        const key = objectArtifactKey(immutableStagingIdentity, entry.path);
         if (!key.startsWith(command.uploadIdentity.prefix))
           throw new Error("object_upload_scope_escape");
         const bytes = await config.sealedReader.read(
@@ -162,6 +211,8 @@ export function createProvider(
           bytes,
           checksum,
           key,
+          reauthorize: (at) =>
+            config.authority.authorize(command.mutationFence, at),
         });
         if (
           put.key !== key ||
@@ -172,7 +223,7 @@ export function createProvider(
         entries.push(
           Object.freeze({
             checksum,
-            location: `object+wf://${config.providerId}/${Buffer.from(key).toString("base64url")}`,
+            location: objectArtifactLocation(config.providerId, key),
             path: entry.path,
             sizeBytes: bytes.byteLength,
           }),
@@ -197,6 +248,18 @@ export function createProvider(
     },
   });
 }
+
+export {
+  AzureBlobCreateOnlyError,
+  createAzureBlobPrivateFixtureScopedCreateOnlyClient,
+  createAzureBlobScopedCreateOnlyClient,
+  type AzureBlobCreateCredentialProvider,
+  type AzureBlobCreateOnlyClientConfig,
+  type AzureBlobCreateOnlyVerifier,
+  type AzureBlobPrivateFixtureClientConfig,
+  type AzureBlobScopedCredential,
+  type AzureBlobSdkPort,
+} from "./azure-blob-create-only-client.js";
 
 export {
   createSqliteArtifactMutationAuthorityStore,

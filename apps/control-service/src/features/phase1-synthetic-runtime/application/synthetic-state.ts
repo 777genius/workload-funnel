@@ -35,6 +35,7 @@ import type {
   AcceptanceReceipt,
   Attempt,
   CancellationReceipt,
+  LifecycleErasureRecord,
   OperationStatus,
   Run,
   Workload,
@@ -82,7 +83,9 @@ export interface DurableState {
   operationById: Map<string, OperationStatus>;
   cancelOperationByRun: Map<string, string>;
   cancellationReceiptByOperation: Map<string, CancellationReceipt>;
-  lifecycleErasureByOperation: Map<string, number>;
+  callerScopeByOperationId: Map<string, string>;
+  callerScopeByRunId: Map<string, string>;
+  lifecycleErasureByOperation: Map<string, LifecycleErasureRecord>;
   allocations: Map<string, Allocation>;
   allocationByAttempt: Map<string, string>;
   releaseReceipts: Map<string, AllocationReleaseReceipt>;
@@ -149,6 +152,8 @@ function createState(): DurableState {
     audit: [],
     cancelOperationByRun: new Map(),
     cancellationReceiptByOperation: new Map(),
+    callerScopeByOperationId: new Map(),
+    callerScopeByRunId: new Map(),
     claimFence: 0,
     claims: new Map(),
     dispatchByAllocation: new Map(),

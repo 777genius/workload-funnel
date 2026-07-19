@@ -17,6 +17,19 @@ export {
   type TransientProjectQuotaControl,
   type VerifiedProjectQuotaReceipt,
 } from "./project-quota-registry.js";
+export {
+  LINUX_PROJECT_QUOTA_ALLOCATION_ROOT,
+  LINUX_PROJECT_QUOTA_CAPABILITY_SCHEMA,
+  LINUX_PROJECT_QUOTA_RECEIPT_ROOT,
+  LINUX_PROJECT_QUOTA_RECEIPT_SCHEMA,
+  LinuxProjectQuotaManager,
+  probeLinuxProjectQuotaCapability,
+  recoverLinuxProjectQuotaCapability,
+  type LinuxProjectQuotaAdapterConfig,
+  type LinuxProjectQuotaCapabilityEvidence,
+  type LinuxProjectQuotaRemovalReceipt,
+  type LinuxVerifiedProjectQuotaReceipt,
+} from "./linux-project-quota.js";
 
 export const SYNTHETIC_EXECUTABLE =
   "/usr/libexec/workload-funnel/synthetic-process-tree" as const;
@@ -48,6 +61,7 @@ export interface TransientUnitProperties {
   readonly MemorySwapMax: bigint | "infinity";
   readonly NoNewPrivileges: true;
   readonly PrivateDevices: true;
+  readonly PrivateMounts: true;
   readonly PrivateNetwork: boolean;
   readonly PrivateTmp: true;
   readonly ProtectControlGroups: true;
@@ -99,10 +113,12 @@ export interface TransientUnitStartManager {
   readonly transientServiceStart: "supported" | "unsupported";
   applyProjectQuota(
     control: TransientProjectQuotaControl,
+    mutationFence: MutationFence,
   ): VerifiedProjectQuotaReceipt;
   verifyProjectQuotaReceipt(
     control: TransientProjectQuotaControl,
     receipt: VerifiedProjectQuotaReceipt,
+    mutationFence: MutationFence,
   ): boolean;
   startTransientService(unit: SyntheticTransientUnit): "created" | "exists";
 }
@@ -145,6 +161,7 @@ function validateControlPlan(plan: TransientExecutionControlPlan): void {
     properties["CapabilityBoundingSet"].length !== 0 ||
     properties["DevicePolicy"] !== "closed" ||
     properties["ProtectSystem"] !== "strict" ||
+    properties["PrivateMounts"] !== true ||
     properties["ProtectControlGroups"] !== true ||
     properties["ProtectKernelModules"] !== true ||
     properties["ProtectKernelTunables"] !== true
@@ -234,10 +251,17 @@ export function startSyntheticTransientUnit(
     throw new Error("transient_unit_start_fence_mismatch");
   }
   const unit = syntheticTransientUnit(unitName, controls);
-  const quotaReceipt = manager.applyProjectQuota(controls.diskQuota);
+  const quotaReceipt = manager.applyProjectQuota(
+    controls.diskQuota,
+    mutationFence,
+  );
   if (
     !isExactProjectQuotaReceipt(controls.diskQuota, quotaReceipt) ||
-    !manager.verifyProjectQuotaReceipt(controls.diskQuota, quotaReceipt)
+    !manager.verifyProjectQuotaReceipt(
+      controls.diskQuota,
+      quotaReceipt,
+      mutationFence,
+    )
   ) {
     throw new Error("project_quota_receipt_verification_failed");
   }

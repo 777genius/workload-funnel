@@ -22,6 +22,7 @@ import {
 } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
 import {
+  HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
   MINIMAL_COMMAND_ENVIRONMENT,
   OBJECT_FIXTURE_IMAGE,
   POSTGRES_FIXTURE_IMAGE,
@@ -152,12 +153,40 @@ describe("production gate host safety", () => {
     });
     expect(pressure.arguments).toContain("--property=RuntimeMaxSec=75s");
     expect(pressure.runtimeMaxSec).toBe(75);
+    for (const role of [
+      "hq-server",
+      "hq-server-restart",
+      "hq-worker",
+      "hq-worker-restart",
+    ]) {
+      const process = boundedHostSystemdArguments(config, {
+        executable: "/usr/bin/node",
+        executableArguments: ["--version"],
+        ...(role === "hq-worker-restart"
+          ? { joinNetworkOf: `${runId}-hq-server-restart.service` }
+          : {}),
+        role,
+        runtimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
+      });
+      expect(process.arguments).toContain(
+        `--property=RuntimeMaxSec=${String(HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC)}s`,
+      );
+      expect(process.runtimeMaxSec).toBe(HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC);
+      expect(process.unit).toBe(`${runId}-${role}.service`);
+      if (role === "hq-worker-restart")
+        expect(process.arguments).toContain(
+          `--property=JoinsNamespaceOf=${runId}-hq-server-restart.service`,
+        );
+    }
 
     for (const input of [
       { role: "probe", runtimeMaxSec: 75 },
       { role: "pressure-cpu", runtimeMaxSec: 59 },
       { role: "pressure-cpu", runtimeMaxSec: 91 },
       { role: "pressure-unknown", runtimeMaxSec: 75 },
+      { role: "hq-server", runtimeMaxSec: 179 },
+      { role: "hq-worker", runtimeMaxSec: 181 },
+      { role: "hq-unknown", runtimeMaxSec: 180 },
     ])
       expect(() =>
         boundedHostSystemdArguments(config, {
@@ -528,7 +557,7 @@ describe("production gate host safety", () => {
     expect(outputs).toHaveLength(0);
   });
 
-  it("uses only a non-mutating real-systemd capability preflight", async () => {
+  it("combines non-mutating systemd checks with exact quota application evidence", async () => {
     const directory = join(
       tmpdir(),
       `wf-systemd-capability-${process.pid}-${Date.now()}`,
@@ -560,6 +589,21 @@ describe("production gate host safety", () => {
         },
         {
           hostPlatform: () => "linux",
+          projectQuotaApplication: () =>
+            Promise.resolve({
+              capability: {
+                byteQuota: true,
+                inodeQuota: true,
+              },
+              control: {
+                allocationId: runId,
+                inodeMaximum: 4_096n,
+                maximumBytes: 67_108_864n,
+                projectId: 1,
+                root: `/var/lib/workload-funnel/allocations/${runId}`,
+              },
+              receipt: { receiptDigest: "a".repeat(64) },
+            }),
           read: () => Promise.resolve("cpu io memory pids\n"),
           write: (path, contents, options) => {
             verificationUnit = contents;
@@ -568,7 +612,7 @@ describe("production gate host safety", () => {
         },
       );
       expect(result.report.evidenceSource).toBe("disposable_linux_host");
-      expect(result.report.capabilities.ephemeral_disk_quota).toBe(false);
+      expect(result.report.capabilities.ephemeral_disk_quota).toBe(true);
       expect(calls).toHaveLength(3);
       expect(calls[1][1]).toEqual([
         "show",

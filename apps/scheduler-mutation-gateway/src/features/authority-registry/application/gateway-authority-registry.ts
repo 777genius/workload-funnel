@@ -6,6 +6,7 @@ import {
   schedulerAuthoritySerializationKeys,
   type AuthorizedHyperQueueMutation,
   type EffectReceiptEvidence,
+  type HyperQueueDispatchMapping,
   type MutateHyperQueueRequest,
   type SchedulerScopeCloseAcknowledgement,
   type SchedulerScopeCloseRequest,
@@ -78,7 +79,10 @@ export class GatewayAuthorityRegistry {
       (scopeKey) => this.#effects.hasUnresolvedInScope(scopeKey),
     );
     if (config.wal.cordonReason !== undefined) {
-      this.#cordonReason = "gateway_registry_unprovable";
+      this.#cordonReason =
+        config.wal.cordonReason === "gateway_wal_migration_required"
+          ? "gateway_wal_migration_required"
+          : "gateway_registry_unprovable";
     } else {
       try {
         for (const envelope of config.wal.records) {
@@ -196,8 +200,43 @@ export class GatewayAuthorityRegistry {
     return this.#effects.completeMutation(authorization, result);
   }
 
-  public recoverUnresolvedAsUnknown(): readonly EffectReceiptEvidence[] {
-    return this.#effects.recoverUnresolvedAsUnknown();
+  public persistDispatchMapping(
+    authorization: AuthorizedHyperQueueMutation,
+    result: Readonly<{
+      readonly canonicalJobName: string;
+      readonly jobId: string;
+      readonly taskId: "0";
+    }>,
+  ): HyperQueueDispatchMapping {
+    return this.#effects.persistDispatchMapping(authorization, result);
+  }
+
+  public dispatchMapping(
+    operationId: string,
+  ): HyperQueueDispatchMapping | undefined {
+    return this.#effects.dispatchMapping(operationId);
+  }
+
+  public unresolvedAuthorizations(): readonly AuthorizedHyperQueueMutation[] {
+    return this.#effects.unresolvedAuthorizations();
+  }
+
+  public reconciliationRequiredOperationIds(): readonly string[] {
+    return this.#effects.reconciliationRequiredOperationIds();
+  }
+
+  public completeUnknownAndCordon(
+    authorization: AuthorizedHyperQueueMutation,
+    reason: string,
+  ): EffectReceiptEvidence {
+    return this.#effects.completeUnknownAndCordon(authorization, reason);
+  }
+
+  public completeRejectedAndCordon(
+    authorization: AuthorizedHyperQueueMutation,
+    reason: string,
+  ): EffectReceiptEvidence {
+    return this.#effects.completeRejectedAndCordon(authorization, reason);
   }
 
   private assertHealthy(): void {

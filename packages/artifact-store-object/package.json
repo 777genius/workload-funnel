@@ -6,6 +6,7 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
+    "@azure/storage-blob": "12.33.0",
     "@workload-funnel/kernel": "workspace:*",
     "@workload-funnel/node-execution": "workspace:*",
     "@workload-funnel/workload-control": "workspace:*"

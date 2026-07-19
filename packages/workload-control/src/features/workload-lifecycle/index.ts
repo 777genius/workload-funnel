@@ -37,14 +37,31 @@ export type {
   LifecyclePersistenceFactoryInput,
   LifecyclePersistenceHooks,
   LifecyclePersistenceState,
+  LifecycleErasureRecord,
   LifecycleRepository,
 } from "./application/contracts/lifecycle-repository.js";
+export type {
+  AsyncLifecycleCallOptions,
+  AsyncLifecycleRepository,
+} from "./application/contracts/async-lifecycle-repository.js";
 export {
   createWorkloadLifecycleService,
   type AuthenticatedPrincipal,
   type SubmitCommand,
   type WorkloadLifecycleService,
 } from "./application/workload-service.js";
+export {
+  authenticatedCallerScope,
+  encodeLifecycleTuple,
+  lifecycleIdempotencyStorageKey,
+  lifecycleOperationId,
+  type LifecycleCallerIdentity,
+} from "./application/caller-identity.js";
+export {
+  createAsyncWorkloadLifecycleService,
+  type AsyncWorkloadLifecycleService,
+} from "./application/async-workload-service.js";
+export { validateWorkloadSpec } from "./application/workload-spec.js";
 export { createWorkloadLifecycleTransactionParticipant } from "./application/transaction-participant.js";
 export {
   prepareSyntheticMutationFence,

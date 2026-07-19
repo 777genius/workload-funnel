@@ -680,6 +680,7 @@ from those node/target pairs; generation fails if re-rendering changes a byte.
 | `scheduler-hyperqueue/hyperqueue-reconciliation` | `node-execution/scheduler-shim-entrypoint`, `workload-control/dispatch-reconciliation` |
 | `scheduler-hyperqueue/mutation-gateway-authority` | `workload-control/dispatch-reconciliation`, `workload-control/namespace-ownership`, `workload-control/operation-gating` |
 | `scheduler-hyperqueue/hyperqueue-cli-mutation` | `node-execution/scheduler-shim-entrypoint`, `scheduler-hyperqueue/mutation-gateway-authority` |
+| `scheduler-hyperqueue/operation-lookup` | `scheduler-hyperqueue/mutation-gateway-authority` |
 | `artifact-store-filesystem/stage-write` | `node-execution/result-staging-reporting`, `workload-control/result-management` |
 | `artifact-store-filesystem/verify-finalize` | `workload-control/result-management` |
 | `artifact-store-filesystem/retention-delete` | `workload-control/result-management` |
@@ -709,7 +710,7 @@ from those node/target pairs; generation fails if re-rendering changes a byte.
 | `apps/node-launcher/break-glass-stop` | `apps/node-launcher/systemd-mutation-boundary`, `node-execution/process-lifecycle` |
 | `apps/scheduler-mutation-gateway/authority-registry` | `scheduler-hyperqueue/mutation-gateway-authority` |
 | `apps/scheduler-mutation-gateway/authority-installation` | `apps/scheduler-mutation-gateway/authority-registry`, `scheduler-hyperqueue/mutation-gateway-authority` |
-| `apps/scheduler-mutation-gateway/hyperqueue-mutation-boundary` | `apps/scheduler-mutation-gateway/authority-registry`, `scheduler-hyperqueue/hyperqueue-cli-mutation`, `scheduler-hyperqueue/mutation-gateway-authority` |
+| `apps/scheduler-mutation-gateway/hyperqueue-mutation-boundary` | `apps/scheduler-mutation-gateway/authority-registry`, `scheduler-hyperqueue/hyperqueue-cli-mutation`, `scheduler-hyperqueue/mutation-gateway-authority`, `scheduler-hyperqueue/operation-lookup` |
 | `apps/scheduler-mutation-gateway/recovery` | `apps/scheduler-mutation-gateway/authority-registry`, `apps/scheduler-mutation-gateway/hyperqueue-mutation-boundary` |
 | `apps/result-sealer/seal-authority-registry` | `node-execution/result-sealing-coordination` |
 | `apps/result-sealer/filesystem-seal-boundary` | `apps/result-sealer/seal-authority-registry`, `node-execution/result-sealing-coordination` |
@@ -1751,7 +1752,7 @@ K|apps/scheduler-mutation-gateway/authority-installation|Identifier+OperationId+
 K|apps/scheduler-mutation-gateway/authority-registry|Identifier+OperationId+MutationFence
 K|apps/scheduler-mutation-gateway/composition|empty
 K|apps/scheduler-mutation-gateway/hyperqueue-mutation-boundary|Identifier+OperationId+MutationFence
-K|apps/scheduler-mutation-gateway/recovery|Identifier+OperationId+MutationFence
+K|apps/scheduler-mutation-gateway/recovery|Identifier+OperationId
 K|artifact-store-filesystem/retention-delete|Identifier+OperationId+MutationFence
 K|artifact-store-filesystem/stage-write|Identifier+OperationId+MutationFence
 K|artifact-store-filesystem/verify-finalize|Identifier+OperationId+MutationFence
@@ -1804,6 +1805,7 @@ K|scheduler-hyperqueue/dispatch-submission|Identifier+OperationId+MutationFence
 K|scheduler-hyperqueue/hyperqueue-cli-mutation|Identifier+OperationId+MutationFence
 K|scheduler-hyperqueue/hyperqueue-reconciliation|Identifier+OperationId
 K|scheduler-hyperqueue/mutation-gateway-authority|Identifier+OperationId+MutationFence
+K|scheduler-hyperqueue/operation-lookup|Identifier+OperationId
 K|scheduler-hyperqueue/worker-inventory|Identifier+OperationId
 K|store-postgres/allocation-persistence|Identifier+OptimisticVersion
 K|store-postgres/audit-ledger-persistence|Identifier+OptimisticVersion
@@ -1874,8 +1876,8 @@ K|workload-control/tenant-admission|Identifier+OperationId+OptimisticVersion+Utc
 K|workload-control/workload-lifecycle|Identifier+OperationId+OptimisticVersion+UtcInstant+MutationFence
 ```
 
-This checked-in block contains exactly 200 `B`, 458 `C`, 8 `E`, and 154 `K`
-records. The section 8.3.1 compile relation contains 154 nodes and 511 edges;
+This checked-in block contains exactly 200 `B`, 458 `C`, 8 `E`, and 155 `K`
+records. The section 8.3.1 compile relation contains 155 nodes and 512 edges;
 the separate runtime construction relation contains the 458 concrete `C`
 records above. These counts
 are verification outputs, not substitute acceptance criteria: the parser still
@@ -5295,7 +5297,15 @@ resources. It is not a complete multi-tenant control plane.
 - Validate all output with versioned schemas.
 - Submit one WorkloadFunnel dispatch per HyperQueue job initially.
 - Store HyperQueue job/task IDs only in adapter dispatch mappings.
-- Reconcile by operation ID and mapping before any retry.
+- The trusted scheduler-mutation gateway derives the HyperQueue job name from
+  the complete persisted submit intent: operation ID, scheduler instance,
+  request fingerprint, mapping fingerprint, complete MutationFence fingerprint,
+  adapter key, and adapter contract version. It uses the canonical bounded
+  non-secret digest
+  `workload-funnel.hq-operation-name.v1` encoding. Submit callers cannot supply
+  or override this name. A digest is not claimed to be mathematically injective;
+  any recovered or live name collision with another operation fails closed.
+  Reconcile by that exact name and any create-only mapping before any retry.
 - Make every HyperQueue task invoke the WorkloadFunnel node-agent/launcher
   ticket entrypoint, which then creates the execution-generation-specific
   systemd/runtime
@@ -5365,11 +5375,29 @@ Because journal recovery may recompute recent work and retained jobs grow server
 state, these settings are release configuration with E2E assertions, not
 operator folklore.
 
-Unless the pinned HyperQueue version proves a unique lookup by the persisted
-WorkloadFunnel operation identity, the adapter declares
-`submitLookupByOperationId=false`. A lost submit response then enters manual
-reconciliation and is never automatically resubmitted. This limitation blocks
-non-replayable and side-effectful production workloads from HyperQueue.
+For the exact HyperQueue 0.26.2 contract, the gateway persists the complete
+validated submit intent before the CLI call and correlates an ambiguous result
+through the version-pinned structured job-list JSON and the canonical job name.
+The job-list parser accepts exactly the pinned row fields and nested task-stat
+fields and rejects every extra, missing, or type-drifted field. Before submit,
+the same lookup enforces configured retained-job and combined-output ceilings;
+no submit is issued once the retained-history ceiling is reached. Gateway WAL
+v2 has explicit operation-name records. A v1 WAL requires an offline audited
+migration and otherwise starts cordoned; it is never silently reinterpreted.
+Exactly one exact match may create the adapter-local `DispatchMapping`, and the
+mapping is create-only and fsynced before the applied receipt. Zero matches
+remain `unknown` and do not prove absence; multiple matches, malformed,
+oversized, incomplete, or version-mismatched output, and mapping conflicts fail
+closed. The unresolved operation, name, and cordon survive restart and authority
+advance and are excluded from every forget/prune path. This is deterministic
+correlation, not native HyperQueue submit idempotency, exactly-once execution,
+or permission to resubmit an unknown operation.
+
+Submit mutation closure does not itself prove cancellation of an ambiguous live
+submit for which no exact mapping exists. `dispatch_cancel` remains a separate
+safety lane once one exact mapping is reconciled, but until the disposable probe
+proves that path, `ambiguousLiveSubmitCancellationProven=false` and HyperQueue
+production capability remains blocked with that precise limitation.
 
 If this isolation and shim protocol cannot be enforced, the adapter declares
 `tenantIsolation=false`, `hardProcessOwnership=false`, and is restricted to
@@ -6115,6 +6143,21 @@ Against an isolated pinned server/worker set:
 - crash/restart before/after registry/WAL fsync, CLI spawn, mapping persistence,
   receipt persistence, drain acknowledgement, canonical advance, install ack,
   and reopen converges to a durable receipt or `unknown`, never blind submit.
+- exact deterministic-name lookup covers zero, one, and duplicate matches plus
+  waiting, running, fast-terminal, and canceled retained jobs; malformed,
+  oversized, incomplete, version-mismatched, or conflicting mapping evidence
+  cordons, while zero matches remain unknown and unresolved records cannot be
+  forgotten or pruned.
+- the disposable gate runs the built `SchedulerMutationGatewayClient`
+  composition, `HyperQueueMutationBoundary`, and fsynced WAL authority path. It
+  loses the response only after the one real pinned submit runner returns,
+  restarts the gateway on the same WAL/mapping state, resolves and replays the
+  durable receipt through the public gateway API, restarts the HQ server on the
+  same journal, rechecks one exact retained name and job ID under the configured
+  history ceiling, and proves public retry did not submit again. That lookup is
+  `retainedExactJobMatches=1`; it does not by itself re-prove canceled task
+  state. A standalone operation-lookup call cannot substitute for the gateway
+  response-loss/recovery path.
 
 ### 29.7 `subscription-runtime` bridge E2E
 
@@ -6658,7 +6701,8 @@ Acceptance:
 Estimated change: 2,000-3,500 lines.
 
 - exact-version CLI wrapper;
-- schemas and capability mapping;
+- schemas, gateway-owned deterministic operation naming and exact structured
+  operation lookup, and capability mapping;
 - submit/observe/cancel/reconcile;
 - `mutation-gateway-authority` owner plus gateway authority-registry,
   installation, final-HQ-CLI, and recovery slices; sole credential custody;

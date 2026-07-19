@@ -1,14 +1,175 @@
 import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { setImmediate } from "node:timers";
+import { fileURLToPath, URL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
 import { createBoundedHostProcessManager } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
+import {
+  HYPERQUEUE_GATEWAY_PROBE_TIMEOUT_MS,
+  HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
+} from "./constants.mjs";
+import { parseGatewayProbeResult } from "./hyperqueue-contract.mjs";
+import {
+  exactSystemdObservationWindowInput,
+  SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS,
+} from "./systemd-observation-window-contract.mjs";
 
 const runId = "wf-production-gate-0123456789abcdef0123456789abcdef";
 const workloadRoot = `/var/lib/workload-funnel/allocations/${runId}`;
+
+describe("HyperQueue gateway probe failure diagnostics", () => {
+  it("emits one bounded diagnostic envelope without stderr", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL("./fixtures/hyperqueue-gateway-probe.mjs", import.meta.url),
+        ),
+      ],
+      {
+        encoding: "utf8",
+        env: { LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" },
+        timeout: 5_000,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(
+      '{"failureReason":"hyperqueue_gateway_probe_arguments_invalid"}\n',
+    );
+  });
+
+  it("preserves one exact reviewed failure reason", () => {
+    let failure;
+    try {
+      parseGatewayProbeResult(
+        {
+          code: 1,
+          stderr: "untrusted wrapper diagnostic",
+          stdout:
+            '{"failureReason":"hyperqueue_gateway_probe_restart_recovery_failed"}\n',
+          systemdResult: "exit-code",
+        },
+        "submit-and-recover",
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toBe(
+      "hyperqueue_gateway_probe_restart_recovery_failed",
+    );
+  });
+
+  it.each([
+    ["foreign namespace", '{"failureReason":"foreign_secret_value"}\n'],
+    [
+      "additional field",
+      '{"failureReason":"hyperqueue_gateway_probe_failed","extra":true}\n',
+    ],
+    ["multiline output", '{"failureReason":"gateway_failed"}\n{}\n'],
+  ])("fails closed for a %s", (_, stdout) => {
+    expect(() =>
+      parseGatewayProbeResult(
+        { code: 1, stderr: "", stdout },
+        "submit-and-recover",
+      ),
+    ).toThrow("hyperqueue_gateway_probe_execution_failed");
+  });
+
+  it.each([
+    ["command_failed", "hyperqueue_gateway_probe_wrapper_failed"],
+    ["command_output_limit", "hyperqueue_gateway_probe_output_limit"],
+    ["command_timeout", "hyperqueue_gateway_probe_wrapper_timeout"],
+  ])(
+    "classifies bounded runner %s without exposing output",
+    (errorCode, reason) => {
+      expect(() =>
+        parseGatewayProbeResult(
+          {
+            code: null,
+            errorCode,
+            stderr: "untrusted wrapper diagnostic",
+            stdout: "untrusted wrapper output",
+          },
+          "submit-and-recover",
+        ),
+      ).toThrow(reason);
+    },
+  );
+
+  it("gives the hosted gateway probe bounded headroom for durable recovery", async () => {
+    const harness = processManagerHarness({
+      code: 0,
+      stderr: "",
+      stdout: "gateway-evidence\n",
+    });
+
+    await expect(
+      harness.manager.execute(
+        "/usr/bin/node",
+        ["/reviewed/hyperqueue-gateway-probe.mjs"],
+        "hq-gateway-submit",
+        { limits: { timeoutMs: HYPERQUEUE_GATEWAY_PROBE_TIMEOUT_MS } },
+      ),
+    ).resolves.toMatchObject({ code: 0 });
+    expect(harness.runner.start).toHaveBeenCalledWith(
+      "/usr/bin/systemd-run",
+      expect.arrayContaining(["--property=RuntimeMaxSec=45s"]),
+      { timeoutMs: 92_000 },
+    );
+  });
+
+  it("fails closed for an unknown bounded runner failure", () => {
+    expect(() =>
+      parseGatewayProbeResult({ code: null, errorCode: "unknown" }),
+    ).toThrow("hyperqueue_gateway_probe_execution_failed");
+  });
+
+  it.each([
+    ["oom-kill", "hyperqueue_gateway_probe_memory_limit"],
+    ["signal", "hyperqueue_gateway_probe_child_signaled"],
+    ["timeout", "hyperqueue_gateway_probe_wrapper_timeout"],
+  ])("classifies reviewed systemd result %s", (systemdResult, reason) => {
+    expect(() =>
+      parseGatewayProbeResult({
+        code: 1,
+        stderr: "",
+        stdout: "",
+        systemdResult,
+      }),
+    ).toThrow(reason);
+  });
+
+  it.each([
+    ["", "", "hyperqueue_gateway_probe_child_output_missing"],
+    [
+      "",
+      "untrusted stderr",
+      "hyperqueue_gateway_probe_child_output_missing_with_stderr",
+    ],
+    ["x".repeat(257), "", "hyperqueue_gateway_probe_child_output_oversized"],
+    ["not-newline", "", "hyperqueue_gateway_probe_child_output_shape_invalid"],
+    ["unknown\n", "", "hyperqueue_gateway_probe_child_output_unrecognized"],
+  ])(
+    "classifies exit-code output shape without exposing bytes",
+    (stdout, stderr, reason) => {
+      expect(() =>
+        parseGatewayProbeResult({
+          code: 1,
+          stderr,
+          stdout,
+          systemdResult: "exit-code",
+        }),
+      ).toThrow(reason);
+    },
+  );
+});
 
 function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
   const description = systemdArguments
@@ -17,12 +178,16 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
   const unit = systemdArguments
     .find((argument) => argument.startsWith("--unit="))
     .slice("--unit=".length);
-  const execStopPost =
+  const execStartPre =
     systemdArguments
-      .find((argument) => argument.startsWith("--property=ExecStopPost="))
-      ?.slice("--property=ExecStopPost=".length) ?? "";
+      .find((argument) => argument.startsWith("--property=ExecStartPre="))
+      ?.slice("--property=ExecStartPre=".length) ?? "";
+  const property = (name) =>
+    systemdArguments
+      .find((argument) => argument.startsWith(`--property=${name}=`))
+      .slice(`--property=${name}=`.length);
   const values = {
-    ActiveState: execStopPost === "" ? "active" : "deactivating",
+    ActiveState: execStartPre === "" ? "active" : "activating",
     AmbientCapabilities: "",
     CapabilityBoundingSet: "",
     ControlGroup: `/wf.slice/wf-production.slice/wf-production-gate.slice/${runId}.slice/${unit}`,
@@ -32,10 +197,10 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     DevicePolicy: "closed",
     Environment:
       "HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC",
-    ExecStopPost:
-      execStopPost === ""
+    ExecStartPre:
+      execStartPre === ""
         ? ""
-        : `{ path=/usr/bin/node ; argv[]=${execStopPost} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=1 ; code=(null) ; status=0/0 }`,
+        : `{ path=/usr/bin/node ; argv[]=${execStartPre} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=1 ; code=(null) ; status=0/0 }`,
     FinalKillSignal: "SIGKILL",
     Group: "workload-funnel-synthetic",
     IOReadBandwidthMax: "/dev/vda 16M",
@@ -71,13 +236,14 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     RestrictNamespaces: "yes",
     RestrictRealtime: "yes",
     RestrictSUIDSGID: "yes",
-    RuntimeMaxUSec: "30s",
+    Result: "exit-code",
+    RuntimeMaxUSec: property("RuntimeMaxSec"),
     SendSIGKILL: "yes",
     Slice: `${runId}.slice`,
     SystemCallArchitectures: "native",
     SystemCallFilter: "read write",
     TasksMax: "128",
-    TimeoutStopUSec: "5s",
+    TimeoutStopUSec: property("TimeoutStopSec"),
     UMask: "0077",
     User: "workload-funnel-synthetic",
     WorkingDirectory: workloadRoot,
@@ -213,6 +379,45 @@ function processManagerHarness(
 }
 
 describe("systemd 255 bounded synchronous execution compatibility", () => {
+  it("binds the caller and observation fixture to one exact timeout", () => {
+    const marker = `${workloadRoot}/.observed-hq-cli-1`;
+    expect(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS).toBe(30_000);
+    expect(
+      exactSystemdObservationWindowInput(
+        marker,
+        SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS,
+      ),
+    ).toBe(true);
+    for (const timeoutMs of [10_000, 29_999, 30_001])
+      expect(exactSystemdObservationWindowInput(marker, timeoutMs)).toBe(false);
+  });
+
+  it.each([
+    ["active state", { ActiveState: "active" }, "active_state_active"],
+    [
+      "deactivating state",
+      { ActiveState: "deactivating" },
+      "active_state_deactivating",
+    ],
+    ["failed state", { ActiveState: "failed" }, "active_state_failed"],
+    ["unknown state", { ActiveState: "foreign" }, "active_state_other"],
+    ["empty control group", { ControlGroup: "" }, "control_group"],
+    ["missing pre-start barrier", { ExecStartPre: "" }, "prestart_barrier"],
+  ])(
+    "does not release a synchronous payload with %s",
+    async (_, foreign, reason) => {
+      const harness = processManagerHarness(
+        { code: 0, stderr: "", stdout: "untrusted" },
+        { foreign },
+      );
+
+      await expect(
+        harness.manager.execute("/usr/bin/hq", ["worker", "list"], "hq-cli-1"),
+      ).rejects.toThrow(`bounded_host_process_${reason}_unproven`);
+      expect(harness.events).not.toContain("release");
+    },
+  );
+
   it("forwards the exact pressure runtime through launch and observation", async () => {
     const harness = processManagerHarness(
       { code: 0, stderr: "", stdout: "" },
@@ -256,6 +461,38 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
       invocationId: process.invocationId,
       runtimeMaxSec: 75,
       unit: process.unit,
+    });
+  });
+
+  it("waits for a restarted long-lived unit to leave its collected inactive state", async () => {
+    const harness = processManagerHarness(
+      { code: 0, stderr: "", stdout: "" },
+      (observation) =>
+        observation === 0
+          ? {
+              foreign: {
+                ActiveState: "inactive",
+                ControlGroup: "",
+              },
+            }
+          : {},
+    );
+
+    const process = await harness.manager.start(
+      "/usr/bin/hq",
+      ["--server-dir", `${workloadRoot}/hq-server`, "server", "start"],
+      "hq-server",
+      { runtimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC },
+    );
+
+    expect(harness.observedUnitProperties).toHaveLength(2);
+    expect(harness.observedUnitProperties[0]).toContain(
+      "ActiveState=inactive\n",
+    );
+    expect(harness.observedUnitProperties[1]).toContain("ActiveState=active\n");
+    expect(process).toMatchObject({
+      controlGroup: expect.stringMatching(/^\//u),
+      runtimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
     });
   });
 
@@ -536,11 +773,15 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
     "preserves %s results only after durable observation",
     async (_, expected) => {
       const harness = processManagerHarness(expected);
+      const observedExpected =
+        expected.code !== 0 && expected.code !== null
+          ? { ...expected, systemdResult: "exit-code" }
+          : expected;
       await expect(
         harness.manager.execute("/usr/bin/hq", ["job", "list"], "hq-cli-1", {
           limits: { maxOutputBytes: 1024, timeoutMs: 2_000 },
         }),
-      ).resolves.toEqual(expected);
+      ).resolves.toEqual(observedExpected);
       expect(harness.events).toEqual([
         "prepare",
         "admit",
@@ -556,15 +797,17 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
       expect(harness.runner.start).toHaveBeenCalledWith(
         "/usr/bin/systemd-run",
         expect.arrayContaining([
-          "--collect",
           "--wait",
           "--pipe",
           expect.stringMatching(
-            /^--property=ExecStopPost=\/usr\/bin\/node .*systemd-observation-window\.mjs .*\.observed-hq-cli-1 4000$/u,
+            /^--property=ExecStartPre=\/usr\/bin\/node .*systemd-observation-window\.mjs .*\.observed-hq-cli-1 30000$/u,
           ),
+          "--property=RuntimeMaxSec=2s",
+          "--property=TimeoutStopSec=12s",
         ]),
-        { maxOutputBytes: 1024, timeoutMs: 2_000 },
+        { maxOutputBytes: 1024, timeoutMs: 49_000 },
       );
+      expect(harness.runner.start.mock.calls[0][1]).not.toContain("--collect");
       expect(harness.runner.start.mock.calls[0][1]).not.toContain("/bin/sh");
     },
   );

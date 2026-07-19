@@ -25,7 +25,7 @@ const plan = await source("docs/workload-funnel-architecture-plan.md");
 const planDigest = createHash("sha256").update(plan).digest("hex");
 if (
   planDigest !==
-  "63d0945eedc7884f4419597cb4e19c2c541b103f0458c011d557b24e4f1bccbf"
+  "73dffc99721b929e1e2b109d62f38263f433adb9534bb5fa545978a8c851ccdf"
 )
   failures.push("architecture plan differs from the checked Phase 8 baseline");
 

@@ -275,13 +275,19 @@ for (const path of productionFiles) {
     }
   }
   for (const specifier of importedSpecifiers(source)) {
+    const approvedPostgresDriver =
+      sourceNode === "store-postgres/workload-persistence" &&
+      specifier === "pg";
     const declaredHyperQueueAdapterImport =
       specifier.startsWith("@workload-funnel/scheduler-hyperqueue/") ||
       specifier.startsWith("@workload-funnel/scheduler-mutation-gateway/");
     if (
       !declaredHyperQueueAdapterImport &&
+      !approvedPostgresDriver &&
       (specifier === "pg" ||
         specifier.startsWith("pg/") ||
+        specifier === "postgres" ||
+        specifier.startsWith("postgres/") ||
         forbiddenIntegrationImports.some((forbidden) =>
           specifier.includes(forbidden),
         ))

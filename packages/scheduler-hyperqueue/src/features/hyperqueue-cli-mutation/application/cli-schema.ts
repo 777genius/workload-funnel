@@ -7,6 +7,7 @@ import type {
   AuthorizedHyperQueueMutation,
   HyperQueueMutation,
 } from "@workload-funnel/scheduler-hyperqueue/mutation-gateway-authority";
+import { validateCanonicalHyperQueueOperationJobName } from "@workload-funnel/scheduler-hyperqueue/mutation-gateway-authority";
 
 export interface HyperQueueCliLimits {
   readonly maxOutputBytes: number;
@@ -117,15 +118,15 @@ function encodedShim(value: string): string {
 
 function submitArguments(
   mutation: Extract<HyperQueueMutation, { readonly kind: "submit" }>,
+  canonicalJobName: string,
   shimExecutable: string,
 ): readonly string[] {
   const args = [
     "submit",
     "--output-mode",
     "json",
-    "--no-progress",
     "--name",
-    mutation.jobName,
+    canonicalJobName,
     "--max-fails",
     "0",
     "--cpus",
@@ -164,6 +165,14 @@ function cancelArguments(
   ]);
 }
 
+function authorizedSubmitJobName(
+  authorized: AuthorizedHyperQueueMutation,
+): string {
+  if (authorized.canonicalJobName === undefined)
+    throw new Error("hyperqueue_operation_job_name_missing");
+  return authorized.canonicalJobName;
+}
+
 export class ExactVersionHyperQueueCliMutation {
   #verified = false;
 
@@ -200,7 +209,7 @@ export class ExactVersionHyperQueueCliMutation {
     if (!/^[a-f0-9]{64}$/u.test(this.config.expectedBinarySha256))
       throw new Error("hyperqueue_binary_checksum_invalid");
     await this.config.executor.verifyRelease(
-      `hq ${this.config.exactVersion}`,
+      `hyperqueue v${this.config.exactVersion}`,
       this.config.expectedBinarySha256,
       this.config.limits,
     );
@@ -218,9 +227,27 @@ export class ExactVersionHyperQueueCliMutation {
     )
       throw new Error("hyperqueue_authorized_fence_mismatch");
     const mutation = authorized.request.payload;
+    if (mutation.kind === "submit") {
+      if (authorized.canonicalJobName === undefined)
+        throw new Error("hyperqueue_operation_job_name_missing");
+      validateCanonicalHyperQueueOperationJobName(
+        {
+          mappingFingerprint: mutation.mappingFingerprint,
+          mutationFenceFingerprint: authorized.request.mutationFenceFingerprint,
+          operationId: authorized.request.operationId,
+          requestFingerprint: authorized.requestFingerprint,
+          schedulerInstanceId: authorized.request.scope.schedulerInstanceId,
+        },
+        authorized.canonicalJobName,
+      );
+    }
     const args =
       mutation.kind === "submit"
-        ? submitArguments(mutation, this.config.shimExecutable)
+        ? submitArguments(
+            mutation,
+            authorizedSubmitJobName(authorized),
+            this.config.shimExecutable,
+          )
         : cancelArguments(mutation);
     const result = await this.config.executor.executeMutation(
       args,

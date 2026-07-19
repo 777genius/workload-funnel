@@ -1,5 +1,6 @@
 import { postgresContainerArguments } from "./docker-plan.mjs";
 import { createOwnedDirectory } from "./owned-directory.mjs";
+import { runPostgresLifecycleAdapterProbe } from "./postgres-adapter-probe.mjs";
 import { psqlArguments, runPostgresFixtureProbe } from "./postgres-probe.mjs";
 import { gateSecret, writeSecretFile } from "./secret-files.mjs";
 
@@ -126,7 +127,9 @@ export async function runPostgresCompatibilityStage({
     runner,
     wait,
   });
+  const adapterEvidence = await runPostgresLifecycleAdapterProbe(connection);
   return Object.freeze({
+    adapterEvidence,
     connection,
     evidence: Object.freeze({
       ...evidence,

@@ -13,6 +13,7 @@ import { arch, release } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import {
+  AZURITE_FIXTURE_IMAGE,
   ARCHITECTURE_PLAN_SHA256,
   DISPOSABLE_HOST_ATTESTATION,
   GATE_SANDBOX_PARENT,
@@ -20,6 +21,7 @@ import {
   OWNED_NAME_PATTERN,
   POSTGRES_FIXTURE_IMAGE,
   REVIEW_MANIFEST_SCHEMA,
+  RUNTIME_MODULE_LINK_REQUIREMENTS,
 } from "./constants.mjs";
 import {
   inspectCanonicalExecutable,
@@ -68,6 +70,7 @@ export function parseManualGateArguments(argv, environment) {
   const allowed = new Set([
     "--attestation",
     "--aws-executable",
+    "--azurite-image",
     "--docker-executable",
     "--evidence-path",
     "--hq-archive",
@@ -80,6 +83,7 @@ export function parseManualGateArguments(argv, environment) {
     "--node-executable",
     "--postgres-image",
     "--psql-executable",
+    "--project-quota-helper",
     "--review-manifest",
     "--review-manifest-sha256",
     "--run-id",
@@ -135,6 +139,7 @@ export function parseManualGateArguments(argv, environment) {
   return Object.freeze({
     attestation,
     awsExecutable: absoluteOption("--aws-executable"),
+    azuriteImage: required(values, "--azurite-image"),
     dockerExecutable: absoluteOption("--docker-executable"),
     evidencePath,
     hqArchive: absoluteOption("--hq-archive"),
@@ -147,6 +152,7 @@ export function parseManualGateArguments(argv, environment) {
     operation,
     postgresImage: required(values, "--postgres-image"),
     psqlExecutable: absoluteOption("--psql-executable"),
+    projectQuotaHelper: absoluteOption("--project-quota-helper"),
     reviewManifest: absoluteOption("--review-manifest"),
     reviewManifestSha256,
     runId,
@@ -158,6 +164,8 @@ export function parseManualGateArguments(argv, environment) {
 }
 
 export function validatePinnedImages(config) {
+  if (config.azuriteImage !== AZURITE_FIXTURE_IMAGE)
+    throw new GateAdmissionError("azurite_fixture_image_not_digest_pinned");
   if (config.postgresImage !== POSTGRES_FIXTURE_IMAGE)
     throw new GateAdmissionError("postgres_image_not_18_4_digest_pinned");
   if (config.objectImage !== OBJECT_FIXTURE_IMAGE)
@@ -300,20 +308,20 @@ async function exactRepositoryInventory(root = repositoryRoot) {
 }
 
 async function verifyRuntimeModuleLinks(reviewedPathSet) {
-  const requirements = Object.freeze([
+  const requirements = RUNTIME_MODULE_LINK_REQUIREMENTS.map((requirement) =>
     Object.freeze({
-      link: `${repositoryRoot}/node_modules/@workload-funnel/executor-systemd`,
-      target: `${repositoryRoot}/packages/executor-systemd`,
+      link: `${repositoryRoot}/${requirement.link}`,
+      target: `${repositoryRoot}/${requirement.target}`,
     }),
-    Object.freeze({
-      link: `${repositoryRoot}/packages/executor-systemd/node_modules/@workload-funnel/node-execution`,
-      target: `${repositoryRoot}/packages/node-execution`,
-    }),
-  ]);
+  );
   const entrypoints = Object.freeze([
+    `${repositoryRoot}/apps/scheduler-mutation-gateway/dist/features/composition/index.js`,
+    `${repositoryRoot}/apps/scheduler-mutation-gateway/dist/features/hyperqueue-mutation-boundary/index.js`,
     `${repositoryRoot}/packages/executor-systemd/dist/features/capability-discovery/index.js`,
     `${repositoryRoot}/packages/executor-systemd/dist/features/cgroup-resource-mapping/index.js`,
     `${repositoryRoot}/packages/node-execution/dist/features/resource-enforcement/index.js`,
+    `${repositoryRoot}/packages/scheduler-hyperqueue/dist/features/mutation-gateway-authority/index.js`,
+    `${repositoryRoot}/packages/scheduler-hyperqueue/dist/features/operation-lookup/index.js`,
   ]);
   if (entrypoints.some((path) => !reviewedPathSet.has(path)))
     throw new GateAdmissionError("reviewed_runtime_module_missing");
@@ -423,6 +431,7 @@ export async function verifyReviewedHostInputs(config) {
     config.idExecutable,
     config.nodeExecutable,
     config.psqlExecutable,
+    config.projectQuotaHelper,
     config.systemctlExecutable,
     config.systemdAnalyzeExecutable,
     config.systemdRunExecutable,
@@ -466,10 +475,11 @@ export async function verifyReviewedHostInputs(config) {
     throw new GateAdmissionError("reviewed_workload_executable_not_nonroot");
   const images = exactObject(
     manifest.images,
-    ["objectClient", "objectFixture", "postgresFixture"],
+    ["azuriteFixture", "objectClient", "objectFixture", "postgresFixture"],
     "review_manifest_image_inventory_invalid",
   );
   if (
+    images.azuriteFixture !== config.azuriteImage ||
     images.postgresFixture !== config.postgresImage ||
     images.objectFixture !== config.objectImage ||
     images.objectClient !== config.objectClientImage

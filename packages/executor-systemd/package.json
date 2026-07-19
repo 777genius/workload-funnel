@@ -36,6 +36,6 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json && node ../../tooling/build-linux-project-quota-helper.mjs"
   }
 }

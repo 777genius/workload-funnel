@@ -3,6 +3,7 @@ import type { ExternalDispatchCapabilities } from "@workload-funnel/workload-con
 export const HYPERQUEUE_RESEARCH_BASELINE = "0.26.2" as const;
 
 export interface HyperQueueProductionGateEvidence {
+  readonly ambiguousLiveSubmitCancellationProven: boolean;
   readonly approvedProductionChecksum: string | null;
   readonly approvedProductionVersion: string | null;
   readonly ambiguousSubmitLookupProven: boolean;
@@ -10,15 +11,19 @@ export interface HyperQueueProductionGateEvidence {
   readonly credentialCustodyProven: boolean;
   readonly durableObservationSequenceProven: boolean;
   readonly fallbackExecutionTested: boolean;
+  readonly mappingCreateOnlyProven: boolean;
   readonly neverRestartProven: boolean;
+  readonly operationNameContract: string | null;
   readonly productionPolicyProfileApproved: boolean;
   readonly replayClassMappingApproved: boolean;
   readonly securityReviewApproved: boolean;
   readonly upstreamRiskDecisionApproved: boolean;
+  readonly unresolvedOperationRetentionProven: boolean;
 }
 
 export const CHECKED_HYPERQUEUE_PRODUCTION_GATE: HyperQueueProductionGateEvidence =
   Object.freeze({
+    ambiguousLiveSubmitCancellationProven: false,
     approvedProductionChecksum: null,
     approvedProductionVersion: null,
     ambiguousSubmitLookupProven: false,
@@ -26,11 +31,14 @@ export const CHECKED_HYPERQUEUE_PRODUCTION_GATE: HyperQueueProductionGateEvidenc
     credentialCustodyProven: false,
     durableObservationSequenceProven: true,
     fallbackExecutionTested: false,
+    mappingCreateOnlyProven: false,
     neverRestartProven: false,
+    operationNameContract: "workload-funnel.hq-operation-name.v1",
     productionPolicyProfileApproved: false,
     replayClassMappingApproved: false,
     securityReviewApproved: false,
     upstreamRiskDecisionApproved: false,
+    unresolvedOperationRetentionProven: false,
   });
 
 export function discoverHyperQueueCapabilities(): ExternalDispatchCapabilities {
@@ -59,7 +67,8 @@ export function discoverHyperQueueCapabilities(): ExternalDispatchCapabilities {
     productionEnabled: false,
     refusalReasons: Object.freeze([
       "production_pin_unapproved",
-      "ambiguous_submit_lookup_unsupported",
+      "ambiguous_submit_disposable_probe_missing",
+      "ambiguous_live_submit_cancellation_unproven",
       "worker_loss_never_restart_unproven",
       "security_review_pending",
       "upstream_risk_decision_pending",

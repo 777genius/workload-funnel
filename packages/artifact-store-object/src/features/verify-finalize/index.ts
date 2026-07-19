@@ -21,15 +21,30 @@ export interface ObjectVerifyFinalizeConfig {
   readonly nowMs?: () => number;
 }
 
-function keyFor(identity: string, path: string): string {
-  const segments = path.split("/");
+function objectArtifactKey(identity: string, path: string): string {
+  const identitySegments = identity.split("/");
+  const pathSegments = path.split("/");
   if (
-    segments.some(
+    identity.startsWith("/") ||
+    identity.endsWith("/") ||
+    identity.includes("\\") ||
+    identity.includes("\u0000") ||
+    identity !== identity.normalize("NFC") ||
+    identitySegments.some(
+      (segment) => segment === "" || segment === "." || segment === "..",
+    ) ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.includes("\u0000") ||
+    path !== path.normalize("NFC") ||
+    pathSegments.some(
       (segment) => segment === "" || segment === "." || segment === "..",
     )
   )
     throw new Error("unsafe_object_artifact_path");
-  return `${identity}/${segments.map((segment) => Buffer.from(segment).toString("base64url")).join("/")}`;
+  return `${identity}/${pathSegments
+    .map((segment) => Buffer.from(segment).toString("base64url"))
+    .join("/")}`;
 }
 
 function assertFence(fence: MutationFence, manifestId: string): void {
@@ -70,7 +85,7 @@ export function createProvider(
         throw new Error("object_verification_scope_mismatch");
       for (const entry of command.expectedEntries) {
         const metadata = await config.metadata.head(
-          keyFor(command.immutableStagingIdentity, entry.path),
+          objectArtifactKey(command.immutableStagingIdentity, entry.path),
         );
         if (
           metadata?.checksum !== entry.checksum ||
@@ -91,3 +106,17 @@ export function createProvider(
     },
   });
 }
+
+export {
+  AzureBlobMetadataReaderError,
+  createAzureBlobExactCreateOutcomeVerifier,
+  createAzureBlobExactMetadataReader,
+  createAzureBlobPrivateFixtureExactCreateOutcomeVerifier,
+  createAzureBlobPrivateFixtureExactMetadataReader,
+  type AzureBlobExactCreateOutcomeVerifier,
+  type AzureBlobMetadataReaderConfig,
+  type AzureBlobMetadataSdkPort,
+  type AzureBlobPrivateFixtureMetadataReaderConfig,
+  type AzureBlobReadCredential,
+  type AzureBlobReadCredentialProvider,
+} from "./azure-blob-metadata-reader.js";

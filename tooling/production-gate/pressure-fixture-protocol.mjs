@@ -2,6 +2,8 @@ export const PRESSURE_FIXTURE_READY_SCHEMA =
   "workload-funnel.production-gate.pressure-ready.v1";
 
 export const PRESSURE_FIXTURE_CPU_WORKER_COUNT = 2;
+export const PRESSURE_FIXTURE_DISK_TARGET_BYTES = 40 * 1024 * 1024;
+export const PRESSURE_FIXTURE_IO_TARGET_BYTES = 8 * 1024 * 1024;
 
 export const PRESSURE_FIXTURE_MODES = Object.freeze([
   "cpu",
@@ -26,9 +28,11 @@ const PRIMED_STATES = Object.freeze({
   cpu: Object.freeze({
     workersOnline: PRESSURE_FIXTURE_CPU_WORKER_COUNT,
   }),
-  disk: Object.freeze({ writtenBytes: 48 * 1024 * 1024 }),
+  disk: Object.freeze({
+    writtenBytes: PRESSURE_FIXTURE_DISK_TARGET_BYTES,
+  }),
   inodes: Object.freeze({ createdFiles: 3_200 }),
-  io: Object.freeze({ syncedBytes: 8 * 1024 * 1024 }),
+  io: Object.freeze({ syncedBytes: PRESSURE_FIXTURE_IO_TARGET_BYTES }),
   memory: Object.freeze({
     retainedBytes: PRESSURE_FIXTURE_MEMORY_TARGET.primedRetainedBytes,
   }),
@@ -50,6 +54,13 @@ export async function runMemoryPressureFixture({ allocateChunk, markReady }) {
     index += 1
   )
     await allocateChunk(index, "post-ready");
+}
+
+export async function primeIoPressureFixture({ markReady, writeCycle }) {
+  if (typeof markReady !== "function" || typeof writeCycle !== "function")
+    throw new Error("pressure_io_fixture_input_invalid");
+  await writeCycle();
+  await markReady();
 }
 
 function exactObject(value, expected) {

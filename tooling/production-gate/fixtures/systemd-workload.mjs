@@ -1,7 +1,12 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers";
+
+import {
+  SYSTEMD_IO_PROBE_MAX_BYTES,
+  SYSTEMD_MEMORY_PROBE_BLOCK_BYTES,
+} from "../systemd-contract.mjs";
 
 const [mode, root] = process.argv.slice(2);
 if (
@@ -15,8 +20,7 @@ await mkdir(root, { recursive: true });
 if (mode === "memory") {
   const blocks = [];
   for (;;) {
-    blocks.push(Buffer.alloc(16 * 1024 * 1024, 1));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    blocks.push(Buffer.alloc(SYSTEMD_MEMORY_PROBE_BLOCK_BYTES, 1));
   }
 }
 
@@ -39,7 +43,11 @@ if (mode === "pids") {
 
 if (mode === "io") {
   const block = Buffer.alloc(1024 * 1024, 1);
-  for (let index = 0; index < 8; index += 1)
+  for (
+    let offset = 0;
+    offset < SYSTEMD_IO_PROBE_MAX_BYTES;
+    offset += block.length
+  )
     await appendFile(`${root}/io-load.bin`, block);
   await new Promise((resolve) => setTimeout(resolve, 60_000));
 }
@@ -56,9 +64,12 @@ const descendants = [
     stdio: "ignore",
   }),
 ];
+const descendantManifest = `${root}/descendants.json`;
+const pendingDescendantManifest = `${descendantManifest}.${String(process.pid)}.tmp`;
 await writeFile(
-  `${root}/descendants.json`,
+  pendingDescendantManifest,
   `${JSON.stringify(descendants.map((child) => child.pid))}\n`,
   { mode: 0o600 },
 );
+await rename(pendingDescendantManifest, descendantManifest);
 await new Promise(() => undefined);

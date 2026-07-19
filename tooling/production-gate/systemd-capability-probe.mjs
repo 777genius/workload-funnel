@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { platform } from "node:os";
 
+import {
+  cleanupProjectQuotaRecord,
+  serializeProjectQuotaControl,
+  serializeProjectQuotaReceipt,
+} from "./project-quota-runtime.mjs";
+import { SYSTEMD_GATE_PROJECT_QUOTA_BYTES } from "./systemd-contract.mjs";
+
 const verifiedProperties = Object.freeze([
   "AmbientCapabilities",
   "CapabilityBoundingSet",
@@ -21,6 +28,7 @@ const verifiedProperties = Object.freeze([
   "MemorySwapMax",
   "NoNewPrivileges",
   "PrivateDevices",
+  "PrivateMounts",
   "PrivateNetwork",
   "PrivateTmp",
   "ProtectControlGroups",
@@ -70,6 +78,7 @@ function verificationUnit(config) {
     "MemorySwapMax=0",
     "NoNewPrivileges=yes",
     "PrivateDevices=yes",
+    "PrivateMounts=yes",
     "PrivateNetwork=yes",
     "PrivateTmp=yes",
     "ProcSubset=pid",
@@ -100,7 +109,12 @@ function verificationUnit(config) {
 
 export async function probeRealSystemdCapabilities(
   config,
-  { hostPlatform = platform, read = readFile, write = writeFile } = {},
+  {
+    hostPlatform = platform,
+    projectQuotaApplication,
+    read = readFile,
+    write = writeFile,
+  } = {},
 ) {
   const versionResult = await config.runner.run(
     config.systemctlExecutable,
@@ -152,6 +166,110 @@ export async function probeRealSystemdCapabilities(
   );
   if (verified.code !== 0 || verified.stderr.trim().length !== 0)
     throw new Error("systemd_required_property_unsupported");
+  let quotaCapability;
+  let quotaControl;
+  let serializedQuotaReceipt;
+  let verifyProjectQuota;
+  if (projectQuotaApplication === undefined) {
+    const quotaAdapter =
+      await import("@workload-funnel/executor-systemd/transient-unit-start");
+    const quotaMapping =
+      await import("@workload-funnel/executor-systemd/cgroup-resource-mapping");
+    const quotaConfig = Object.freeze({
+      expectedHelperMode: "production",
+      expectedHelperSha256: config.projectQuotaHelperSha256,
+      nativeHelperPath: config.projectQuotaHelper,
+    });
+    quotaCapability =
+      quotaAdapter.probeLinuxProjectQuotaCapability(quotaConfig);
+    const quotaFence = Object.freeze({
+      allocationId: config.runId,
+      attemptId: `${config.runId}:attempt`,
+      clusterIncarnation: `${config.runId}:cluster`,
+      clusterIncarnationVersion: 1,
+      desiredEffect: "process_start",
+      effectScopeKey: `allocation:${config.runId}:process-start`,
+      executionGeneration: `${config.runId}:generation-1`,
+      expectedDesiredVersion: 1,
+      issuedStartRevocationRevision: 0,
+      namespaceId: "workload-funnel-production-gate",
+      namespaceWriterEpoch: 1,
+      nodeBootEpoch: 1,
+      nodeId: `${config.runId}:node`,
+      operationGateRevision: 1,
+      ownerFence: 1,
+      requiredGate: "process_start",
+      schemaVersion: 1,
+      startFence: `${config.runId}:start-fence`,
+      supersessionKey: `allocation:${config.runId}:start`,
+    });
+    quotaControl = Object.freeze({
+      allocationId: config.runId,
+      inodeMaximum: 4_096n,
+      maximumBytes: BigInt(SYSTEMD_GATE_PROJECT_QUOTA_BYTES),
+      projectId: quotaMapping.deterministicProjectQuotaId(config.runId),
+      root: config.workloadRoot,
+    });
+    const cleanupExpected = Object.freeze({
+      adapterConfig: quotaConfig,
+      capability: quotaCapability,
+      control: serializeProjectQuotaControl(quotaControl),
+      fence: quotaFence,
+    });
+    const quotaCleanupRecord = await config.ledger.prepare(
+      "project-quota",
+      `${config.runId}-project-quota`,
+      cleanupExpected,
+    );
+    const quotaManager = new quotaAdapter.LinuxProjectQuotaManager(
+      quotaConfig,
+      quotaCapability,
+    );
+    const quotaReceipt = quotaManager.applyProjectQuota(
+      quotaControl,
+      quotaFence,
+    );
+    if (
+      !quotaManager.verifyProjectQuotaReceipt(
+        quotaControl,
+        quotaReceipt,
+        quotaFence,
+      )
+    )
+      throw new Error("project_quota_receipt_verification_failed");
+    serializedQuotaReceipt = serializeProjectQuotaReceipt(quotaReceipt);
+    await config.ledger.finalize(
+      quotaCleanupRecord,
+      { receipt: serializedQuotaReceipt },
+      () =>
+        cleanupProjectQuotaRecord({
+          expected: cleanupExpected,
+          observed: { receipt: serializedQuotaReceipt },
+        }),
+    );
+    verifyProjectQuota = () => {
+      if (
+        !quotaManager.verifyProjectQuotaReceipt(
+          quotaControl,
+          quotaReceipt,
+          quotaFence,
+        )
+      )
+        throw new Error("project_quota_receipt_verification_failed");
+    };
+  } else {
+    const applied = await projectQuotaApplication(config);
+    quotaCapability = applied?.capability;
+    quotaControl = applied?.control;
+    serializedQuotaReceipt = applied?.receipt;
+    if (
+      quotaCapability?.byteQuota !== true ||
+      quotaCapability.inodeQuota !== true ||
+      typeof serializedQuotaReceipt?.receiptDigest !== "string"
+    )
+      throw new Error("project_quota_capability_not_proven");
+    verifyProjectQuota = () => undefined;
+  }
   const { discoverSystemdCapabilities } =
     await import("@workload-funnel/executor-systemd/capability-discovery");
   const report = discoverSystemdCapabilities(
@@ -160,8 +278,8 @@ export async function probeRealSystemdCapabilities(
       cgroupV2Controllers: Object.freeze([...controllers]),
       linux: hostPlatform() === "linux",
       pinnedExecutionPaths: false,
-      projectQuotaBytes: false,
-      projectQuotaInodes: false,
+      projectQuotaBytes: quotaCapability.byteQuota,
+      projectQuotaInodes: quotaCapability.inodeQuota,
       source: "disposable_linux_host",
       storageHeadroomEnforcement: true,
       systemdProperties: verifiedProperties,
@@ -172,9 +290,15 @@ export async function probeRealSystemdCapabilities(
   return Object.freeze({
     evidence: Object.freeze({
       cgroupV2Controllers: Object.freeze([...controllers]),
-      nonMutatingVerification: true,
-      projectQuotaBytes: false,
-      projectQuotaInodes: false,
+      projectQuotaMutatingProbe: true,
+      systemdPropertyVerificationNonMutating: true,
+      projectQuota: Object.freeze({
+        capability: quotaCapability,
+        control: serializeProjectQuotaControl(quotaControl),
+        receipt: serializedQuotaReceipt,
+      }),
+      projectQuotaBytes: true,
+      projectQuotaInodes: true,
       propertyCount: verifiedProperties.length,
       systemdManagerVersion: managerVersion,
       systemdVersion,
@@ -183,5 +307,6 @@ export async function probeRealSystemdCapabilities(
         .digest("hex"),
     }),
     report,
+    verifyProjectQuota,
   });
 }

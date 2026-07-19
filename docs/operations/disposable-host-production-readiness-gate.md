@@ -25,7 +25,7 @@ The gate requires all of the following before its first host-side effect:
   the HyperQueue archive, excluding only VCS/session, dependency, coverage, and
   cache directories, with no reviewed-tree symlinks;
 - architecture-plan SHA-256
-  `63d0945eedc7884f4419597cb4e19c2c541b103f0458c011d557b24e4f1bccbf`;
+  `73dffc99721b929e1e2b109d62f38263f433adb9534bb5fa545978a8c851ccdf`;
 - canonical root-owned executable files and ancestor directories, no writable
   executable, exact mode and SHA-256, and identity revalidation before every
   spawn;
@@ -50,6 +50,7 @@ top-level fields:
     "bootIdSha256": "<64 lowercase hex>"
   },
   "images": {
+    "azuriteFixture": "<exact accepted reference>",
     "postgresFixture": "<exact accepted reference>",
     "objectFixture": "<exact accepted reference>",
     "objectClient": "<exact reviewed reference with sha256 digest>"
@@ -79,8 +80,12 @@ host mismatch refuses admission.
 - x86-64 architecture, unified cgroup v2, systemd 250 or newer, Docker, the AWS
   CLI, PostgreSQL 18 client, and `systemd-analyze`;
 - a pre-created `workload-funnel-synthetic` non-root user and group;
-- root-owned `/var/lib/workload-funnel/allocations` and
-  `/var/data/workload-funnel/sandboxes` directories;
+- root-owned search-only mode-`0711`
+  `/var/lib/workload-funnel/allocations` and private mode-`0700`
+  `/var/lib/workload-funnel/project-quota` directories on the same reviewed
+  XFS (`prjquota` or `pquota`) or ext4 (`prjquota`) project-quota filesystem;
+  each unguessable per-run allocation remains synthetic-owned mode-`0700`, and
+  `/var/data/workload-funnel/sandboxes` remains root-owned;
 - enough unused CPU, memory, IO, PID, byte, and inode headroom;
 - the reviewed HyperQueue 0.26.2 x64 archive with SHA-256
   `e15dae9113e1a307a97a66bfe90f74f78c6016239436b5d9f1e4efec480e84b5`;
@@ -114,6 +119,7 @@ pnpm production-gate:host -- \
   --evidence-path "$SANDBOX/evidence.json" \
   --docker-executable /usr/bin/docker \
   --psql-executable /usr/bin/psql \
+  --project-quota-helper /usr/libexec/workload-funnel/linux-project-quota \
   --aws-executable /usr/bin/aws \
   --id-executable /usr/bin/id \
   --node-executable /canonical/path/to/node \
@@ -123,6 +129,7 @@ pnpm production-gate:host -- \
   --io-device /dev/DISPOSABLE_DEVICE \
   --hq-archive /opt/wf-fixtures/hq-v0.26.2-linux-x64.tar.gz \
   --hq-binary /opt/wf-fixtures/hq \
+  --azurite-image 'mcr.microsoft.com/azure-storage/azurite:3.35.0@sha256:647c63a91102a9d8e8000aab803436e1fc85fbb285e7ce830a82ee5d6661cf37' \
   --postgres-image 'postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15' \
   --object-image 'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2' \
   --object-client-image "$REVIEWED_MINIO_CLIENT_IMAGE"
@@ -145,11 +152,17 @@ Docker uses an internal bridge with no host port publication, read-only
 filesystems, private IPC/UTS, init, no-new-privileges, all
 capabilities dropped, non-root users, exact platform, `--pull=never`, and
 fixed CPU, memory, swap, PID, file-size, file-descriptor, IO, command, and data
-budgets. Object data uses bounded tmpfs. A reviewed, read-only-mounted
-supervisor restarts only the MinIO server process, leaving the owned container
-and its data tmpfs alive; the gate requires a stable container/supervisor
+budgets. Object data uses bounded tmpfs. Reviewed, read-only-mounted supervisors
+restart only the MinIO or Azurite server process, leaving each owned container
+and its data tmpfs alive. The gate requires a stable container/supervisor
 boundary, a new server generation and PID, renewed readiness, unchanged
-confinement, and the same server checksum. PostgreSQL uses an exact-identity,
+confinement, and the same server checksum. Azurite's supervisor reads its
+generated fixture account key from a mode-0400 bind-mounted file and passes it
+only to the container-local server process environment; neither the key nor any
+SAS is written to Docker configuration, process arguments, or evidence. The
+fixture keeps server API-version validation enabled and pins the client request
+version. PostgreSQL uses an
+exact-identity,
 mode-0700 bind directory under the fixed sandbox so WAL recovery survives a
 forced server-process stop. Its image-declared `/var/lib/postgresql` parent
 remains an exact 64 MiB mode-0700 tmpfs around the nested durable data bind, and
@@ -190,8 +203,11 @@ Current repository closure is intentionally fail-closed:
 - the Postgres 18.4 fixture proves duplicate acceptance and synchronized
   pre-commit rollback plus post-commit persistence across `SIGKILL` of the
   container process boundary and PostgreSQL WAL recovery from durable
-  sandbox-owned storage, but no real asynchronous Postgres lifecycle adapter
-  exists;
+  sandbox-owned storage. The same disposable fixture runs the real
+  `pg@8.22.0` asynchronous lifecycle adapter through concurrent migration,
+  duplicate/conflicting acceptance, exact lookup, optimistic conflict,
+  rollback, pre-/post-commit connection loss, reopen, migration corruption,
+  pool exhaustion/timeout, abort, and credential-redaction probes;
 - the MinIO fixture preserves its checksum across an evidenced server-process
   restart inside the stable container/tmpfs boundary and proves network recovery
   plus disjoint upload, verify, and delete identities. The upload policy grants
@@ -200,16 +216,56 @@ Current repository closure is intentionally fail-closed:
   against the pinned MinIO KVM fixture found `s3:if-none-match`,
   `x-amz-content-sha256`, and `ExistingObjectTag` conditions unsupported for
   `PutObject`. An unconditional PUT of distinct bytes to the same key with the
-  same upload credential succeeds and changes the server checksum. The gate
-  therefore emits `object_provider_create_only_credential_unsupported`; MinIO
-  remains compatibility-only and is not an approved production provider. The
-  probe does not revoke or detach the upload policy after the first PUT;
-- HyperQueue uses restart-durable fsynced ordering and exact post-cancel
-  observation, but 0.26.2 lacks operation-ID lookup for ambiguous submit;
+  same upload credential succeeds and changes the server checksum. This is a
+  passing negative compatibility proof, not production-provider evidence.
+  MinIO remains compatibility-only and is not an approved production provider;
+- the Azure Blob production adapter uses exact-resource blob SAS credentials:
+  upload gets only `sp=c,sr=b`, verification gets a separate `sp=r,sr=b`
+  credential, direct upload is single-request, `If-None-Match: *` is
+  defense-in-depth, Content-MD5 is server-validated, and immutable
+  `wfsha256` metadata is reconciled before an ambiguous outcome is accepted as
+  idempotent. The pinned Azurite fixture proves that the create credential
+  cannot overwrite, read, list, delete, mutate metadata, stage blocks, or reach
+  another blob; stale and write-capable SAS policies fail before network IO.
+  It also proves exact state across a server-process restart in a stable
+  container/tmpfs boundary. Azurite exercises the official Azure API permission
+  contract but is explicitly not claimed as full Azure cloud parity;
+- HyperQueue 0.26.2 uses restart-durable fsynced gateway intent and create-only
+  mapping ordering, a gateway-derived bounded non-secret digest name over the
+  complete persisted submit intent, exact pinned job-list rows, and exact
+  post-cancel observation. The digest has fail-closed collision handling and is
+  not claimed mathematically injective. The gate performs one real submit,
+  deliberately loses its response only after the actual built
+  `HyperQueueMutationBoundary` submit runner returns. It restarts the built
+  `SchedulerMutationGatewayClient` composition on the same fsynced WAL/mapping
+  state, resolves and replays the durable receipt through the public gateway
+  API, restarts the unfinished job on the same server journal, proves the same
+  retained job, and only then cancels it and observes the exact terminal state.
+  This ordering matches HyperQueue 0.26.2, which does not restore canceled jobs.
+  The gate also proves the configured history ceiling, stable WAL on retry, and
+  exactly one submit. Its post-restart lookup evidence is
+  `retainedExactJobMatches=1`: exact retained name, job ID, count, and schema,
+  without claiming that lookup re-proves the later
+  canceled task state.
+  The response-loss path cannot be replaced by a standalone lookup probe.
+  Invalid output fails closed, zero is never absence, and no unresolved name is
+  eligible for pruning or forgetting. Gateway WAL v1 is intentionally
+  migration-blocked; only v2 carries this contract. The schema remains the
+  exact HyperQueue 0.26.2 evidence from upstream commit `dd15afd`. The repository
+  capability booleans stay false until that disposable evidence is reviewed.
+  Cancellation of an ambiguous live submit without one exact mapping remains
+  unproved and is a separate blocker.
+  The adapter does not claim native submit idempotency or exactly-once
+  execution. Broader HyperQueue production approval remains closed by the
+  separately reported pin, worker restart, process ownership, isolation,
+  security, fallback, and upstream-risk decisions;
 - the running systemd manager, cgroup controllers, and required unit properties
   are probed with read-only `systemctl` plus non-mutating `systemd-analyze
-verify`, but byte/inode project-quota application and pinned execution-path
-  capabilities remain absent; and
+verify`. The reviewed native helper then applies and reads back exact byte and
+  inode project quotas on only the gate-owned allocation, persists and reopens
+  its fsync-durable receipt, and registers exact reverse-order cleanup. A host
+  without supported XFS/ext4 project quotas remains `UNSUPPORTED`; pinned
+  execution-path capability remains absent; and
 - pressure evidence requires bounded CPU, memory, IO, disk-byte, and inode load,
   pause, protected cancel/status/health service responsiveness, hysteretic
   reopen, at least 10 seconds, at least 100 samples, and all p99 SLOs.

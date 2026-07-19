@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { URL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,7 @@ import {
 } from "./attestation.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
 import {
+  AZURITE_FIXTURE_IMAGE,
   DECLARED_COMPONENTS,
   DISPOSABLE_HOST_ATTESTATION,
   GATE_SANDBOX_PARENT,
@@ -19,6 +21,7 @@ import {
 } from "./constants.mjs";
 import {
   assertSafeDockerArguments,
+  azuriteContainerArguments,
   isolatedNetworkArguments,
   postgresContainerArguments,
 } from "./docker-plan.mjs";
@@ -67,7 +70,12 @@ import { evaluateMixedWorkloadSlo, percentile99 } from "./slo.mjs";
 import {
   exactSystemdPropertiesObserved,
   parseSystemctlShow,
+  runSystemdGateProbe,
+  SYSTEMD_MEMORY_PROBE_BLOCK_BYTES,
+  systemdMemoryProbeProperties,
+  systemctlShowArguments,
   systemdRunArguments,
+  waitForSystemdDescendantExit,
 } from "./systemd-contract.mjs";
 import { createSystemdSliceOwnership } from "./systemd-slice-ledger.mjs";
 
@@ -100,6 +108,8 @@ function argumentsFor(root) {
     DISPOSABLE_HOST_ATTESTATION,
     "--aws-executable",
     "/usr/bin/aws",
+    "--azurite-image",
+    AZURITE_FIXTURE_IMAGE,
     "--docker-executable",
     "/usr/bin/docker",
     "--evidence-path",
@@ -124,6 +134,8 @@ function argumentsFor(root) {
     POSTGRES_FIXTURE_IMAGE,
     "--psql-executable",
     "/usr/bin/psql",
+    "--project-quota-helper",
+    "/usr/libexec/workload-funnel/linux-project-quota",
     "--review-manifest",
     "/root/review-manifest.json",
     "--review-manifest-sha256",
@@ -194,6 +206,12 @@ describe("manual production gate admission", () => {
         objectImage: `minio/minio:latest@sha256:${digest}`,
       }),
     ).toThrow("object_fixture_image_not_digest_pinned");
+    expect(() =>
+      validatePinnedImages({
+        ...config,
+        azuriteImage: `azurite:latest@sha256:${digest}`,
+      }),
+    ).toThrow("azurite_fixture_image_not_digest_pinned");
   });
 
   it("admits only the fixed production sandbox parent and replacement operation", () => {
@@ -266,6 +284,34 @@ describe("bounded resource plans", () => {
     expect(() =>
       assertSafeDockerArguments(["run", "--name", `${runId};touch-pwned`]),
     ).toThrow("unsafe_docker_resource_name");
+  });
+
+  it("keeps the Azurite fixture key file-bound and the blob endpoint private", () => {
+    const args = azuriteContainerArguments({
+      accountKeyFile: `${GATE_SANDBOX_PARENT}/${runId}/azurite-account-key`,
+      entrypointFile: "/reviewed/azurite-entrypoint.sh",
+      image: AZURITE_FIXTURE_IMAGE,
+      ioDevice: "/dev/vda",
+      name: `${runId}-azure`,
+      network: `${runId}-network`,
+    });
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--pull=never",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--entrypoint",
+        "/bin/sh",
+        AZURITE_FIXTURE_IMAGE,
+        "/gate/azurite-entrypoint.sh",
+      ]),
+    );
+    expect(args.join("\n")).toContain(
+      "dst=/run/secrets/azurite-account-key,readonly",
+    );
+    expect(args.join("\n")).not.toContain("AZURITE_ACCOUNTS=");
+    expect(args).not.toContain("--publish");
   });
 
   it("tracks reverse cleanup and reports partial cleanup without widening scope", async () => {
@@ -771,6 +817,83 @@ describe("S3-compatible contract", () => {
 });
 
 describe("official HyperQueue 0.26.2 translation", () => {
+  it("cannot bypass the built gateway and WAL lifecycle with standalone lookup", async () => {
+    const [contract, probe, runbook, runner] = await Promise.all([
+      readFile(new URL("./hyperqueue-contract.mjs", import.meta.url), "utf8"),
+      readFile(
+        new URL("./fixtures/hyperqueue-gateway-probe.mjs", import.meta.url),
+        "utf8",
+      ),
+      readFile(
+        new URL(
+          "../../docs/operations/disposable-host-production-readiness-gate.md",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(new URL("./run.mjs", import.meta.url), "utf8"),
+    ]);
+    const submitRecovery = probe.slice(
+      probe.indexOf("async function submitAndRecover"),
+      probe.indexOf("async function retainedLookup"),
+    );
+    expect(contract).not.toContain("operationLookupModuleUrl");
+    expect(contract).not.toContain("gateway_lookup_restarted");
+    expect(probe).not.toContain("ExactVersionHyperQueueOperationLookup");
+    expect(runner).toContain("hyperQueueGatewayProbeScript");
+    expect(submitRecovery).toContain("createSchedulerMutationGateway");
+    expect(submitRecovery).toContain("startSchedulerMutationGateway");
+    expect(submitRecovery).toContain("afterCliCall()");
+    expect(submitRecovery).toContain("await initial.mutate(request)");
+    expect(submitRecovery).toContain("await restarted.mutate(request)");
+    expect(submitRecovery).not.toContain(
+      "new ExactVersionHyperQueueOperationLookup",
+    );
+    expect(probe).toContain("retainedExactJobMatches: retained.matches.length");
+    expect(contract).toContain(
+      "postRestartGatewayEvidence.retainedExactJobMatches",
+    );
+    expect(contract).toContain(
+      'submitResponse: "lost_after_cli_result_before_mapping_persist"',
+    );
+    expect(contract).toContain('"hq-server-restart"');
+    expect(contract).toContain('"--journal"');
+    expect(contract).toContain('"--journal-flush-period"');
+    expect(contract).toContain('"100ms"');
+    expect(contract).toContain("config.serverJournalPath");
+    expect(contract.match(/serverStartArguments/gu)).toHaveLength(3);
+    expect(runner).toContain(
+      "serverJournalPath = `${allocation.root}/hq-server.journal`",
+    );
+    expect(runner).toContain("serverJournalPath,");
+    expect(contract).toContain('"hq-worker-restart"');
+    expect(contract).toContain("cancelAfterJournalRestart: true");
+    const journalRestartShutdown = contract.slice(
+      contract.indexOf("parseOfficialJobInfo(info.stdout"),
+      contract.indexOf('"hq-server-restart"'),
+    );
+    expect(
+      journalRestartShutdown.indexOf("config.stopProcess(worker)"),
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      journalRestartShutdown.indexOf("config.stopProcess(worker)"),
+    ).toBeLessThan(
+      journalRestartShutdown.indexOf("config.stopProcess(server)"),
+    );
+    expect(
+      contract.indexOf('operation: "replay-after-server-restart"'),
+    ).toBeLessThan(contract.lastIndexOf("officialHyperQueueCancelArguments("));
+    const dishonestCanceledLabel = ["retained", "CanceledMatches"].join("");
+    const inaccurateResponseLabel = ["discarded", "without", "inspection"].join(
+      "_",
+    );
+    expect(`${contract}\n${probe}\n${runbook}`).not.toContain(
+      dishonestCanceledLabel,
+    );
+    expect(contract).not.toContain(inaccurateResponseLabel);
+    expect(runbook).toContain("`retainedExactJobMatches=1`");
+  });
+
   it("stops the exact worker before its server and never advances past an uncertain worker stop", async () => {
     const server = Object.freeze({ invocationId: "server", role: "hq-server" });
     const worker = Object.freeze({ invocationId: "worker", role: "hq-worker" });
@@ -783,6 +906,13 @@ describe("official HyperQueue 0.26.2 translation", () => {
       stopHyperQueueCompatibilityProcesses({ server, stopProcess, worker }),
     ).resolves.toBeUndefined();
     expect(order).toEqual([worker, server]);
+    await expect(
+      stopHyperQueueCompatibilityProcesses({
+        server: undefined,
+        stopProcess,
+        worker: undefined,
+      }),
+    ).resolves.toBeUndefined();
 
     const uncertainStop = vi.fn((process) => {
       if (process === worker)
@@ -873,6 +1003,7 @@ describe("systemd and SLO contracts", () => {
     MemorySwapMax: 0n,
     NoNewPrivileges: true,
     PrivateDevices: true,
+    PrivateMounts: true,
     PrivateNetwork: true,
     PrivateTmp: true,
     ProtectControlGroups: true,
@@ -899,13 +1030,65 @@ describe("systemd and SLO contracts", () => {
     expect(args).toEqual(
       expect.arrayContaining([
         "--property=KillMode=control-group",
+        "--property=PrivateMounts=yes",
+        "--property=ProtectProc=invisible",
         "--property=RuntimeMaxSec=5000000us",
         "--property=MemorySwapMax=0",
+        "--property=CPUQuota=50%",
         "--property=SystemCallFilter=@system-service",
         "--property=SystemCallFilter=~@mount @privileged @resources",
         "--",
         "/usr/bin/node",
       ]),
+    );
+    expect(
+      args.some((argument) =>
+        argument.startsWith("--property=CPUQuotaPerSecUSec="),
+      ),
+    ).toBe(false);
+    expect(args).not.toContain("--collect");
+    const memoryProperties = systemdMemoryProbeProperties(properties);
+    expect(memoryProperties).toMatchObject({
+      MemoryHigh: properties.MemoryMax,
+      MemoryMax: properties.MemoryMax,
+    });
+    expect(memoryProperties).not.toBe(properties);
+    expect(SYSTEMD_MEMORY_PROBE_BLOCK_BYTES).toBe(1024 * 1024);
+    expect(() =>
+      systemdMemoryProbeProperties({ ...properties, MemoryMax: 0n }),
+    ).toThrow("systemd_memory_max_invalid");
+    for (const [quota, assignment] of [
+      [100n, "--property=CPUQuota=0.01%"],
+      [1_500_000n, "--property=CPUQuota=150%"],
+    ]) {
+      expect(
+        systemdRunArguments({
+          description: `WorkloadFunnel production gate ${runId} quota`,
+          executable: "/usr/bin/node",
+          ioDevice: "/dev/vda",
+          properties: { ...properties, CPUQuotaPerSecUSec: quota },
+          slice: `${runId}.slice`,
+          unit: `${runId}-quota.service`,
+        }),
+      ).toContain(assignment);
+    }
+    for (const quota of [0n, 1n, 500_001n])
+      expect(() =>
+        systemdRunArguments({
+          description: `WorkloadFunnel production gate ${runId} quota`,
+          executable: "/usr/bin/node",
+          ioDevice: "/dev/vda",
+          properties: { ...properties, CPUQuotaPerSecUSec: quota },
+          slice: `${runId}.slice`,
+          unit: `${runId}-quota.service`,
+        }),
+      ).toThrow(
+        quota === 0n
+          ? "systemd_cpu_quota_invalid"
+          : "systemd_cpu_quota_precision_unsupported",
+      );
+    expect(systemctlShowArguments(`${runId}-tree.service`)).toEqual(
+      expect.arrayContaining([expect.stringContaining("CPUQuotaPerSecUSec")]),
     );
     expect(args).not.toContain(
       "--property=SystemCallFilter=@system-service ~@mount @privileged @resources",
@@ -928,6 +1111,19 @@ describe("systemd and SLO contracts", () => {
         unit: `${runId}-legacy-filter.service`,
       }),
     ).toThrow("systemd_gate_mapping_relaxed");
+    expect(() =>
+      systemdRunArguments({
+        description: `WorkloadFunnel production gate ${runId} shared-mounts`,
+        executable: "/usr/bin/node",
+        ioDevice: "/dev/vda",
+        properties: {
+          ...properties,
+          PrivateMounts: false,
+        },
+        slice: `${runId}.slice`,
+        unit: `${runId}-shared-mounts.service`,
+      }),
+    ).toThrow("systemd_gate_mapping_relaxed");
     expect(args.join(" ")).not.toContain("sh -c");
     expect(() =>
       systemdRunArguments({
@@ -940,7 +1136,7 @@ describe("systemd and SLO contracts", () => {
       }),
     ).toThrow("unsafe_systemd_gate_invocation");
     const shown = parseSystemctlShow(
-      `ActiveState=active\nAmbientCapabilities=\nCapabilityBoundingSet=\nControlGroup=/wf.slice/test\nDescription=WorkloadFunnel production gate ${runId} tree\nEnvironment=HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC\nInvocationID=${"c".repeat(32)}\nKillMode=control-group\nLockPersonality=yes\nNoNewPrivileges=yes\nProtectSystem=strict\nSlice=${runId}.slice\nDevicePolicy=closed\nPrivateDevices=yes\nPrivateNetwork=yes\nPrivateTmp=yes\nProcSubset=pid\nProtectClock=yes\nProtectControlGroups=yes\nProtectHome=yes\nProtectHostname=yes\nProtectKernelLogs=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectProc=invisible\nRestrictAddressFamilies=AF_UNIX\nRestrictNamespaces=yes\nRestrictRealtime=yes\nRestrictSUIDSGID=yes\nSystemCallArchitectures=native\nUMask=0077`,
+      `ActiveState=active\nAmbientCapabilities=\nCapabilityBoundingSet=\nControlGroup=/wf.slice/test\nDescription=WorkloadFunnel production gate ${runId} tree\nEnvironment=HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC\nInvocationID=${"c".repeat(32)}\nKillMode=control-group\nLockPersonality=yes\nNoNewPrivileges=yes\nProtectSystem=strict\nSlice=${runId}.slice\nDevicePolicy=closed\nPrivateDevices=yes\nPrivateMounts=yes\nPrivateNetwork=yes\nPrivateTmp=yes\nProcSubset=pid\nProtectClock=yes\nProtectControlGroups=yes\nProtectHome=yes\nProtectHostname=yes\nProtectKernelLogs=yes\nProtectKernelModules=yes\nProtectKernelTunables=yes\nProtectProc=invisible\nRestrictAddressFamilies=AF_UNIX\nRestrictNamespaces=yes\nRestrictRealtime=yes\nRestrictSUIDSGID=yes\nSystemCallArchitectures=native\nUMask=0077`,
     );
     expect(
       exactSystemdPropertiesObserved(shown, {
@@ -948,6 +1144,41 @@ describe("systemd and SLO contracts", () => {
         slice: `${runId}.slice`,
       }),
     ).toBe(true);
+  });
+
+  it("waits for transient descendant process entries after a cgroup stop", async () => {
+    let now = 0;
+    let probes = 0;
+    const config = {
+      clock: () => now,
+      pidExists: () => {
+        probes += 1;
+        return probes < 3;
+      },
+      wait: async (milliseconds) => {
+        now += milliseconds;
+      },
+    };
+
+    await expect(waitForSystemdDescendantExit(config, [41])).resolves.toBe(
+      true,
+    );
+    expect(probes).toBe(3);
+
+    now = 0;
+    await expect(
+      waitForSystemdDescendantExit(
+        { ...config, pidExists: () => true },
+        [42],
+        200,
+      ),
+    ).rejects.toThrow("systemd_descendant_survived_control_group_stop");
+  });
+
+  it("fails closed when the systemd slice ownership dependency is missing", async () => {
+    await expect(runSystemdGateProbe({})).rejects.toThrow(
+      "systemd_gate_slice_ownership_missing",
+    );
   });
 
   it("computes bounded p99 and rejects failed protected control", () => {

@@ -22,7 +22,7 @@
     "generate": "node tooling/architecture/generate-composition.mjs",
     "lint": "pnpm lint:code && pnpm lint:docs",
     "lint:code": "eslint . --max-warnings=0",
-    "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#.pnpm-store\"",
+    "lint:docs": "markdownlint-cli2 \"**/*.md\" \"#**/node_modules/**\" \"#**/.pnpm-store/**\"",
     "production-gate:host": "node tooling/production-gate/run.mjs",
     "test": "vitest run",
     "test:e2e": "vitest run tooling/e2e/full-synthetic-lifecycle.test.ts",
@@ -31,10 +31,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@workload-funnel/artifact-store-object": "workspace:*",
     "@workload-funnel/bridge-subscription-runtime": "workspace:*",
     "@workload-funnel/kernel": "workspace:*"
   },
   "devDependencies": {
+    "@azure/storage-blob": "12.33.0",
     "@changesets/cli": "2.29.8",
     "@eslint/js": "9.39.4",
     "@types/node": "24.13.3",

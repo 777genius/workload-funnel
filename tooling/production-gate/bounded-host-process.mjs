@@ -2,7 +2,17 @@ import { rm, writeFile } from "node:fs/promises";
 import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 
-const OBSERVATION_WINDOW_TIMEOUT_MS = 4_000;
+import { HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC } from "./constants.mjs";
+import { SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS } from "./systemd-observation-window-contract.mjs";
+
+const OBSERVATION_TIMEOUT_STOP_SEC = 12;
+const EXECUTION_WRAPPER_BUDGET_MS =
+  SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS +
+  OBSERVATION_TIMEOUT_STOP_SEC * 1_000 +
+  5_000;
+const MAX_EXECUTION_PAYLOAD_TIMEOUT_MS = 105_000;
+const START_OBSERVATION_TIMEOUT_MS = 2_000;
+const START_OBSERVATION_RETRY_MS = 10;
 const DEFAULT_RUNTIME_MAX_SEC = 30;
 const PRESSURE_RUNTIME_MAX_SEC_RANGE = Object.freeze({
   maximum: 90,
@@ -26,6 +36,22 @@ const PRESSURE_ROLES = new Set([
   "pressure-inodes",
   "pressure-io",
   "pressure-memory",
+]);
+const HYPERQUEUE_SERVICE_ROLES = new Set([
+  "hq-server",
+  "hq-server-restart",
+  "hq-worker",
+  "hq-worker-restart",
+]);
+const SYSTEMD_FAILURE_RESULTS = new Set([
+  "core-dump",
+  "exit-code",
+  "oom-kill",
+  "protocol",
+  "resources",
+  "signal",
+  "timeout",
+  "watchdog",
 ]);
 const observationWindowScript = fileURLToPath(
   new URL("./fixtures/systemd-observation-window.mjs", import.meta.url),
@@ -79,6 +105,22 @@ function systemdInteger(value, units) {
   return BigInt(match[1]) * multiplier;
 }
 
+function observedActiveStateReason(value) {
+  switch (value) {
+    case "active":
+    case "activating":
+    case "deactivating":
+    case "failed":
+    case "inactive":
+    case "maintenance":
+    case "reloading":
+    case "refreshing":
+      return value;
+    default:
+      return "other";
+  }
+}
+
 function systemdRuntimeMicroseconds(value) {
   const single = value?.match(/^(\d+)(ms|s|us)?$/u);
   if (single !== null && single !== undefined)
@@ -100,13 +142,13 @@ function sameWords(value, expected) {
   );
 }
 
-function exactExecStopPostObserved(value, observationWindow) {
+function exactExecStartPreObserved(value, observationWindow) {
   if (observationWindow === undefined) return (value ?? "") === "";
   const prefix = `{ path=${observationWindow.nodeExecutable} ; argv[]=${[
     observationWindow.nodeExecutable,
     observationWindow.script,
     observationWindow.marker,
-    String(OBSERVATION_WINDOW_TIMEOUT_MS),
+    String(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS),
   ].join(" ")} ; ignore_errors=no ;`;
   return (
     typeof value === "string" &&
@@ -163,19 +205,24 @@ export function exactBoundedHostPropertiesObserved(
   });
   const read = values.IOReadBandwidthMax?.split(/\s+/u);
   const write = values.IOWriteBandwidthMax?.split(/\s+/u);
+  const expectedActiveState =
+    plan.observationWindow === undefined ? "active" : "activating";
+  if (requireControlGroup && values.ActiveState !== expectedActiveState)
+    throw new Error(
+      `bounded_host_process_active_state_${observedActiveStateReason(values.ActiveState)}_unproven`,
+    );
+  if (
+    requireControlGroup &&
+    !/^\/[A-Za-z0-9_./-]+$/u.test(values.ControlGroup ?? "")
+  )
+    throw new Error("bounded_host_process_control_group_unproven");
+  if (!exactExecStartPreObserved(values.ExecStartPre, plan.observationWindow))
+    throw new Error("bounded_host_process_prestart_barrier_unproven");
   if (
     Object.entries(exact).some(([key, expected]) => values[key] !== expected) ||
     values.Environment !==
       "HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC" ||
     !/^[a-f0-9]{32}$/u.test(values.InvocationID ?? "") ||
-    (requireControlGroup &&
-      !new Set(
-        plan.observationWindow === undefined
-          ? ["active"]
-          : ["active", "deactivating"],
-      ).has(values.ActiveState)) ||
-    (requireControlGroup &&
-      !/^\/[A-Za-z0-9_./-]+$/u.test(values.ControlGroup ?? "")) ||
     systemdInteger(values.CPUQuotaPerSecUSec, SYSTEMD_DURATION_UNITS) !==
       1_000_000n ||
     systemdInteger(
@@ -194,7 +241,13 @@ export function exactBoundedHostPropertiesObserved(
     systemdRuntimeMicroseconds(values.RuntimeMaxUSec) !==
       BigInt(plan.runtimeMaxSec ?? DEFAULT_RUNTIME_MAX_SEC) * 1_000_000n ||
     systemdInteger(values.TimeoutStopUSec, SYSTEMD_DURATION_UNITS) !==
-      5_000_000n ||
+      BigInt(
+        plan.timeoutStopSec ??
+          (plan.observationWindow === undefined
+            ? 5
+            : OBSERVATION_TIMEOUT_STOP_SEC),
+      ) *
+        1_000_000n ||
     !new Set(["9", "SIGKILL", "kill"]).has(values.FinalKillSignal) ||
     !new Set(["15", "SIGTERM", "term"]).has(values.KillSignal) ||
     !sameWords(values.RestrictAddressFamilies, [
@@ -204,7 +257,6 @@ export function exactBoundedHostPropertiesObserved(
     ]) ||
     typeof values.SystemCallFilter !== "string" ||
     values.SystemCallFilter.length === 0 ||
-    !exactExecStopPostObserved(values.ExecStopPost, plan.observationWindow) ||
     (joinNetworkOf === undefined
       ? (values.JoinsNamespaceOf ?? "") !== ""
       : !sameWords(values.JoinsNamespaceOf, [joinNetworkOf]))
@@ -233,7 +285,7 @@ export async function cleanupBoundedSystemdUnit(config, record) {
   const stopped = await config.runner.run(
     config.systemctlExecutable,
     ["stop", record.name],
-    { timeoutMs: 2_000 },
+    { timeoutMs: EXECUTION_WRAPPER_BUDGET_MS },
   );
   if (stopped.code !== 0)
     throw new Error("bounded_host_process_cleanup_uncertain");
@@ -253,6 +305,15 @@ export async function cleanupBoundedSystemdUnit(config, record) {
 
 export function boundedHostSystemdArguments(config, input) {
   const runtimeMaxSec = input.runtimeMaxSec ?? DEFAULT_RUNTIME_MAX_SEC;
+  const observationExecution = input.observationWindow !== undefined;
+  const customRuntimeValid = PRESSURE_ROLES.has(input.role)
+    ? runtimeMaxSec >= PRESSURE_RUNTIME_MAX_SEC_RANGE.minimum &&
+      runtimeMaxSec <= PRESSURE_RUNTIME_MAX_SEC_RANGE.maximum
+    : HYPERQUEUE_SERVICE_ROLES.has(input.role)
+      ? runtimeMaxSec === HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC
+      : observationExecution &&
+        runtimeMaxSec >= 1 &&
+        runtimeMaxSec <= Math.ceil(MAX_EXECUTION_PAYLOAD_TIMEOUT_MS / 1_000);
   if (
     !/^[a-z0-9-]{1,24}$/u.test(input.role) ||
     config.workloadUser !== "workload-funnel-synthetic" ||
@@ -263,7 +324,10 @@ export function boundedHostSystemdArguments(config, input) {
     !config.allowedExecutables.has(input.executable) ||
     !input.executable.startsWith("/") ||
     (input.joinNetworkOf !== undefined &&
-      input.joinNetworkOf !== `${config.runId}-hq-server.service`) ||
+      !new Set([
+        `${config.runId}-hq-server.service`,
+        `${config.runId}-hq-server-restart.service`,
+      ]).has(input.joinNetworkOf)) ||
     input.executableArguments.some(
       (argument) => typeof argument !== "string" || argument.includes("\0"),
     ) ||
@@ -275,19 +339,20 @@ export function boundedHostSystemdArguments(config, input) {
     !Number.isSafeInteger(runtimeMaxSec) ||
     (input.runtimeMaxSec === undefined
       ? runtimeMaxSec !== DEFAULT_RUNTIME_MAX_SEC
-      : !PRESSURE_ROLES.has(input.role) ||
-        runtimeMaxSec < PRESSURE_RUNTIME_MAX_SEC_RANGE.minimum ||
-        runtimeMaxSec > PRESSURE_RUNTIME_MAX_SEC_RANGE.maximum)
+      : !customRuntimeValid)
   )
     throw new Error("bounded_host_process_invocation_invalid");
   const unit = `${config.runId}-${input.role}.service`;
   const description = `WorkloadFunnel production gate ${config.runId} ${input.role}`;
+  const timeoutStopSec = observationExecution
+    ? OBSERVATION_TIMEOUT_STOP_SEC
+    : 5;
   return Object.freeze({
     arguments: Object.freeze([
       `--unit=${unit}`,
       `--slice=${config.runId}.slice`,
       `--description=${description}`,
-      "--collect",
+      ...(observationExecution ? [] : ["--collect"]),
       "--quiet",
       "--setenv=HOME=/nonexistent",
       "--setenv=LANG=C.UTF-8",
@@ -302,7 +367,7 @@ export function boundedHostSystemdArguments(config, input) {
       ...(input.observationWindow === undefined
         ? []
         : [
-            `--property=ExecStopPost=${input.observationWindow.nodeExecutable} ${input.observationWindow.script} ${input.observationWindow.marker} ${String(OBSERVATION_WINDOW_TIMEOUT_MS)}`,
+            `--property=ExecStartPre=${input.observationWindow.nodeExecutable} ${input.observationWindow.script} ${input.observationWindow.marker} ${String(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS)}`,
           ]),
       "--property=FinalKillSignal=SIGKILL",
       `--property=Group=${config.workloadGroup}`,
@@ -342,7 +407,7 @@ export function boundedHostSystemdArguments(config, input) {
       "--property=SystemCallFilter=@system-service",
       "--property=SystemCallFilter=~@mount @privileged @resources @reboot",
       "--property=TasksMax=128",
-      "--property=TimeoutStopSec=5s",
+      `--property=TimeoutStopSec=${String(timeoutStopSec)}s`,
       "--property=UMask=0077",
       `--property=User=${config.workloadUser}`,
       `--property=WorkingDirectory=${config.workloadRoot}`,
@@ -357,7 +422,25 @@ export function boundedHostSystemdArguments(config, input) {
     joinNetworkOf: input.joinNetworkOf,
     observationWindow: input.observationWindow,
     runtimeMaxSec,
+    timeoutStopSec,
     unit,
+  });
+}
+
+function synchronousExecutionTiming(limits) {
+  const payloadTimeoutMs = limits?.timeoutMs ?? DEFAULT_RUNTIME_MAX_SEC * 1_000;
+  if (
+    !Number.isSafeInteger(payloadTimeoutMs) ||
+    payloadTimeoutMs < 1 ||
+    payloadTimeoutMs > MAX_EXECUTION_PAYLOAD_TIMEOUT_MS
+  )
+    throw new Error("bounded_host_process_execution_timeout_invalid");
+  return Object.freeze({
+    runtimeMaxSec: Math.ceil(payloadTimeoutMs / 1_000),
+    wrapperLimits: Object.freeze({
+      ...limits,
+      timeoutMs: payloadTimeoutMs + EXECUTION_WRAPPER_BUDGET_MS,
+    }),
   });
 }
 
@@ -367,7 +450,7 @@ export function createBoundedHostProcessManager(config) {
   const observeStarted = async (
     plan,
     requireControlGroup = true,
-    retryAbsent = false,
+    retryPendingStart = false,
   ) => {
     const properties = [
       "ActiveState",
@@ -379,7 +462,7 @@ export function createBoundedHostProcessManager(config) {
       "Description",
       "DevicePolicy",
       "Environment",
-      "ExecStopPost",
+      "ExecStartPre",
       "FinalKillSignal",
       "Group",
       "IOReadBandwidthMax",
@@ -426,16 +509,25 @@ export function createBoundedHostProcessManager(config) {
       "User",
       "WorkingDirectory",
     ];
-    const deadline = Date.now() + 1_000;
+    const deadline = Date.now() + START_OBSERVATION_TIMEOUT_MS;
     for (;;) {
       const observed = await showUnit(config, plan.unit, properties);
-      if (retryAbsent && unitAbsent(observed) && Date.now() < deadline) {
-        await wait(10);
+      const absent = unitAbsent(observed);
+      if (retryPendingStart && absent && Date.now() < deadline) {
+        await wait(START_OBSERVATION_RETRY_MS);
         continue;
       }
-      if (observed.code !== 0 || unitAbsent(observed))
+      if (observed.code !== 0 || absent)
         throw new Error("bounded_host_process_identity_unproven");
       const values = parseShow(observed.stdout);
+      if (
+        retryPendingStart &&
+        values.ActiveState === "inactive" &&
+        Date.now() < deadline
+      ) {
+        await wait(START_OBSERVATION_RETRY_MS);
+        continue;
+      }
       exactBoundedHostPropertiesObserved(
         values,
         config,
@@ -502,6 +594,7 @@ export function createBoundedHostProcessManager(config) {
       await config.reviewedExecutables.assertUnchanged(executable);
       await config.reviewedExecutables.assertUnchanged(config.nodeExecutable);
       const observationMarker = `${config.workloadRoot}/.observed-${role}`;
+      const timing = synchronousExecutionTiming(options.limits);
       const plan = boundedHostSystemdArguments(config, {
         executable,
         executableArguments,
@@ -512,6 +605,7 @@ export function createBoundedHostProcessManager(config) {
           script: observationWindowScript,
         },
         role,
+        runtimeMaxSec: timing.runtimeMaxSec,
       });
       const recordId = await config.ledger.prepare("systemd-unit", plan.unit, {
         description: plan.description,
@@ -537,7 +631,7 @@ export function createBoundedHostProcessManager(config) {
         execution = await config.runner.start(
           config.systemdRunExecutable,
           args,
-          options.limits,
+          timing.wrapperLimits,
         );
         const values = await observeStarted(plan, true, true);
         record = await finalize(recordId, plan, values);
@@ -551,6 +645,28 @@ export function createBoundedHostProcessManager(config) {
         );
         markerReleased = true;
         result = await execution.completion;
+        if (result.code !== 0 && result.code !== null) {
+          const termination = await showUnit(config, plan.unit, [
+            "Description",
+            "InvocationID",
+            "LoadState",
+            "Result",
+          ]);
+          if (termination.code !== 0 || unitAbsent(termination))
+            throw new Error("bounded_host_process_termination_unproven");
+          const terminationValues = parseShow(termination.stdout);
+          if (
+            terminationValues.Description !== plan.description ||
+            terminationValues.InvocationID !== values.InvocationID ||
+            terminationValues.LoadState !== "loaded" ||
+            !SYSTEMD_FAILURE_RESULTS.has(terminationValues.Result)
+          )
+            throw new Error("bounded_host_process_termination_unproven");
+          result = Object.freeze({
+            ...result,
+            systemdResult: terminationValues.Result,
+          });
+        }
       } catch (error) {
         failure = error;
       }
@@ -601,7 +717,7 @@ export function createBoundedHostProcessManager(config) {
       );
       if (result.code !== 0)
         throw new Error("bounded_host_process_start_failed");
-      const values = await observeStarted(plan);
+      const values = await observeStarted(plan, true, true);
       await finalize(recordId, plan, values);
       const process = Object.freeze({
         controlGroup: values.ControlGroup,

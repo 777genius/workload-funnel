@@ -83,7 +83,6 @@ export interface SchedulerScopeReopenRequest {
 
 export interface HyperQueueSubmitMutation {
   readonly dispatchId: string;
-  readonly jobName: string;
   readonly kind: "submit";
   readonly mappingFingerprint: string;
   readonly requestedCpuCount: number;
@@ -121,8 +120,25 @@ export const authorizedMutationBrand: unique symbol = Symbol(
 
 export interface AuthorizedHyperQueueMutation {
   readonly [authorizedMutationBrand]: true;
+  readonly canonicalJobName?: string;
   readonly request: MutateHyperQueueRequest;
+  readonly requestFingerprint: string;
   readonly registrySequence: number;
+}
+
+export interface HyperQueueDispatchMapping {
+  readonly adapterContractVersion: 1;
+  readonly adapterKey: "scheduler-hyperqueue";
+  readonly adapterReference: string;
+  readonly canonicalJobName: string;
+  readonly dispatchId: string;
+  readonly jobId: string;
+  readonly mappingFingerprint: string;
+  readonly mutationFenceFingerprint: string;
+  readonly operationId: string;
+  readonly requestFingerprint: string;
+  readonly schedulerInstanceId: string;
+  readonly taskId: "0";
 }
 
 export interface SchedulerMutationGatewayClient {

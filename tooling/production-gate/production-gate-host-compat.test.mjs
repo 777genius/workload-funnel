@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { cleanupBoundedSystemdUnit } from "./bounded-host-process.mjs";
@@ -569,5 +573,24 @@ describe("systemd 255 production-gate compatibility", () => {
     });
     await expect(preparedCleanup()).resolves.toBeUndefined();
     expect(probeRunner.run).toHaveBeenCalledOnce();
+  });
+
+  it("treats an unpublished systemd descendant manifest as pending", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wf-systemd-descendants-"));
+    try {
+      const probeIo = createSystemdProbeIo({});
+      await expect(probeIo.readDescendantPids(root)).resolves.toBeUndefined();
+      await writeFile(join(root, "descendants.json"), "");
+      await expect(probeIo.readDescendantPids(root)).rejects.toThrow(
+        "systemd_descendant_manifest_invalid",
+      );
+      await writeFile(
+        join(root, "descendants.json"),
+        `${JSON.stringify([41, 42])}\n`,
+      );
+      await expect(probeIo.readDescendantPids(root)).resolves.toEqual([41, 42]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 });

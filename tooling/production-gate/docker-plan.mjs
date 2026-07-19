@@ -30,6 +30,9 @@ export const MINIO_SUPERVISOR_COMMAND = Object.freeze([
   "--console-address",
   ":9001",
 ]);
+export const AZURITE_ENTRYPOINT_DESTINATION = "/gate/azurite-entrypoint.sh";
+export const AZURITE_ENTRYPOINT = Object.freeze(["/bin/sh"]);
+export const AZURITE_COMMAND = Object.freeze([AZURITE_ENTRYPOINT_DESTINATION]);
 
 export function assertSafeDockerArguments(args) {
   const rendered = args.join(" ");
@@ -113,7 +116,10 @@ function boundedContainerArguments({
     readOnlyMounts.length > 1 ||
     readOnlyMounts.some(
       ({ destination, source }) =>
-        destination !== MINIO_SUPERVISOR_DESTINATION ||
+        !new Set([
+          AZURITE_ENTRYPOINT_DESTINATION,
+          MINIO_SUPERVISOR_DESTINATION,
+        ]).has(destination) ||
         typeof source !== "string" ||
         !source.startsWith("/") ||
         source.includes("\u0000"),
@@ -304,5 +310,45 @@ export function objectContainerArguments(config) {
       user: "1000:1000",
     }),
     ...MINIO_SUPERVISOR_COMMAND,
+  ]);
+}
+
+export function azuriteContainerArguments(config) {
+  if (
+    typeof config.entrypointFile !== "string" ||
+    !config.entrypointFile.startsWith("/") ||
+    config.entrypointFile.includes("\u0000")
+  )
+    throw new Error("unsafe_azurite_entrypoint_identity");
+  return Object.freeze([
+    ...boundedContainerArguments({
+      dataStorage: {
+        destination: "/data",
+        kind: "tmpfs",
+        options: `/data:${MINIO_DATA_TMPFS_OPTIONS}`,
+      },
+      entrypoint: AZURITE_ENTRYPOINT[0],
+      environment: {},
+      image: config.image,
+      ioDevice: config.ioDevice,
+      name: config.name,
+      network: config.network,
+      readOnlyMounts: [
+        {
+          destination: AZURITE_ENTRYPOINT_DESTINATION,
+          source: config.entrypointFile,
+        },
+      ],
+      scratchTmpfs:
+        "/tmp:rw,nosuid,nodev,noexec,size=67108864,uid=1000,gid=1000,mode=0700",
+      secretMounts: [
+        {
+          destination: "/run/secrets/azurite-account-key",
+          source: config.accountKeyFile,
+        },
+      ],
+      user: "1000:1000",
+    }),
+    ...AZURITE_COMMAND,
   ]);
 }

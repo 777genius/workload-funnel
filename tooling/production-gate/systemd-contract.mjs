@@ -1,5 +1,9 @@
 import { OWNED_NAME_PATTERN } from "./constants.mjs";
 
+export const SYSTEMD_GATE_PROJECT_QUOTA_BYTES = 64 * 1024 * 1024;
+export const SYSTEMD_IO_PROBE_MAX_BYTES = 8 * 1024 * 1024;
+export const SYSTEMD_MEMORY_PROBE_BLOCK_BYTES = 1024 * 1024;
+
 const servicePattern =
   /^(wf-production-gate-[a-f0-9]{32})-[a-z0-9-]{1,32}\.service$/u;
 const slicePattern = /^wf-production-gate-[a-f0-9]{32}\.slice$/u;
@@ -14,6 +18,20 @@ function microseconds(value) {
   if (typeof value !== "bigint" || value <= 0n)
     throw new Error("systemd_duration_invalid");
   return `${String(value)}us`;
+}
+
+function cpuQuotaPercentage(value) {
+  if (typeof value !== "bigint" || value <= 0n)
+    throw new Error("systemd_cpu_quota_invalid");
+  if (value % 100n !== 0n)
+    throw new Error("systemd_cpu_quota_precision_unsupported");
+  const wholePercent = value / 10_000n;
+  const hundredths = (value % 10_000n) / 100n;
+  if (hundredths === 0n) return `${String(wholePercent)}%`;
+  const fractionalPercent = String(hundredths)
+    .padStart(2, "0")
+    .replace(/0+$/u, "");
+  return `${String(wholePercent)}.${fractionalPercent}%`;
 }
 
 function bytes(value, allowInfinity = false) {
@@ -34,6 +52,7 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     properties.ProtectKernelModules !== true ||
     properties.ProtectKernelTunables !== true ||
     properties.PrivateDevices !== true ||
+    properties.PrivateMounts !== true ||
     properties.PrivateTmp !== true ||
     properties.DevicePolicy !== "closed" ||
     !Array.isArray(properties.AmbientCapabilities) ||
@@ -59,7 +78,7 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     "CapabilityBoundingSet=",
     ...(properties.CPUQuotaPerSecUSec === undefined
       ? []
-      : [`CPUQuotaPerSecUSec=${microseconds(properties.CPUQuotaPerSecUSec)}`]),
+      : [`CPUQuota=${cpuQuotaPercentage(properties.CPUQuotaPerSecUSec)}`]),
     `CPUWeight=${String(properties.CPUWeight)}`,
     `DevicePolicy=${properties.DevicePolicy}`,
     "FinalKillSignal=SIGKILL",
@@ -75,11 +94,13 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     `NoNewPrivileges=${yesNo(properties.NoNewPrivileges)}`,
     "LockPersonality=yes",
     `PrivateDevices=${yesNo(properties.PrivateDevices)}`,
+    `PrivateMounts=${yesNo(properties.PrivateMounts)}`,
     `PrivateNetwork=${yesNo(properties.PrivateNetwork)}`,
     `PrivateTmp=${yesNo(properties.PrivateTmp)}`,
     "ProcSubset=pid",
     "ProtectClock=yes",
     "ProtectHome=yes",
+    "ProtectProc=invisible",
     "ProtectHostname=yes",
     "ProtectKernelLogs=yes",
     `ProtectControlGroups=${yesNo(properties.ProtectControlGroups)}`,
@@ -104,6 +125,15 @@ export function systemdPropertyAssignments(properties, ioDevice) {
     `Group=${properties.Group}`,
   ];
   return Object.freeze(assignments);
+}
+
+export function systemdMemoryProbeProperties(properties) {
+  if (typeof properties?.MemoryMax !== "bigint" || properties.MemoryMax <= 0n)
+    throw new Error("systemd_memory_max_invalid");
+  return Object.freeze({
+    ...properties,
+    MemoryHigh: properties.MemoryMax,
+  });
 }
 
 export function systemdRunArguments({
@@ -132,7 +162,6 @@ export function systemdRunArguments({
     `--unit=${unit}`,
     `--slice=${slice}`,
     `--description=${description}`,
-    "--collect",
     "--quiet",
     "--setenv=HOME=/nonexistent",
     "--setenv=LANG=C.UTF-8",
@@ -155,7 +184,7 @@ export function systemctlShowArguments(unit) {
     "show",
     unit,
     "--no-pager",
-    "--property=ActiveState,AmbientCapabilities,CapabilityBoundingSet,CPUQuotaPerSecUSec,CPUWeight,ControlGroup,Description,DevicePolicy,Environment,FinalKillSignal,Group,IOReadBandwidthMax,IOWeight,IOWriteBandwidthMax,InvocationID,KillMode,KillSignal,LimitNOFILE,LockPersonality,MemoryHigh,MemoryMax,MemorySwapMax,NoNewPrivileges,PrivateDevices,PrivateNetwork,PrivateTmp,ProcSubset,ProtectClock,ProtectControlGroups,ProtectHome,ProtectHostname,ProtectKernelLogs,ProtectKernelModules,ProtectKernelTunables,ProtectProc,ProtectSystem,ReadWritePaths,RestrictAddressFamilies,RestrictNamespaces,RestrictRealtime,RestrictSUIDSGID,Result,RuntimeMaxUSec,SendSIGKILL,Slice,SystemCallArchitectures,SystemCallFilter,TasksMax,TimeoutStopUSec,UMask,User",
+    "--property=ActiveState,AmbientCapabilities,CapabilityBoundingSet,CPUQuotaPerSecUSec,CPUWeight,ControlGroup,Description,DevicePolicy,Environment,FinalKillSignal,Group,IOReadBandwidthMax,IOWeight,IOWriteBandwidthMax,InvocationID,KillMode,KillSignal,LimitNOFILE,LockPersonality,MemoryHigh,MemoryMax,MemorySwapMax,NoNewPrivileges,PrivateDevices,PrivateMounts,PrivateNetwork,PrivateTmp,ProcSubset,ProtectClock,ProtectControlGroups,ProtectHome,ProtectHostname,ProtectKernelLogs,ProtectKernelModules,ProtectKernelTunables,ProtectProc,ProtectSystem,ReadWritePaths,RestrictAddressFamilies,RestrictNamespaces,RestrictRealtime,RestrictSUIDSGID,Result,RuntimeMaxUSec,SendSIGKILL,Slice,SystemCallArchitectures,SystemCallFilter,TasksMax,TimeoutStopUSec,UMask,User",
   ]);
 }
 
@@ -200,6 +229,7 @@ export function exactSystemdPropertiesObserved(
     LockPersonality: "yes",
     NoNewPrivileges: "yes",
     PrivateDevices: "yes",
+    PrivateMounts: "yes",
     PrivateNetwork: "yes",
     PrivateTmp: "yes",
     ProcSubset: "pid",
@@ -290,7 +320,7 @@ export async function createMappedSystemdGatePlan({
       ephemeralStorage: Object.freeze({
         ...base.resources.ephemeralStorage,
         inodeMaximum: 4_096n,
-        maximumBytes: 64n * 1024n * 1024n,
+        maximumBytes: BigInt(SYSTEMD_GATE_PROJECT_QUOTA_BYTES),
       }),
       io: Object.freeze({
         ...base.resources.io,
@@ -336,7 +366,23 @@ async function waitFor(config, predicate, code, maximumMs = 10_000) {
   }
 }
 
+export async function waitForSystemdDescendantExit(
+  config,
+  descendantPids,
+  maximumMs = 2_000,
+) {
+  return waitFor(
+    config,
+    () =>
+      descendantPids.every((pid) => !config.pidExists(pid)) ? true : undefined,
+    "systemd_descendant_survived_control_group_stop",
+    maximumMs,
+  );
+}
+
 export async function runSystemdGateProbe(config) {
+  if (typeof config.sliceOwnership?.admit !== "function")
+    throw new Error("systemd_gate_slice_ownership_missing");
   const plan = await createMappedSystemdGatePlan({
     capabilityReport: config.capabilityReport,
     ioDevice: config.ioDevice,
@@ -352,7 +398,7 @@ export async function runSystemdGateProbe(config) {
     );
     return result.code === 0 ? parseSystemctlShow(result.stdout) : undefined;
   };
-  const start = async (mode) => {
+  const start = async (mode, mappedProperties = properties) => {
     await config.reviewedExecutables.assertUnchanged(config.nodeExecutable);
     const unit = `${config.runId}-${mode}.service`;
     const description = `WorkloadFunnel production gate ${config.runId} ${mode}`;
@@ -365,7 +411,7 @@ export async function runSystemdGateProbe(config) {
         executable: config.nodeExecutable,
         executableArguments: [config.fixturePath, mode, plan.diskQuota.root],
         ioDevice: config.ioDevice,
-        properties,
+        properties: mappedProperties,
         slice,
         unit,
       }),
@@ -410,18 +456,22 @@ export async function runSystemdGateProbe(config) {
     properties,
     slice,
   });
-  const descendantPids = await config.readDescendantPids(plan.diskQuota.root);
+  const descendantPids = await waitFor(
+    config,
+    () => config.readDescendantPids(plan.diskQuota.root),
+    "systemd_descendant_manifest_timeout",
+  );
   const cancelStarted = config.preciseClock();
   await stop(tree.unit);
   const cancelLatencyMs = config.preciseClock() - cancelStarted;
-  if (descendantPids.some(config.pidExists))
-    throw new Error("systemd_descendant_survived_control_group_stop");
+  await waitForSystemdDescendantExit(config, descendantPids);
 
-  const memory = await start("memory");
+  const memoryProperties = systemdMemoryProbeProperties(properties);
+  const memory = await start("memory", memoryProperties);
   exactSystemdPropertiesObserved(memory.values, {
     description: `WorkloadFunnel production gate ${config.runId} memory`,
     ioDevice: config.ioDevice,
-    properties,
+    properties: memoryProperties,
     slice,
   });
   const memoryTerminal = await waitFor(
@@ -476,7 +526,7 @@ export async function runSystemdGateProbe(config) {
   if (ioTerminal.Result !== "timeout")
     throw new Error("systemd_runtime_limit_unclassified");
   const ioBytes = await config.ioBytesWritten(plan.diskQuota.root);
-  if (ioBytes <= 0 || ioBytes > 8 * 1024 * 1024)
+  if (ioBytes <= 0 || ioBytes > SYSTEMD_IO_PROBE_MAX_BYTES)
     throw new Error("systemd_io_limit_not_bounded");
 
   const cpu = await start("cpu");
@@ -513,7 +563,10 @@ export async function runSystemdGateProbe(config) {
     memoryLimitClassification: "memory_limit_oom",
     pidLimitClassification: "pids_limit_enforced",
     processTreeCancellation: true,
-    projectQuotaApplied: false,
+    projectQuotaApplied:
+      config.capabilityEvidence.projectQuotaBytes === true &&
+      config.capabilityEvidence.projectQuotaInodes === true &&
+      config.capabilityEvidence.projectQuota?.receipt !== undefined,
     resourceMappingDigest: plan.profileDigest,
     runtimeLimitClassification: ioTerminal.Result,
     systemdVersion: config.capabilityReport.systemdVersion,

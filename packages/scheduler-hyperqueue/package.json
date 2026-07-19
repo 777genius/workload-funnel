@@ -39,6 +39,10 @@
       "types": "./dist/features/mutation-gateway-authority/index.d.ts",
       "import": "./dist/features/mutation-gateway-authority/index.js"
     },
+    "./operation-lookup": {
+      "types": "./dist/features/operation-lookup/index.d.ts",
+      "import": "./dist/features/operation-lookup/index.js"
+    },
     "./worker-inventory": {
       "types": "./dist/features/worker-inventory/index.d.ts",
       "import": "./dist/features/worker-inventory/index.js"

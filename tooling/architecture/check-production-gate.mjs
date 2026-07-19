@@ -5,8 +5,14 @@ import { fileURLToPath, URL } from "node:url";
 
 import {
   PRESSURE_FIXTURE_CPU_WORKER_COUNT,
+  PRESSURE_FIXTURE_DISK_TARGET_BYTES,
+  PRESSURE_FIXTURE_IO_TARGET_BYTES,
   PRESSURE_FIXTURE_MEMORY_TARGET,
 } from "../production-gate/pressure-fixture-protocol.mjs";
+import {
+  SYSTEMD_GATE_PROJECT_QUOTA_BYTES,
+  SYSTEMD_IO_PROBE_MAX_BYTES,
+} from "../production-gate/systemd-contract.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const failures = [];
@@ -34,7 +40,7 @@ async function files(directory) {
 const plan = await source("docs/workload-funnel-architecture-plan.md");
 if (
   createHash("sha256").update(plan).digest("hex") !==
-  "63d0945eedc7884f4419597cb4e19c2c541b103f0458c011d557b24e4f1bccbf"
+  "73dffc99721b929e1e2b109d62f38263f433adb9534bb5fa545978a8c851ccdf"
 )
   failures.push("architecture plan differs from the production gate baseline");
 
@@ -84,6 +90,12 @@ if (/\bexec\s*\(/u.test(runner) || runner.includes("shell: true"))
 
 const gate = await source("tooling/production-gate/run.mjs");
 if (
+  !/runSystemdGateProbe\(\{[\s\S]*?\n\s*sliceOwnership,\n[\s\S]*?\}\);/u.test(
+    gate,
+  )
+)
+  failures.push("manual gate omits systemd slice ownership wiring");
+if (
   gate.indexOf("config = parseManualGateArguments") >
     gate.indexOf("new BoundedCommandRunner") ||
   !gate.includes("createOwnedSandbox")
@@ -93,14 +105,58 @@ if (
   );
 if (/writeFile\([^)]*\/sys\/fs\/cgroup/u.test(gate))
   failures.push("manual gate writes cgroupfs directly");
-for (const blocker of [
-  "ambiguous_submit_lookup_unsupported",
-  "object_provider_create_only_credential_unsupported",
-  "project_quota_application_adapter_missing",
-  "real_async_postgres_lifecycle_adapter_missing",
+const hyperQueueContractSource = await source(
+  "tooling/production-gate/hyperqueue-contract.mjs",
+);
+const hyperQueueGatewayProbe = await source(
+  "tooling/production-gate/fixtures/hyperqueue-gateway-probe.mjs",
+);
+const hyperQueueGate = `${gate}\n${hyperQueueContractSource}\n${hyperQueueGatewayProbe}`;
+if (hyperQueueGate.includes("ambiguous_submit_lookup_unsupported"))
+  failures.push("manual gate retains the closed ambiguous-submit blocker");
+for (const evidence of [
+  "createSchedulerMutationGateway",
+  "startSchedulerMutationGateway",
+  "SimulatedGatewayCrash",
+  "afterCliCall()",
+  "parseHyperQueueOperationLookup",
+  "RETAINED_HISTORY_CEILING",
+  "serverJournalPath",
+  '"--journal"',
+  '"--journal-flush-period"',
+  "cancelAfterJournalRestart",
+  "hyperqueue_gateway_probe_retry_mutated_state",
+  "hyperqueue_gateway_journal_restart_identity_mismatch",
 ])
-  if (!gate.includes(blocker))
-    failures.push(`manual gate omits production-closure blocker ${blocker}`);
+  if (!hyperQueueGate.includes(evidence))
+    failures.push(`manual gate omits HyperQueue lookup evidence ${evidence}`);
+const gatewaySubmitRecovery = hyperQueueGatewayProbe.slice(
+  hyperQueueGatewayProbe.indexOf("async function submitAndRecover"),
+  hyperQueueGatewayProbe.indexOf("async function retainedLookup"),
+);
+if (
+  hyperQueueContractSource.includes("operationLookupModuleUrl") ||
+  hyperQueueContractSource.includes("gateway_lookup_restarted") ||
+  hyperQueueGatewayProbe.includes("ExactVersionHyperQueueOperationLookup") ||
+  !gatewaySubmitRecovery.includes("await initial.mutate(request)") ||
+  !gatewaySubmitRecovery.includes("await restarted.mutate(request)")
+)
+  failures.push(
+    "HyperQueue disposable response-loss probe bypasses the gateway/WAL lifecycle",
+  );
+
+const projectQuotaGate = [
+  gate,
+  await source("tooling/production-gate/systemd-capability-probe.mjs"),
+  await source("tooling/production-gate/systemd-contract.mjs"),
+].join("\n");
+for (const evidence of [
+  "projectQuotaMutatingProbe",
+  "project_quota_capability_not_proven",
+  "projectQuotaApplied",
+])
+  if (!projectQuotaGate.includes(evidence))
+    failures.push(`manual gate omits project-quota evidence ${evidence}`);
 
 const attestation = await source("tooling/production-gate/attestation.mjs");
 for (const token of [
@@ -189,7 +245,8 @@ for (const token of [
   "inspectContainerConfinement",
   "inspectClientConfinement",
   "docker_container_metadata_contains_secret",
-  "MINIO_SUPERVISOR_COMMAND[0]",
+  "expectedCommand[0]",
+  "expectedEntrypoint",
   "MINIO_SUPERVISOR_ENTRYPOINT",
   "container?.Cmd",
   "container?.Entrypoint",
@@ -263,6 +320,82 @@ for (const token of [
   if (!postgresStage.includes(token))
     failures.push(`Postgres crash orchestration is missing ${token}`);
 
+const postgresAdapter = await source(
+  "tooling/production-gate/postgres-adapter-probe.mjs",
+);
+for (const token of [
+  "createPostgresLifecycleDatabase",
+  "migratePostgresLifecycleSchema",
+  '"before_commit"',
+  '"after_commit"',
+  "postgres_lifecycle_idempotency_conflict",
+  "postgres_lifecycle_conflict",
+  "postgres_lifecycle_pool_timeout",
+  "queryTimeoutProven: true",
+  "transactionLockTraceProven: true",
+  "postgres_migration_corrupt",
+  "credentialRedactionProven: true",
+  "deterministicShutdownProven: true",
+  "callerScopeAuthorizationProven: true",
+  "callerScopeDelimiterAndTenantIsolationProven: true",
+  "callerAbortAfterCommitReconciled: true",
+  "erasureTupleIdempotencyAndTenantIsolationProven: true",
+  "lifecycleInputValidationProven: true",
+  'database.driverVersion === "8.22.0"',
+])
+  if (!postgresAdapter.includes(token))
+    failures.push(`Postgres adapter gate is missing ${token}`);
+const postgresManifest = JSON.parse(
+  await source("packages/store-postgres/package.json"),
+);
+if (
+  postgresManifest.dependencies?.pg !== "8.22.0" ||
+  postgresManifest.devDependencies?.["@types/pg"] !== "8.20.0" ||
+  postgresManifest.dependencies?.postgres !== undefined
+)
+  failures.push(
+    "Postgres adapter must pin official pg@8.22.0 and @types/pg@8.20.0",
+  );
+const lockfile = await source("pnpm-lock.yaml");
+const postgresImporterStart = lockfile.indexOf("  packages/store-postgres:\n");
+const postgresImporterEnd = lockfile.indexOf(
+  "\n  packages/",
+  postgresImporterStart + 1,
+);
+const postgresImporter = lockfile.slice(
+  postgresImporterStart,
+  postgresImporterEnd,
+);
+if (
+  postgresImporterStart < 0 ||
+  !postgresImporter.includes(
+    "      pg:\n        specifier: 8.22.0\n        version: 8.22.0",
+  ) ||
+  !postgresImporter.includes(
+    "      '@types/pg':\n        specifier: 8.20.0\n        version: 8.20.0",
+  )
+)
+  failures.push(
+    "Postgres adapter lockfile must pin pg@8.22.0 and @types/pg@8.20.0",
+  );
+const postgresComposition = await source(
+  "apps/control-service/src/generated/composition.control-postgres.ts",
+);
+for (const token of [
+  "createPostgresLifecycleDatabase",
+  "migratePostgresLifecycleSchema",
+  "createAsyncWorkloadLifecycleService",
+  "productionStartsEnabled = false",
+  'throw new Error("production_starts_disabled")',
+])
+  if (!postgresComposition.includes(token))
+    failures.push(`Postgres production composition is missing ${token}`);
+if (
+  postgresComposition.includes("createSyntheticDatabase") ||
+  /\bMap\b/u.test(postgresComposition)
+)
+  failures.push("Postgres production composition uses synthetic state");
+
 for (const token of [
   "crashAndRestart",
   '"--signal=KILL"',
@@ -327,7 +460,7 @@ for (const token of [
   if (objectFixtureBootstrap.includes(token) || objectBootstrap.includes(token))
     failures.push(`rejected object upload revocation remains: ${token}`);
 for (const token of [
-  "object_provider_create_only_credential_unsupported",
+  'passed("object_compatibility_fixture", recordedEvidence)',
   "evidence.credentialEnforcedImmutability === false",
   "evidence.deleteIdentityDistinct === true",
   "evidence.uploadCredentialCanOverwrite === true",
@@ -346,6 +479,150 @@ for (const token of [
 ])
   if (gate.includes(token))
     failures.push(`manual gate retains rejected upload revocation: ${token}`);
+
+const azureAdapter = await source(
+  "packages/artifact-store-object/src/features/stage-upload/azure-blob-create-only-client.ts",
+);
+for (const token of [
+  "new BlockBlobClient(input.blobUrl).upload(",
+  'conditions: { ifNoneMatch: "*" }',
+  "blobContentMD5: input.contentMd5",
+  "metadata: { wfsha256: input.sha256 }",
+  'expectedPermission: "c"',
+  'expectedResourceType: "b"',
+  "config.verifier.verifyExact",
+  "const mutationAt = nowMs();",
+  "installed = input.reauthorize(mutationAt);",
+  "exactReauthorization(",
+  "nowMs >= fence.notAfter",
+  "azure_blob_create_outcome_ambiguous",
+])
+  if (!azureAdapter.includes(token))
+    failures.push(`Azure create-only adapter is missing ${token}`);
+for (const forbidden of ["uploadData(", ".stageBlock("])
+  if (azureAdapter.includes(forbidden))
+    failures.push(`Azure create-only adapter permits ${forbidden}`);
+for (const forbidden of ["readForKey", "new BlobClient("])
+  if (azureAdapter.includes(forbidden))
+    failures.push(`Azure uploader owns verification authority: ${forbidden}`);
+const azureSasPolicy = await source(
+  "packages/artifact-store-object/src/features/stage-upload/azure-sas-policy.ts",
+);
+for (const token of [
+  "actual.pathname !== expected.pathname",
+  "actual.searchParams.getAll(key).length !== 1",
+  "!VERSIONS.has(serviceVersion)",
+  "input.credential.expiresAtMs > input.latestExpiryMs",
+  "expiresAtMs > input.latestExpiryMs",
+])
+  if (!azureSasPolicy.includes(token))
+    failures.push(`Azure exact SAS policy is missing ${token}`);
+for (const adapterPath of [
+  "packages/artifact-store-object/src/features/verify-finalize/azure-blob-metadata-reader.ts",
+  "packages/artifact-store-object/src/features/retention-delete/azure-blob-exact-retention-client.ts",
+]) {
+  const adapter = await source(adapterPath);
+  if (!adapter.includes("validateScopedSas"))
+    failures.push(
+      `Azure scoped adapter lacks strict SAS policy: ${adapterPath}`,
+    );
+}
+const azureExactVerifier = await source(
+  "packages/artifact-store-object/src/features/verify-finalize/azure-blob-metadata-reader.ts",
+);
+for (const token of [
+  "createAzureBlobExactCreateOutcomeVerifier",
+  "properties.contentMD5",
+  "properties.blobType",
+  "storedContentMd5.byteLength !== 16",
+  "Buffer.from(storedContentMd5).equals",
+])
+  if (!azureExactVerifier.includes(token))
+    failures.push(`Azure exact create outcome verifier is missing ${token}`);
+const azureRetentionAdapter = await source(
+  "packages/artifact-store-object/src/features/retention-delete/azure-blob-exact-retention-client.ts",
+);
+for (const token of [
+  "command.reauthorize(nowMs)",
+  "nowMs >= fence.notAfter",
+  "sasExpiresAtMs > authorityNotAfterMs",
+])
+  if (!azureRetentionAdapter.includes(token))
+    failures.push(`Azure exact retention adapter is missing ${token}`);
+
+const azureProbe = await source(
+  "tooling/production-gate/azure-object-adapter-probe.mjs",
+);
+for (const token of [
+  "unconditionalOverwriteDenied",
+  "crossResourceCreateDenied",
+  "uploadReadDenied",
+  "uploadDeleteDenied",
+  "uploadMetadataMutationDenied",
+  "uploadListDenied",
+  "putBlockBypassDenied",
+  "staleCredentialRejectedBeforeIo",
+  "writeCapableCredentialRejectedBeforeIo",
+  "cloudParityNotClaimed: true",
+  'const SDK_VERSION = "12.33.0";',
+  "sdkVersion: SDK_VERSION",
+  'resourceType: "azure_blob_sas_sr_b"',
+  'deletePermission: "d"',
+  "createAzureBlobPrivateFixtureExactCreateOutcomeVerifier",
+  "createAzureBlobPrivateFixtureExactRetentionClient",
+  "forgedMetadataCannotFakeIdempotency",
+])
+  if (!azureProbe.includes(token))
+    failures.push(`Azure production probe is missing ${token}`);
+
+const azureStage = await source(
+  "tooling/production-gate/azure-object-stage.mjs",
+);
+for (const token of [
+  "path: `${config.sandboxRoot}/azurite-account-key`",
+  "restartAzuriteServerProcessWithDocker",
+  'forbiddenEnvironmentPrefixes: ["AZURITE_ACCOUNTS="]',
+  "sasAndAccountKeyExcludedFromEvidence",
+])
+  if (!azureStage.includes(token) && !azureProbe.includes(token))
+    failures.push(`Azure production stage is missing ${token}`);
+
+const azuriteSupervisor = await source(
+  "tooling/production-gate/fixtures/azurite-entrypoint.sh",
+);
+for (const token of [
+  "workload-funnel.azurite-supervisor.v1",
+  "trap request_restart USR1",
+  "AZURITE_ACCOUNTS=",
+  "/run/secrets/azurite-account-key",
+])
+  if (!azuriteSupervisor.includes(token))
+    failures.push(`Azurite supervisor is missing ${token}`);
+if (azuriteSupervisor.includes("--skipApiVersionCheck"))
+  failures.push("Azurite supervisor bypasses exact API-version validation");
+const azureFixturePipeline = await source(
+  "tooling/production-gate/azure-sdk-fixture-pipeline.mjs",
+);
+for (const token of [
+  'AZURITE_API_VERSION = "2025-11-05"',
+  'request.headers.set("x-ms-version", AZURITE_API_VERSION)',
+])
+  if (!azureFixturePipeline.includes(token))
+    failures.push(`Azure fixture pipeline is missing ${token}`);
+
+const artifactObjectPackage = await source(
+  "packages/artifact-store-object/package.json",
+);
+const rootPackage = await source("package.json");
+for (const manifest of [artifactObjectPackage, rootPackage])
+  if (!manifest.includes('"@azure/storage-blob": "12.33.0"'))
+    failures.push("Azure SDK is not exactly pinned to 12.33.0");
+for (const token of [
+  "runAzureObjectProductionStage",
+  'passed("object_production_provider", evidence)',
+])
+  if (!gate.includes(token))
+    failures.push(`manual gate Azure closure is missing ${token}`);
 
 const objectRegression = await source(
   "tooling/production-gate/production-gate-object.test.mjs",
@@ -371,7 +648,7 @@ for (const token of [
   "s3:if-none-match",
   "x-amz-content-sha256",
   "ExistingObjectTag",
-  "object_provider_create_only_credential_unsupported",
+  "full Azure cloud parity",
 ])
   if (!productionGateRunbook.includes(token))
     failures.push(
@@ -465,6 +742,9 @@ if (
   !systemdProbe.includes("systemdAnalyzeExecutable") ||
   !systemdProbe.includes('"--property=Version"') ||
   !systemdProbe.includes('"verify"') ||
+  !systemdProbe.includes(
+    "maximumBytes: BigInt(SYSTEMD_GATE_PROJECT_QUOTA_BYTES)",
+  ) ||
   systemdProbe.includes("syntheticDisposableLinuxProbe")
 )
   failures.push("systemd capability evidence is not a real non-mutating probe");
@@ -486,15 +766,26 @@ for (const token of [
   'await allocateChunk(index, "primed")',
   "await markReady()",
   'await allocateChunk(index, "post-ready")',
-  "syncedBytes: 8 * 1024 * 1024",
-  "writtenBytes: 48 * 1024 * 1024",
+  "syncedBytes: PRESSURE_FIXTURE_IO_TARGET_BYTES",
+  "writtenBytes: PRESSURE_FIXTURE_DISK_TARGET_BYTES",
   "createdFiles: 3_200",
   "parsePressureFixtureReadiness",
+  "primeIoPressureFixture",
 ])
   if (!pressureFixtureProtocol.includes(token))
     failures.push(`pressure priming protocol is missing ${token}`);
 if (PRESSURE_FIXTURE_CPU_WORKER_COUNT !== 2)
   failures.push("pressure CPU fixture worker count is not exactly two");
+const pressurePrimedBytes =
+  PRESSURE_FIXTURE_DISK_TARGET_BYTES + PRESSURE_FIXTURE_IO_TARGET_BYTES;
+const combinedQuotaBytes = pressurePrimedBytes + SYSTEMD_IO_PROBE_MAX_BYTES;
+if (
+  PRESSURE_FIXTURE_DISK_TARGET_BYTES !== 40 * 1024 * 1024 ||
+  pressurePrimedBytes < SYSTEMD_GATE_PROJECT_QUOTA_BYTES * 0.7 ||
+  combinedQuotaBytes >= SYSTEMD_GATE_PROJECT_QUOTA_BYTES ||
+  SYSTEMD_GATE_PROJECT_QUOTA_BYTES - combinedQuotaBytes < 8 * 1024 * 1024
+)
+  failures.push("pressure fixture project-quota headroom is not exact");
 if (
   PRESSURE_FIXTURE_MEMORY_TARGET.chunkBytes !== 16 * 1024 * 1024 ||
   PRESSURE_FIXTURE_MEMORY_TARGET.primedChunkCount !== 22 ||
@@ -508,10 +799,15 @@ if (
   failures.push("pressure memory fixture two-stage bounds are not exact");
 for (const token of [
   "PRESSURE_FIXTURE_CPU_WORKER_COUNT",
+  "PRESSURE_FIXTURE_DISK_TARGET_BYTES",
+  "PRESSURE_FIXTURE_IO_TARGET_BYTES",
   "length: PRESSURE_FIXTURE_CPU_WORKER_COUNT",
+  "primeIoPressureFixture",
 ])
   if (!pressureFixture.includes(token))
-    failures.push(`pressure CPU fixture is missing protocol-owned ${token}`);
+    failures.push(`pressure fixture is missing protocol-owned ${token}`);
+if (pressureFixture.includes("for (;;) await writeCycle()"))
+  failures.push("pressure IO fixture repeats the full sync cycle unboundedly");
 
 const mixedLoad = await source("tooling/production-gate/mixed-load.mjs");
 for (const token of [
@@ -543,6 +839,7 @@ for (const token of [
   "pressure_fixture_runtime_budget_insufficient",
   "processManager.verify(process)",
   "Promise.allSettled",
+  "maximumBytes: SYSTEMD_GATE_PROJECT_QUOTA_BYTES",
   "evidence.maximumObserved.workloadMemoryPsiSome > 0",
 ])
   if (!pressureStage.includes(token))
@@ -561,12 +858,15 @@ for (const token of [
     failures.push(`pressure fixture readiness is missing ${token}`);
 for (const token of [
   "encodePressureFixtureReadiness(mode)",
-  "await writeCycle();\n  await ready();",
   "await rename(temporary, marker)",
   'parentPort.postMessage("primed")',
 ])
   if (!pressureFixture.includes(token))
     failures.push(`pressure fixture priming is missing ${token}`);
+if (
+  !pressureFixtureProtocol.includes("await writeCycle();\n  await markReady();")
+)
+  failures.push("pressure IO priming does not precede readiness exactly once");
 
 const hyperQueueContract = await source(
   "tooling/production-gate/hyperqueue-contract.mjs",

@@ -6,8 +6,11 @@ import { setInterval, setTimeout } from "node:timers";
 import {
   encodePressureFixtureReadiness,
   PRESSURE_FIXTURE_CPU_WORKER_COUNT,
+  PRESSURE_FIXTURE_DISK_TARGET_BYTES,
+  PRESSURE_FIXTURE_IO_TARGET_BYTES,
   PRESSURE_FIXTURE_MEMORY_TARGET,
   PRESSURE_FIXTURE_MODES,
+  primeIoPressureFixture,
   runMemoryPressureFixture,
 } from "../pressure-fixture-protocol.mjs";
 
@@ -72,19 +75,21 @@ if (mode === "io") {
   const descriptor = await open(`${root}/io-pressure.bin`, "w", 0o600);
   const block = Buffer.alloc(1024 * 1024, 2);
   const writeCycle = async () => {
-    for (let offset = 0; offset < 8 * 1024 * 1024; offset += block.byteLength)
+    for (
+      let offset = 0;
+      offset < PRESSURE_FIXTURE_IO_TARGET_BYTES;
+      offset += block.byteLength
+    )
       await descriptor.write(block, 0, block.byteLength, offset);
     await descriptor.sync();
   };
-  await writeCycle();
-  await ready();
-  for (;;) await writeCycle();
+  await primeIoPressureFixture({ markReady: ready, writeCycle });
 }
 
 if (mode === "disk")
   await writeFile(
     `${root}/disk-pressure.bin`,
-    Buffer.alloc(48 * 1024 * 1024, 3),
+    Buffer.alloc(PRESSURE_FIXTURE_DISK_TARGET_BYTES, 3),
     { flag: "wx", mode: 0o600 },
   );
 
