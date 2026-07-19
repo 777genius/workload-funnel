@@ -11,6 +11,8 @@ const EXECUTION_WRAPPER_BUDGET_MS =
   OBSERVATION_TIMEOUT_STOP_SEC * 1_000 +
   5_000;
 const MAX_EXECUTION_PAYLOAD_TIMEOUT_MS = 105_000;
+const START_OBSERVATION_TIMEOUT_MS = 2_000;
+const START_OBSERVATION_RETRY_MS = 10;
 const DEFAULT_RUNTIME_MAX_SEC = 30;
 const PRESSURE_RUNTIME_MAX_SEC_RANGE = Object.freeze({
   maximum: 90,
@@ -430,7 +432,7 @@ export function createBoundedHostProcessManager(config) {
   const observeStarted = async (
     plan,
     requireControlGroup = true,
-    retryAbsent = false,
+    retryPendingStart = false,
   ) => {
     const properties = [
       "ActiveState",
@@ -489,16 +491,25 @@ export function createBoundedHostProcessManager(config) {
       "User",
       "WorkingDirectory",
     ];
-    const deadline = Date.now() + 1_000;
+    const deadline = Date.now() + START_OBSERVATION_TIMEOUT_MS;
     for (;;) {
       const observed = await showUnit(config, plan.unit, properties);
-      if (retryAbsent && unitAbsent(observed) && Date.now() < deadline) {
-        await wait(10);
+      const absent = unitAbsent(observed);
+      if (retryPendingStart && absent && Date.now() < deadline) {
+        await wait(START_OBSERVATION_RETRY_MS);
         continue;
       }
-      if (observed.code !== 0 || unitAbsent(observed))
+      if (observed.code !== 0 || absent)
         throw new Error("bounded_host_process_identity_unproven");
       const values = parseShow(observed.stdout);
+      if (
+        retryPendingStart &&
+        values.ActiveState === "inactive" &&
+        Date.now() < deadline
+      ) {
+        await wait(START_OBSERVATION_RETRY_MS);
+        continue;
+      }
       exactBoundedHostPropertiesObserved(
         values,
         config,
@@ -666,7 +677,7 @@ export function createBoundedHostProcessManager(config) {
       );
       if (result.code !== 0)
         throw new Error("bounded_host_process_start_failed");
-      const values = await observeStarted(plan);
+      const values = await observeStarted(plan, true, true);
       await finalize(recordId, plan, values);
       const process = Object.freeze({
         controlGroup: values.ControlGroup,

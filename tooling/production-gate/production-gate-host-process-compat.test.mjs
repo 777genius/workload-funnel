@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createBoundedHostProcessManager } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
+import { HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC } from "./constants.mjs";
 import { parseGatewayProbeResult } from "./hyperqueue-contract.mjs";
 import {
   exactSystemdObservationWindowInput,
@@ -394,6 +395,38 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
       invocationId: process.invocationId,
       runtimeMaxSec: 75,
       unit: process.unit,
+    });
+  });
+
+  it("waits for a restarted long-lived unit to leave its collected inactive state", async () => {
+    const harness = processManagerHarness(
+      { code: 0, stderr: "", stdout: "" },
+      (observation) =>
+        observation === 0
+          ? {
+              foreign: {
+                ActiveState: "inactive",
+                ControlGroup: "",
+              },
+            }
+          : {},
+    );
+
+    const process = await harness.manager.start(
+      "/usr/bin/hq",
+      ["--server-dir", `${workloadRoot}/hq-server`, "server", "start"],
+      "hq-server",
+      { runtimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC },
+    );
+
+    expect(harness.observedUnitProperties).toHaveLength(2);
+    expect(harness.observedUnitProperties[0]).toContain(
+      "ActiveState=inactive\n",
+    );
+    expect(harness.observedUnitProperties[1]).toContain("ActiveState=active\n");
+    expect(process).toMatchObject({
+      controlGroup: expect.stringMatching(/^\//u),
+      runtimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
     });
   });
 
