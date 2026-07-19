@@ -3,6 +3,13 @@ import type {
   ReconciliationClaimStore,
 } from "@workload-funnel/workload-control/canonical-transaction-coordination";
 
+export {
+  createAsyncPostgresReconciliationStore,
+  type AsyncPostgresReconciliationStore,
+  type DurableReconciliationItem,
+  type PostgresReconciliationExecutor,
+} from "./async-postgres-reconciliation-store.js";
+
 export interface PostgresReconciliationClaimDriver {
   readonly capabilities: Readonly<{
     backend: string;

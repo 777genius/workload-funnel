@@ -5,6 +5,13 @@ import type {
   NodeStore,
 } from "@workload-funnel/workload-control/node-lifecycle";
 
+export {
+  createAsyncPostgresNodeObservationStore,
+  type AsyncPostgresNodeObservationStore,
+  type DurableNodeObservation,
+  type PostgresNodeExecutor,
+} from "./async-postgres-node-store.js";
+
 export interface PostgresDurableRow {
   readonly key: string;
   readonly version: number;

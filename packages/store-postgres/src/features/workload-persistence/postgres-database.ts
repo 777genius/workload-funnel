@@ -16,6 +16,7 @@ import {
   type PostgresLifecycleFaultInjector,
   type PostgresLifecycleMigrationExecutor,
   type PostgresLifecycleTraceSink,
+  type PostgresAsyncQueryExecutor,
   postgresLifecycleDriverVersion,
   PostgresPoolRuntime,
 } from "./postgres-pool.js";
@@ -23,6 +24,7 @@ import {
 export interface PostgresLifecycleDatabase {
   readonly driverVersion: typeof postgresLifecycleDriverVersion;
   readonly migrationExecutor: PostgresLifecycleMigrationExecutor;
+  readonly queryExecutor: PostgresAsyncQueryExecutor;
   readonly profile: PostgresLifecycleDatabaseConfig["profile"];
   readonly repository: AsyncLifecycleRepository;
   readonly schema: string;
@@ -96,6 +98,7 @@ export function createPostgresLifecycleDatabase(
     close: () => pool.close(),
     driverVersion: postgresLifecycleDriverVersion,
     migrationExecutor: pool.migrationExecutor,
+    queryExecutor: pool.queryExecutor,
     profile: config.profile,
     repository: Object.freeze(repository),
     schema: config.schema,

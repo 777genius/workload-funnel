@@ -4,6 +4,13 @@
   "private": true,
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "workload-funnel-control-service": "./dist/generated/composition.control-postgres.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/generated/composition.control-postgres.js"
+  },
   "dependencies": {
     "@workload-funnel/artifact-store-filesystem": "workspace:*",
     "@workload-funnel/dispatcher-local": "workspace:*",

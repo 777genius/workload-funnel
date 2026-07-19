@@ -49,6 +49,17 @@ export interface PostgresLifecycleMigrationExecutor {
   transaction<T>(work: (client: PostgresQueryClient) => Promise<T>): Promise<T>;
 }
 
+export interface PostgresAsyncQueryExecutor {
+  read<T>(
+    work: (client: PostgresQueryClient) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T>;
+  transaction<T>(
+    work: (client: PostgresQueryClient) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T>;
+}
+
 interface TransactionOptions {
   readonly faults?: PostgresLifecycleFaultInjector;
   readonly isolationLevel?: "READ COMMITTED" | "SERIALIZABLE";
@@ -60,6 +71,8 @@ interface RuntimePoolClient extends PoolClient {
   readonly processID?: unknown;
 }
 
+export type PostgresDriverPool = Pick<Pool, "connect" | "end" | "on" | "query">;
+
 function backendProcessId(client: PoolClient): number {
   const value = (client as RuntimePoolClient).processID;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
@@ -69,6 +82,16 @@ function backendProcessId(client: PoolClient): number {
 
 function abortError(): PostgresLifecycleError {
   return new PostgresLifecycleError("postgres_lifecycle_aborted");
+}
+
+function asyncStoreError(error: unknown): Error {
+  const raw = error instanceof TransactionFailure ? error.original : error;
+  if (
+    raw instanceof Error &&
+    (raw.message.startsWith("postgres_") || raw.message.startsWith("audit_"))
+  )
+    return raw;
+  return sanitizePostgresError(raw);
 }
 
 function withTimeout<T>(
@@ -102,38 +125,43 @@ export class PostgresPoolRuntime {
   readonly #active = new Set<PoolClient>();
   readonly #config: PostgresLifecycleDatabaseConfig;
   readonly #destroyed = new WeakSet<PoolClient>();
-  readonly #pool: Pool;
+  readonly #pool: PostgresDriverPool;
   readonly #shutdown = new AbortController();
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
-  public constructor(config: PostgresLifecycleDatabaseConfig) {
+  public constructor(
+    config: PostgresLifecycleDatabaseConfig,
+    pool?: PostgresDriverPool,
+  ) {
     this.#config = config;
-    this.#pool = new Pool({
-      allowExitOnIdle: false,
-      application_name: config.applicationName,
-      connectionTimeoutMillis: config.connectionTimeoutMs + 25,
-      database: config.database,
-      host: config.host,
-      idleTimeoutMillis: config.idleTimeoutMs,
-      keepAlive: true,
-      max: config.maxConnections,
-      maxLifetimeSeconds: 300,
-      password: config.password,
-      port: config.port,
-      query_timeout: config.queryTimeoutMs,
-      statement_timeout: config.statementTimeoutMs,
-      ssl:
-        config.tls === false
-          ? false
-          : {
-              ca: config.tls.certificateAuthority,
-              minVersion: "TLSv1.2",
-              rejectUnauthorized: true,
-              servername: config.tls.serverName,
-            },
-      user: config.user,
-    });
+    this.#pool =
+      pool ??
+      new Pool({
+        allowExitOnIdle: false,
+        application_name: config.applicationName,
+        connectionTimeoutMillis: config.connectionTimeoutMs + 25,
+        database: config.database,
+        host: config.host,
+        idleTimeoutMillis: config.idleTimeoutMs,
+        keepAlive: true,
+        max: config.maxConnections,
+        maxLifetimeSeconds: 300,
+        password: config.password,
+        port: config.port,
+        query_timeout: config.queryTimeoutMs,
+        statement_timeout: config.statementTimeoutMs,
+        ssl:
+          config.tls === false
+            ? false
+            : {
+                ca: config.tls.certificateAuthority,
+                minVersion: "TLSv1.2",
+                rejectUnauthorized: true,
+                servername: config.tls.serverName,
+              },
+        user: config.user,
+      });
     this.#pool.on("error", () => {
       // Checked-out client failures are surfaced by their pending operation.
     });
@@ -145,6 +173,28 @@ export class PostgresPoolRuntime {
         this.transaction(
           (client) => work(client),
           Object.freeze({ isolationLevel: "READ COMMITTED" }),
+        ).catch((error: unknown) => {
+          throw asyncStoreError(error);
+        }),
+    });
+  }
+
+  public get queryExecutor(): PostgresAsyncQueryExecutor {
+    return Object.freeze({
+      read: <T>(
+        work: (client: PostgresQueryClient) => Promise<T>,
+        signal?: AbortSignal,
+      ) => this.read(work, signal),
+      transaction: <T>(
+        work: (client: PostgresQueryClient) => Promise<T>,
+        signal?: AbortSignal,
+      ) =>
+        this.transaction(
+          work,
+          Object.freeze({
+            isolationLevel: "SERIALIZABLE",
+            ...(signal === undefined ? {} : { signal }),
+          }),
         ).catch((error: unknown) => {
           if (error instanceof TransactionFailure) throw error.original;
           throw sanitizePostgresError(error);

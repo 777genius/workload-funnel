@@ -244,6 +244,7 @@ export {
   type PostgresLifecycleErrorCode,
 } from "./postgres-errors.js";
 export type {
+  PostgresAsyncQueryExecutor,
   PostgresLifecycleFaultBoundary,
   PostgresLifecycleFaultInjector,
   PostgresLifecycleMigrationExecutor,
