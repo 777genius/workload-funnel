@@ -132,7 +132,6 @@ describe("HyperQueue gateway probe failure diagnostics", () => {
   });
 
   it.each([
-    ["exit-code", "hyperqueue_gateway_probe_child_failed_without_envelope"],
     ["oom-kill", "hyperqueue_gateway_probe_memory_limit"],
     ["signal", "hyperqueue_gateway_probe_child_signaled"],
     ["timeout", "hyperqueue_gateway_probe_wrapper_timeout"],
@@ -146,6 +145,30 @@ describe("HyperQueue gateway probe failure diagnostics", () => {
       }),
     ).toThrow(reason);
   });
+
+  it.each([
+    ["", "", "hyperqueue_gateway_probe_child_output_missing"],
+    [
+      "",
+      "untrusted stderr",
+      "hyperqueue_gateway_probe_child_output_missing_with_stderr",
+    ],
+    ["x".repeat(257), "", "hyperqueue_gateway_probe_child_output_oversized"],
+    ["not-newline", "", "hyperqueue_gateway_probe_child_output_shape_invalid"],
+    ["unknown\n", "", "hyperqueue_gateway_probe_child_output_unrecognized"],
+  ])(
+    "classifies exit-code output shape without exposing bytes",
+    (stdout, stderr, reason) => {
+      expect(() =>
+        parseGatewayProbeResult({
+          code: 1,
+          stderr,
+          stdout,
+          systemdResult: "exit-code",
+        }),
+      ).toThrow(reason);
+    },
+  );
 });
 
 function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {

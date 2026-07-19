@@ -352,9 +352,28 @@ export function parseGatewayProbeResult(result, operation) {
   }
   const failureReason = exactGatewayProbeFailureReason(result);
   if (failureReason !== undefined) throw new Error(failureReason);
+  if (result?.systemdResult === "exit-code") {
+    if (result.stdout === "")
+      throw new Error(
+        result.stderr === ""
+          ? "hyperqueue_gateway_probe_child_output_missing"
+          : "hyperqueue_gateway_probe_child_output_missing_with_stderr",
+      );
+    if (
+      typeof result.stdout === "string" &&
+      Buffer.byteLength(result.stdout) > 256
+    )
+      throw new Error("hyperqueue_gateway_probe_child_output_oversized");
+    if (
+      typeof result.stdout !== "string" ||
+      !result.stdout.endsWith("\n") ||
+      result.stdout.slice(0, -1).includes("\n")
+    )
+      throw new Error("hyperqueue_gateway_probe_child_output_shape_invalid");
+    throw new Error("hyperqueue_gateway_probe_child_output_unrecognized");
+  }
   const safeSystemdReason = Object.freeze({
     "core-dump": "hyperqueue_gateway_probe_child_core_dumped",
-    "exit-code": "hyperqueue_gateway_probe_child_failed_without_envelope",
     "oom-kill": "hyperqueue_gateway_probe_memory_limit",
     protocol: "hyperqueue_gateway_probe_protocol_failure",
     resources: "hyperqueue_gateway_probe_resource_limit",
