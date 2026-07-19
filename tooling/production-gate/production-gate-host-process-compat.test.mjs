@@ -8,7 +8,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createBoundedHostProcessManager } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
-import { HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC } from "./constants.mjs";
+import {
+  HYPERQUEUE_GATEWAY_PROBE_TIMEOUT_MS,
+  HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
+} from "./constants.mjs";
 import { parseGatewayProbeResult } from "./hyperqueue-contract.mjs";
 import {
   exactSystemdObservationWindowInput,
@@ -98,6 +101,28 @@ describe("HyperQueue gateway probe failure diagnostics", () => {
       ).toThrow(reason);
     },
   );
+
+  it("gives the hosted gateway probe bounded headroom for durable recovery", async () => {
+    const harness = processManagerHarness({
+      code: 0,
+      stderr: "",
+      stdout: "gateway-evidence\n",
+    });
+
+    await expect(
+      harness.manager.execute(
+        "/usr/bin/node",
+        ["/reviewed/hyperqueue-gateway-probe.mjs"],
+        "hq-gateway-submit",
+        { limits: { timeoutMs: HYPERQUEUE_GATEWAY_PROBE_TIMEOUT_MS } },
+      ),
+    ).resolves.toMatchObject({ code: 0 });
+    expect(harness.runner.start).toHaveBeenCalledWith(
+      "/usr/bin/systemd-run",
+      expect.arrayContaining(["--property=RuntimeMaxSec=45s"]),
+      { timeoutMs: 92_000 },
+    );
+  });
 
   it("fails closed for an unknown bounded runner failure", () => {
     expect(() =>

@@ -21,6 +21,7 @@ import {
 import { BoundedCommandRunner } from "./command-runner.mjs";
 import {
   DECLARED_COMPONENTS,
+  HYPERQUEUE_GATEWAY_PROBE_TIMEOUT_MS,
   HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
 } from "./constants.mjs";
 import {
@@ -698,7 +699,7 @@ async function main() {
               : "hq-gateway-replay",
             {
               joinNetworkOf: hqServerUnit,
-              limits: { timeoutMs: 25_000 },
+              limits: { timeoutMs: HYPERQUEUE_GATEWAY_PROBE_TIMEOUT_MS },
             },
           ),
         serviceRuntimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
