@@ -66,6 +66,27 @@ export function classifyZeroResidueFailure(evidence) {
   return "owned_residue_unclassified";
 }
 
+export async function writeFailedResidueObservation(
+  context,
+  evidence,
+  writeEvidence = writeRecoverableJsonAtomically,
+) {
+  if (evidence.zeroResidue !== false)
+    throw new HostedGateRefusal("residue_failure_observation_invalid");
+  await writeEvidence(
+    `${context.artifactRoot}/residue-failure-observation.json`,
+    evidence,
+    {
+      acceptExisting: (candidate) => {
+        if (!isDeepStrictEqual(candidate, evidence))
+          throw new HostedGateRefusal("residue_failure_observation_conflict");
+        return true;
+      },
+      mode: 0o444,
+    },
+  );
+}
+
 export async function verifyZeroResidue(context, options = {}) {
   let hostState = options.state;
   if (hostState === undefined)
@@ -257,8 +278,14 @@ export async function verifyZeroResidue(context, options = {}) {
       units.code === 0 &&
       units.stdout.trim() === "",
   });
-  if (!evidence.zeroResidue)
+  if (!evidence.zeroResidue) {
+    await writeFailedResidueObservation(
+      context,
+      evidence,
+      options.writeEvidence ?? writeRecoverableJsonAtomically,
+    );
     throw new HostedGateRefusal(classifyZeroResidueFailure(evidence));
+  }
   const residuePath = `${context.artifactRoot}/residue.json`;
   const writeEvidence = options.writeEvidence ?? writeRecoverableJsonAtomically;
   await writeEvidence(residuePath, evidence, {

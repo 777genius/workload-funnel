@@ -427,12 +427,21 @@ export const HOSTED_RUNNER_PROCESS_BASELINE = Object.freeze({
     owner: "system",
   }),
   "systemd-udevd.service": Object.freeze({
-    executables: Object.freeze([
-      "/usr/bin/udevadm",
-      "/usr/lib/systemd/systemd-udevd",
+    tuples: Object.freeze([
+      Object.freeze({
+        comm: "systemd-udevd",
+        executablePattern:
+          /^\/usr\/(?:bin\/udevadm|lib\/systemd\/systemd-udevd)$/u,
+        maxProcesses: 1,
+        owner: "root",
+      }),
+      Object.freeze({
+        comm: "(udev-worker)",
+        executable: "/usr/bin/udevadm",
+        maxProcesses: 1,
+        owner: "root",
+      }),
     ]),
-    maxProcesses: 1,
-    owner: "root",
   }),
   "udisks2.service": Object.freeze({
     executables: Object.freeze(["/usr/libexec/udisks2/udisksd"]),
