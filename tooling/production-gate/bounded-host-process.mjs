@@ -104,7 +104,7 @@ function sameWords(value, expected) {
   );
 }
 
-function exactExecStopPostObserved(value, observationWindow) {
+function exactExecStartPreObserved(value, observationWindow) {
   if (observationWindow === undefined) return (value ?? "") === "";
   const prefix = `{ path=${observationWindow.nodeExecutable} ; argv[]=${[
     observationWindow.nodeExecutable,
@@ -173,11 +173,8 @@ export function exactBoundedHostPropertiesObserved(
       "HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC" ||
     !/^[a-f0-9]{32}$/u.test(values.InvocationID ?? "") ||
     (requireControlGroup &&
-      !new Set(
-        plan.observationWindow === undefined
-          ? ["active"]
-          : ["active", "deactivating"],
-      ).has(values.ActiveState)) ||
+      values.ActiveState !==
+        (plan.observationWindow === undefined ? "active" : "activating")) ||
     (requireControlGroup &&
       !/^\/[A-Za-z0-9_./-]+$/u.test(values.ControlGroup ?? "")) ||
     systemdInteger(values.CPUQuotaPerSecUSec, SYSTEMD_DURATION_UNITS) !==
@@ -214,7 +211,7 @@ export function exactBoundedHostPropertiesObserved(
     ]) ||
     typeof values.SystemCallFilter !== "string" ||
     values.SystemCallFilter.length === 0 ||
-    !exactExecStopPostObserved(values.ExecStopPost, plan.observationWindow) ||
+    !exactExecStartPreObserved(values.ExecStartPre, plan.observationWindow) ||
     (joinNetworkOf === undefined
       ? (values.JoinsNamespaceOf ?? "") !== ""
       : !sameWords(values.JoinsNamespaceOf, [joinNetworkOf]))
@@ -320,7 +317,7 @@ export function boundedHostSystemdArguments(config, input) {
       ...(input.observationWindow === undefined
         ? []
         : [
-            `--property=ExecStopPost=${input.observationWindow.nodeExecutable} ${input.observationWindow.script} ${input.observationWindow.marker} ${String(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS)}`,
+            `--property=ExecStartPre=${input.observationWindow.nodeExecutable} ${input.observationWindow.script} ${input.observationWindow.marker} ${String(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS)}`,
           ]),
       "--property=FinalKillSignal=SIGKILL",
       `--property=Group=${config.workloadGroup}`,
@@ -415,7 +412,7 @@ export function createBoundedHostProcessManager(config) {
       "Description",
       "DevicePolicy",
       "Environment",
-      "ExecStopPost",
+      "ExecStartPre",
       "FinalKillSignal",
       "Group",
       "IOReadBandwidthMax",

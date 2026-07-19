@@ -21,16 +21,16 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
   const unit = systemdArguments
     .find((argument) => argument.startsWith("--unit="))
     .slice("--unit=".length);
-  const execStopPost =
+  const execStartPre =
     systemdArguments
-      .find((argument) => argument.startsWith("--property=ExecStopPost="))
-      ?.slice("--property=ExecStopPost=".length) ?? "";
+      .find((argument) => argument.startsWith("--property=ExecStartPre="))
+      ?.slice("--property=ExecStartPre=".length) ?? "";
   const property = (name) =>
     systemdArguments
       .find((argument) => argument.startsWith(`--property=${name}=`))
       .slice(`--property=${name}=`.length);
   const values = {
-    ActiveState: execStopPost === "" ? "active" : "deactivating",
+    ActiveState: execStartPre === "" ? "active" : "activating",
     AmbientCapabilities: "",
     CapabilityBoundingSet: "",
     ControlGroup: `/wf.slice/wf-production.slice/wf-production-gate.slice/${runId}.slice/${unit}`,
@@ -40,10 +40,10 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     DevicePolicy: "closed",
     Environment:
       "HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC",
-    ExecStopPost:
-      execStopPost === ""
+    ExecStartPre:
+      execStartPre === ""
         ? ""
-        : `{ path=/usr/bin/node ; argv[]=${execStopPost} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=1 ; code=(null) ; status=0/0 }`,
+        : `{ path=/usr/bin/node ; argv[]=${execStartPre} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=1 ; code=(null) ; status=0/0 }`,
     FinalKillSignal: "SIGKILL",
     Group: "workload-funnel-synthetic",
     IOReadBandwidthMax: "/dev/vda 16M",
@@ -233,6 +233,21 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
     for (const timeoutMs of [4_000, 9_999, 10_001])
       expect(exactSystemdObservationWindowInput(marker, timeoutMs)).toBe(false);
   });
+
+  it.each(["active", "deactivating"])(
+    "does not release a synchronous payload observed as %s",
+    async (activeState) => {
+      const harness = processManagerHarness(
+        { code: 0, stderr: "", stdout: "untrusted" },
+        { foreign: { ActiveState: activeState } },
+      );
+
+      await expect(
+        harness.manager.execute("/usr/bin/hq", ["worker", "list"], "hq-cli-1"),
+      ).rejects.toThrow("bounded_host_process_confinement_unproven");
+      expect(harness.events).not.toContain("release");
+    },
+  );
 
   it("forwards the exact pressure runtime through launch and observation", async () => {
     const harness = processManagerHarness(
@@ -581,7 +596,7 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
           "--wait",
           "--pipe",
           expect.stringMatching(
-            /^--property=ExecStopPost=\/usr\/bin\/node .*systemd-observation-window\.mjs .*\.observed-hq-cli-1 10000$/u,
+            /^--property=ExecStartPre=\/usr\/bin\/node .*systemd-observation-window\.mjs .*\.observed-hq-cli-1 10000$/u,
           ),
           "--property=RuntimeMaxSec=2s",
           "--property=TimeoutStopSec=12s",
