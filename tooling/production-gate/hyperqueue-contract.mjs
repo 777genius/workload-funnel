@@ -556,7 +556,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
     server = await config.startProcess(
       config.binaryPath,
       [...global, "server", "start", "--host", "127.0.0.1"],
-      "hq-server",
+      "hq-server-restart",
       { runtimeMaxSec: config.serviceRuntimeMaxSec },
     );
     await poll(
@@ -572,7 +572,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
     worker = await config.startProcess(
       config.binaryPath,
       [...global, "worker", "start", "--cpus", "2"],
-      "hq-worker",
+      "hq-worker-restart",
       { runtimeMaxSec: config.serviceRuntimeMaxSec },
     );
     const restartedInventory = await poll(

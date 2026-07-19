@@ -856,6 +856,8 @@ describe("official HyperQueue 0.26.2 translation", () => {
     expect(contract).toContain(
       'submitResponse: "lost_after_cli_result_before_mapping_persist"',
     );
+    expect(contract).toContain('"hq-server-restart"');
+    expect(contract).toContain('"hq-worker-restart"');
     const dishonestCanceledLabel = ["retained", "CanceledMatches"].join("");
     const inaccurateResponseLabel = ["discarded", "without", "inspection"].join(
       "_",

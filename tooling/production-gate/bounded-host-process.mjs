@@ -37,7 +37,12 @@ const PRESSURE_ROLES = new Set([
   "pressure-io",
   "pressure-memory",
 ]);
-const HYPERQUEUE_SERVICE_ROLES = new Set(["hq-server", "hq-worker"]);
+const HYPERQUEUE_SERVICE_ROLES = new Set([
+  "hq-server",
+  "hq-server-restart",
+  "hq-worker",
+  "hq-worker-restart",
+]);
 const SYSTEMD_FAILURE_RESULTS = new Set([
   "core-dump",
   "exit-code",
@@ -319,7 +324,10 @@ export function boundedHostSystemdArguments(config, input) {
     !config.allowedExecutables.has(input.executable) ||
     !input.executable.startsWith("/") ||
     (input.joinNetworkOf !== undefined &&
-      input.joinNetworkOf !== `${config.runId}-hq-server.service`) ||
+      !new Set([
+        `${config.runId}-hq-server.service`,
+        `${config.runId}-hq-server-restart.service`,
+      ]).has(input.joinNetworkOf)) ||
     input.executableArguments.some(
       (argument) => typeof argument !== "string" || argument.includes("\0"),
     ) ||

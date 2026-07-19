@@ -153,16 +153,31 @@ describe("production gate host safety", () => {
     });
     expect(pressure.arguments).toContain("--property=RuntimeMaxSec=75s");
     expect(pressure.runtimeMaxSec).toBe(75);
-    const hqServer = boundedHostSystemdArguments(config, {
-      executable: "/usr/bin/node",
-      executableArguments: ["--version"],
-      role: "hq-server",
-      runtimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
-    });
-    expect(hqServer.arguments).toContain(
-      `--property=RuntimeMaxSec=${String(HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC)}s`,
-    );
-    expect(hqServer.runtimeMaxSec).toBe(HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC);
+    for (const role of [
+      "hq-server",
+      "hq-server-restart",
+      "hq-worker",
+      "hq-worker-restart",
+    ]) {
+      const process = boundedHostSystemdArguments(config, {
+        executable: "/usr/bin/node",
+        executableArguments: ["--version"],
+        ...(role === "hq-worker-restart"
+          ? { joinNetworkOf: `${runId}-hq-server-restart.service` }
+          : {}),
+        role,
+        runtimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
+      });
+      expect(process.arguments).toContain(
+        `--property=RuntimeMaxSec=${String(HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC)}s`,
+      );
+      expect(process.runtimeMaxSec).toBe(HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC);
+      expect(process.unit).toBe(`${runId}-${role}.service`);
+      if (role === "hq-worker-restart")
+        expect(process.arguments).toContain(
+          `--property=JoinsNamespaceOf=${runId}-hq-server-restart.service`,
+        );
+    }
 
     for (const input of [
       { role: "probe", runtimeMaxSec: 75 },
