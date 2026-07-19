@@ -419,6 +419,21 @@ async function removePackages(effect) {
     throw new HostedGateRefusal("owned_package_cleanup_failed");
 }
 
+export function parsePackageCleanupSimulation(output) {
+  const changes = [];
+  for (const line of output.split("\n")) {
+    if (!/^(?:Inst|Purg|Remv) /u.test(line)) continue;
+    const [action, name] = line.split(/\s+/u);
+    if (
+      !new Set(["Inst", "Purg", "Remv"]).has(action) ||
+      !/^[a-z0-9][a-z0-9+.-]*(?::[a-z0-9][a-z0-9-]*)?$/u.test(name ?? "")
+    )
+      throw new HostedGateRefusal("owned_package_cleanup_plan_invalid");
+    changes.push(Object.freeze({ action, name }));
+  }
+  return Object.freeze(changes);
+}
+
 async function requireBoundedPackageSimulation(arguments_, allowed) {
   const output = await required(
     "/usr/bin/apt-get",
@@ -426,10 +441,9 @@ async function requireBoundedPackageSimulation(arguments_, allowed) {
     "owned_package_cleanup_plan_failed",
     { maxOutputBytes: 16 * 1024 * 1024 },
   );
-  const changed = output
-    .split("\n")
-    .filter((line) => line.startsWith("Inst ") || line.startsWith("Remv "))
-    .map((line) => line.split(/\s+/u)[1]);
+  const changed = parsePackageCleanupSimulation(output).map(
+    (change) => change.name,
+  );
   const accepted = (name) =>
     allowed.has(name) ||
     [...allowed].some(

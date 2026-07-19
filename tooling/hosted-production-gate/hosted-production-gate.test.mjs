@@ -42,7 +42,11 @@ import {
   validateProductionEvidence,
   validateRecoveryDocuments,
 } from "./artifacts.mjs";
-import { executeCleanupSteps, requireCertainCleanup } from "./host-cleanup.mjs";
+import {
+  executeCleanupSteps,
+  parsePackageCleanupSimulation,
+  requireCertainCleanup,
+} from "./host-cleanup.mjs";
 import { removeFixtureTree } from "./fixture-cleanup.mjs";
 import { classifyZeroResidueFailure } from "./residue.mjs";
 import {
@@ -940,6 +944,22 @@ describe("generic review and cleanup evidence", () => {
       "host_cleanup_failed-owned-resource_hosted_gate_cleanup_failed",
     );
     expect(requireCertainCleanup({ certain: true })).toEqual({ certain: true });
+  });
+
+  test("accepts exact APT purge simulation records for bounded cleanup", () => {
+    expect(
+      parsePackageCleanupSimulation(
+        "Purg postgresql-client-18 [18.4-1.pgdg24.04+1]\n",
+      ),
+    ).toEqual([
+      {
+        action: "Purg",
+        name: "postgresql-client-18",
+      },
+    ]);
+    expect(() => parsePackageCleanupSimulation("Purg ../../foreign\n")).toThrow(
+      "owned_package_cleanup_plan_invalid",
+    );
   });
 
   test("classifies residue without exposing process or path details", () => {

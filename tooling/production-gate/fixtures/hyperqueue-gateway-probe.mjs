@@ -275,13 +275,23 @@ async function submitAndRecover(config) {
     throw new Error("hyperqueue_gateway_probe_initial_recovery_failed");
   const request = await installAndOpen(initial, config);
   let responseLossObserved = false;
+  let initialReceipt;
   try {
-    await initial.mutate(request);
+    initialReceipt = await initial.mutate(request);
   } catch (error) {
     responseLossObserved = error instanceof SimulatedGatewayCrash;
   }
-  if (!responseLossObserved || actualCliReturnCallbacks !== 1)
+  if (!responseLossObserved || actualCliReturnCallbacks !== 1) {
+    const outcome = initialReceipt?.outcome;
+    const reason = initialReceipt?.reason;
+    if (
+      actualCliReturnCallbacks === 0 &&
+      new Set(["applied", "rejected", "unknown"]).has(outcome) &&
+      /^[a-z0-9_]{1,48}$/u.test(reason ?? "")
+    )
+      throw new Error(`hyperqueue_gateway_probe_initial_${outcome}_${reason}`);
     throw new Error("hyperqueue_gateway_probe_response_loss_unproven");
+  }
 
   const restarted = createSchedulerMutationGateway(gatewayConfig(config));
   const restartRecovery = await startSchedulerMutationGateway(restarted);
