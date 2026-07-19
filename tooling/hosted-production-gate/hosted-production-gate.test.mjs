@@ -18,7 +18,11 @@ import { fileURLToPath, URL } from "node:url";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { ARCHITECTURE_PLAN_SHA256 } from "./constants.mjs";
+import {
+  ARCHITECTURE_PLAN_SHA256,
+  RUNTIME_MODULE_LINK_REQUIREMENTS,
+  RUNTIME_PACKAGE_NAMES,
+} from "./constants.mjs";
 
 import {
   collectReviewedFiles,
@@ -40,6 +44,7 @@ import {
 } from "./artifacts.mjs";
 import { executeCleanupSteps, requireCertainCleanup } from "./host-cleanup.mjs";
 import { removeFixtureTree } from "./fixture-cleanup.mjs";
+import { classifyZeroResidueFailure } from "./residue.mjs";
 import {
   classifyForeignProcesses,
   dockerImageInventory,
@@ -67,6 +72,29 @@ afterEach(async () => {
 });
 
 describe("hosted gate fail-closed contracts", () => {
+  test("seals every HyperQueue gateway runtime package and module link", () => {
+    expect(RUNTIME_PACKAGE_NAMES).toEqual(
+      expect.arrayContaining([
+        "@workload-funnel/scheduler-hyperqueue",
+        "@workload-funnel/scheduler-mutation-gateway",
+      ]),
+    );
+    expect(
+      RUNTIME_MODULE_LINK_REQUIREMENTS.map((requirement) => requirement.link),
+    ).toEqual(
+      expect.arrayContaining([
+        "node_modules/@workload-funnel/scheduler-mutation-gateway",
+        "apps/scheduler-mutation-gateway/node_modules/@workload-funnel/scheduler-hyperqueue",
+        "packages/scheduler-hyperqueue/node_modules/@workload-funnel/workload-control",
+      ]),
+    );
+    expect(
+      new Set(
+        RUNTIME_MODULE_LINK_REQUIREMENTS.map((requirement) => requirement.link),
+      ).size,
+    ).toBe(RUNTIME_MODULE_LINK_REQUIREMENTS.length);
+  });
+
   test("binds hosted review to the canonical architecture plan digest", async () => {
     const plan = await readFile(
       fileURLToPath(
@@ -909,9 +937,43 @@ describe("generic review and cleanup evidence", () => {
       skipped: true,
     });
     expect(() => requireCertainCleanup(cleanup)).toThrow(
-      "host_cleanup_uncertain",
+      "host_cleanup_failed-owned-resource_hosted_gate_cleanup_failed",
     );
     expect(requireCertainCleanup({ certain: true })).toEqual({ certain: true });
+  });
+
+  test("classifies residue without exposing process or path details", () => {
+    const checks = {
+      containers: "",
+      foreignProcesses: [],
+      groupExists: false,
+      imageBaselineMatches: true,
+      imageProbesCertain: true,
+      images: [],
+      loopAbsent: true,
+      mountAbsent: true,
+      networks: [],
+      ownedProcesses: [],
+      packageProbesCertain: true,
+      packages: [],
+      paths: [],
+      processProbeCertain: true,
+      units: "",
+      userExists: false,
+      volumes: "",
+    };
+    for (const [change, reason] of [
+      [{ paths: ["untrusted-path"] }, "owned_path_residue"],
+      [{ foreignProcesses: [{ pid: 42 }] }, "foreign_process_residue"],
+      [{ imageBaselineMatches: false }, "docker_image_baseline_drift"],
+      [{ units: "untrusted-unit" }, "systemd_unit_residue"],
+    ])
+      expect(
+        classifyZeroResidueFailure({ checks: { ...checks, ...change } }),
+      ).toBe(reason);
+    expect(classifyZeroResidueFailure({ checks })).toBe(
+      "owned_residue_unclassified",
+    );
   });
 
   test("writes deterministic checksum lines", () => {

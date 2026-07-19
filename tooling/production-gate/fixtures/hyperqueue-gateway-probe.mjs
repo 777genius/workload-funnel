@@ -4,18 +4,6 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { promisify, TextEncoder } from "node:util";
 
-import {
-  createSchedulerMutationGateway,
-  startSchedulerMutationGateway,
-} from "../../../apps/scheduler-mutation-gateway/dist/features/composition/index.js";
-import { SimulatedGatewayCrash } from "../../../apps/scheduler-mutation-gateway/dist/features/hyperqueue-mutation-boundary/index.js";
-import { fingerprintMutationFence } from "../../../packages/kernel/dist/index.js";
-import {
-  SCHEDULER_GATEWAY_PROTOCOL,
-  signSchedulerFenceInstall,
-} from "../../../packages/scheduler-hyperqueue/dist/features/mutation-gateway-authority/index.js";
-import { parseHyperQueueOperationLookup } from "../../../packages/scheduler-hyperqueue/dist/features/operation-lookup/index.js";
-
 const executeFile = promisify(execFile);
 const RETAINED_HISTORY_CEILING = 1;
 const acknowledgementKey = new TextEncoder().encode(
@@ -33,6 +21,42 @@ const exactArguments = new Set([
   "--shim-executable",
   "--wal-path",
 ]);
+
+let createSchedulerMutationGateway;
+let fingerprintMutationFence;
+let parseHyperQueueOperationLookup;
+let SCHEDULER_GATEWAY_PROTOCOL;
+let signSchedulerFenceInstall;
+let SimulatedGatewayCrash;
+let startSchedulerMutationGateway;
+
+async function loadRuntimeModules() {
+  const [composition, boundary, kernel, authority, lookup] = await Promise.all([
+    import("../../../apps/scheduler-mutation-gateway/dist/features/composition/index.js"),
+    import("../../../apps/scheduler-mutation-gateway/dist/features/hyperqueue-mutation-boundary/index.js"),
+    import("../../../packages/kernel/dist/index.js"),
+    import("../../../packages/scheduler-hyperqueue/dist/features/mutation-gateway-authority/index.js"),
+    import("../../../packages/scheduler-hyperqueue/dist/features/operation-lookup/index.js"),
+  ]);
+  ({ createSchedulerMutationGateway, startSchedulerMutationGateway } =
+    composition);
+  ({ SimulatedGatewayCrash } = boundary);
+  ({ fingerprintMutationFence } = kernel);
+  ({ SCHEDULER_GATEWAY_PROTOCOL, signSchedulerFenceInstall } = authority);
+  ({ parseHyperQueueOperationLookup } = lookup);
+  if (
+    [
+      createSchedulerMutationGateway,
+      fingerprintMutationFence,
+      parseHyperQueueOperationLookup,
+      signSchedulerFenceInstall,
+      SimulatedGatewayCrash,
+      startSchedulerMutationGateway,
+    ].some((value) => typeof value !== "function") ||
+    typeof SCHEDULER_GATEWAY_PROTOCOL !== "string"
+  )
+    throw new Error("hyperqueue_gateway_probe_module_contract_invalid");
+}
 
 function parseArguments(argv) {
   if (argv.length !== exactArguments.size * 2)
@@ -381,6 +405,7 @@ function safeFailureReason(error) {
 
 async function main() {
   const config = parseArguments(process.argv.slice(2));
+  await loadRuntimeModules();
   const evidence =
     config.operation === "submit-and-recover"
       ? await submitAndRecover(config)

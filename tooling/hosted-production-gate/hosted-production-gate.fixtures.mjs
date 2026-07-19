@@ -14,6 +14,7 @@ import {
   REQUIRED_BOOTSTRAP_TOOLS,
   REQUIRED_PRODUCTION_COMPONENTS,
   REVIEW_MANIFEST_SCHEMA,
+  RUNTIME_MODULE_LINK_REQUIREMENTS,
   RUNTIME_PACKAGE_NAMES,
 } from "./constants.mjs";
 import { sha256 } from "./contract.mjs";
@@ -147,10 +148,10 @@ function exactReviewTuple(evidence) {
     manifestSha256: evidence.host.reviewManifestSha256,
     reviewId: "github:review",
     reviewedFileCount: 42,
-    runtimeModuleLinks: [
-      { link: "/review/node_modules/executor", target: "/review/executor" },
-      { link: "/review/node_modules/node", target: "/review/node" },
-    ],
+    runtimeModuleLinks: RUNTIME_MODULE_LINK_REQUIREMENTS.map((requirement) => ({
+      link: `/review/${requirement.link}`,
+      target: `/review/${requirement.target}`,
+    })),
     sourceTreeDigest: evidence.host.sourceTreeDigest,
   };
 }

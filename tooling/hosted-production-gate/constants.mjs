@@ -1,4 +1,7 @@
-export { ARCHITECTURE_PLAN_SHA256 } from "../production-gate/constants.mjs";
+export {
+  ARCHITECTURE_PLAN_SHA256,
+  RUNTIME_MODULE_LINK_REQUIREMENTS,
+} from "../production-gate/constants.mjs";
 
 export const HOSTED_GATE_SCHEMA = "workload-funnel.hosted-production-gate.v1";
 export const HOSTED_VERDICT_SCHEMA =
@@ -149,6 +152,8 @@ export const RUNTIME_PACKAGE_NAMES = Object.freeze([
   "@workload-funnel/executor-systemd",
   "@workload-funnel/kernel",
   "@workload-funnel/node-execution",
+  "@workload-funnel/scheduler-hyperqueue",
+  "@workload-funnel/scheduler-mutation-gateway",
   "@workload-funnel/store-postgres",
 ]);
 

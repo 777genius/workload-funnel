@@ -22,6 +22,45 @@ export const OWNED_NAME_PATTERN = /^wf-production-gate-[a-f0-9]{32}$/u;
 export const OWNED_RESOURCE_PATTERN =
   /^wf-production-gate-[a-f0-9]{32}(?:-[a-z0-9-]{1,40})?$/u;
 
+export const RUNTIME_MODULE_LINK_REQUIREMENTS = Object.freeze([
+  Object.freeze({
+    link: "node_modules/@workload-funnel/executor-systemd",
+    target: "packages/executor-systemd",
+  }),
+  Object.freeze({
+    link: "node_modules/@workload-funnel/scheduler-hyperqueue",
+    target: "packages/scheduler-hyperqueue",
+  }),
+  Object.freeze({
+    link: "node_modules/@workload-funnel/scheduler-mutation-gateway",
+    target: "apps/scheduler-mutation-gateway",
+  }),
+  Object.freeze({
+    link: "packages/executor-systemd/node_modules/@workload-funnel/node-execution",
+    target: "packages/node-execution",
+  }),
+  Object.freeze({
+    link: "apps/scheduler-mutation-gateway/node_modules/@workload-funnel/kernel",
+    target: "packages/kernel",
+  }),
+  Object.freeze({
+    link: "apps/scheduler-mutation-gateway/node_modules/@workload-funnel/scheduler-hyperqueue",
+    target: "packages/scheduler-hyperqueue",
+  }),
+  Object.freeze({
+    link: "packages/scheduler-hyperqueue/node_modules/@workload-funnel/kernel",
+    target: "packages/kernel",
+  }),
+  Object.freeze({
+    link: "packages/scheduler-hyperqueue/node_modules/@workload-funnel/node-execution",
+    target: "packages/node-execution",
+  }),
+  Object.freeze({
+    link: "packages/scheduler-hyperqueue/node_modules/@workload-funnel/workload-control",
+    target: "packages/workload-control",
+  }),
+]);
+
 export const DECLARED_COMPONENTS = Object.freeze([
   "attestation",
   "preflight",

@@ -41,6 +41,31 @@ async function commandAbsent(executable, arguments_) {
   );
 }
 
+export function classifyZeroResidueFailure(evidence) {
+  const checks = evidence.checks;
+  for (const [failed, reason] of [
+    [checks.paths.length > 0, "owned_path_residue"],
+    [checks.userExists, "synthetic_user_residue"],
+    [checks.groupExists, "synthetic_group_residue"],
+    [!checks.mountAbsent, "owned_mount_residue"],
+    [!checks.loopAbsent, "owned_loop_residue"],
+    [!checks.processProbeCertain, "process_residue_probe_uncertain"],
+    [checks.ownedProcesses.length > 0, "owned_process_residue"],
+    [checks.foreignProcesses.length > 0, "foreign_process_residue"],
+    [!checks.packageProbesCertain, "package_residue_probe_uncertain"],
+    [checks.packages.length > 0, "owned_package_residue"],
+    [!checks.imageProbesCertain, "image_residue_probe_uncertain"],
+    [checks.images.length > 0, "owned_image_residue"],
+    [!checks.imageBaselineMatches, "docker_image_baseline_drift"],
+    [checks.containers !== "", "docker_container_residue"],
+    [checks.networks.length > 0, "docker_network_residue"],
+    [checks.volumes !== "", "docker_volume_residue"],
+    [checks.units !== "", "systemd_unit_residue"],
+  ])
+    if (failed) return reason;
+  return "owned_residue_unclassified";
+}
+
 export async function verifyZeroResidue(context, options = {}) {
   let hostState = options.state;
   if (hostState === undefined)
@@ -233,7 +258,7 @@ export async function verifyZeroResidue(context, options = {}) {
       units.stdout.trim() === "",
   });
   if (!evidence.zeroResidue)
-    throw new HostedGateRefusal("owned_residue_remains");
+    throw new HostedGateRefusal(classifyZeroResidueFailure(evidence));
   const residuePath = `${context.artifactRoot}/residue.json`;
   const writeEvidence = options.writeEvidence ?? writeRecoverableJsonAtomically;
   await writeEvidence(residuePath, evidence, {

@@ -47,7 +47,10 @@ export const CLEANUP_EFFECT_ORDER = Object.freeze([
 ]);
 
 function code(error) {
-  return error instanceof Error ? error.message : "hosted_gate_cleanup_failed";
+  return error instanceof HostedGateRefusal &&
+    /^[a-z0-9_]{1,96}$/u.test(error.code)
+    ? error.code
+    : "hosted_gate_cleanup_failed";
 }
 
 async function required(executable, arguments_, failure, options) {
@@ -91,8 +94,16 @@ export async function executeCleanupSteps(steps) {
 }
 
 export function requireCertainCleanup(cleanup) {
-  if (cleanup?.certain !== true)
-    throw new HostedGateRefusal("host_cleanup_uncertain");
+  if (cleanup?.certain !== true) {
+    const failure = cleanup?.failed?.[0];
+    const id = /^[a-z0-9_:-]{1,48}$/u.test(failure?.id ?? "")
+      ? failure.id
+      : "unknown_step";
+    const reason = /^[a-z0-9_]{1,96}$/u.test(failure?.reason ?? "")
+      ? failure.reason
+      : "unknown_failure";
+    throw new HostedGateRefusal(`host_cleanup_${id}_${reason}`);
+  }
   return cleanup;
 }
 

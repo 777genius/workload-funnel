@@ -21,6 +21,7 @@ import {
   OWNED_NAME_PATTERN,
   POSTGRES_FIXTURE_IMAGE,
   REVIEW_MANIFEST_SCHEMA,
+  RUNTIME_MODULE_LINK_REQUIREMENTS,
 } from "./constants.mjs";
 import {
   inspectCanonicalExecutable,
@@ -307,20 +308,20 @@ async function exactRepositoryInventory(root = repositoryRoot) {
 }
 
 async function verifyRuntimeModuleLinks(reviewedPathSet) {
-  const requirements = Object.freeze([
+  const requirements = RUNTIME_MODULE_LINK_REQUIREMENTS.map((requirement) =>
     Object.freeze({
-      link: `${repositoryRoot}/node_modules/@workload-funnel/executor-systemd`,
-      target: `${repositoryRoot}/packages/executor-systemd`,
+      link: `${repositoryRoot}/${requirement.link}`,
+      target: `${repositoryRoot}/${requirement.target}`,
     }),
-    Object.freeze({
-      link: `${repositoryRoot}/packages/executor-systemd/node_modules/@workload-funnel/node-execution`,
-      target: `${repositoryRoot}/packages/node-execution`,
-    }),
-  ]);
+  );
   const entrypoints = Object.freeze([
+    `${repositoryRoot}/apps/scheduler-mutation-gateway/dist/features/composition/index.js`,
+    `${repositoryRoot}/apps/scheduler-mutation-gateway/dist/features/hyperqueue-mutation-boundary/index.js`,
     `${repositoryRoot}/packages/executor-systemd/dist/features/capability-discovery/index.js`,
     `${repositoryRoot}/packages/executor-systemd/dist/features/cgroup-resource-mapping/index.js`,
     `${repositoryRoot}/packages/node-execution/dist/features/resource-enforcement/index.js`,
+    `${repositoryRoot}/packages/scheduler-hyperqueue/dist/features/mutation-gateway-authority/index.js`,
+    `${repositoryRoot}/packages/scheduler-hyperqueue/dist/features/operation-lookup/index.js`,
   ]);
   if (entrypoints.some((path) => !reviewedPathSet.has(path)))
     throw new GateAdmissionError("reviewed_runtime_module_missing");

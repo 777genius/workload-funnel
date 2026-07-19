@@ -4,6 +4,7 @@ import {
   ARCHITECTURE_PLAN_SHA256,
   PINNED_IMAGES,
   PRODUCTION_GATE_RECOVERY_SCHEMA,
+  RUNTIME_MODULE_LINK_REQUIREMENTS,
 } from "./constants.mjs";
 import { HostedGateRefusal } from "./contract.mjs";
 
@@ -58,7 +59,8 @@ function validateReviewTuple(review, evidence) {
       !Array.isArray(review.executables) ||
       review.executables.length < 1 ||
       !Array.isArray(review.runtimeModuleLinks) ||
-      review.runtimeModuleLinks.length !== 2,
+      review.runtimeModuleLinks.length !==
+        RUNTIME_MODULE_LINK_REQUIREMENTS.length,
     "cleanup_recovery_review_invalid",
   );
 }
