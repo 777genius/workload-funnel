@@ -356,13 +356,14 @@ async function retainedLookup(config, state) {
     output.stdout,
     state.mapping.canonicalJobName,
   );
-  if (
-    retained.disposition !== "one" ||
-    retained.retainedJobCount !== RETAINED_HISTORY_CEILING ||
-    retained.matches.length !== 1 ||
-    retained.matches[0].jobId !== state.mapping.jobId
-  )
-    throw new Error("hyperqueue_gateway_probe_retained_job_invalid");
+  if (retained.disposition !== "one")
+    throw new Error("hyperqueue_gateway_probe_retained_disposition_invalid");
+  if (retained.retainedJobCount !== RETAINED_HISTORY_CEILING)
+    throw new Error("hyperqueue_gateway_probe_retained_history_count_invalid");
+  if (retained.matches.length !== 1)
+    throw new Error("hyperqueue_gateway_probe_retained_match_count_invalid");
+  if (retained.matches[0].jobId !== state.mapping.jobId)
+    throw new Error("hyperqueue_gateway_probe_retained_identity_invalid");
   return Object.freeze({
     ...retained,
     retainedHistoryCeiling: RETAINED_HISTORY_CEILING,
