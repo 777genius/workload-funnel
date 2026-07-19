@@ -556,10 +556,10 @@ export async function runHyperQueueCompatibilityProbe(config) {
       "hyperqueue_job_info_timeout",
     );
     parseOfficialJobInfo(info.stdout, mapping.jobId);
-    await config.stopProcess(server);
-    server = undefined;
     await config.stopProcess(worker);
     worker = undefined;
+    await config.stopProcess(server);
+    server = undefined;
     server = await config.startProcess(
       config.binaryPath,
       serverStartArguments,

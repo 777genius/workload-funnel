@@ -868,6 +868,18 @@ describe("official HyperQueue 0.26.2 translation", () => {
     expect(runner).toContain("serverJournalPath,");
     expect(contract).toContain('"hq-worker-restart"');
     expect(contract).toContain("cancelAfterJournalRestart: true");
+    const journalRestartShutdown = contract.slice(
+      contract.indexOf("parseOfficialJobInfo(info.stdout"),
+      contract.indexOf('"hq-server-restart"'),
+    );
+    expect(
+      journalRestartShutdown.indexOf("config.stopProcess(worker)"),
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      journalRestartShutdown.indexOf("config.stopProcess(worker)"),
+    ).toBeLessThan(
+      journalRestartShutdown.indexOf("config.stopProcess(server)"),
+    );
     expect(
       contract.indexOf('operation: "replay-after-server-restart"'),
     ).toBeLessThan(contract.lastIndexOf("officialHyperQueueCancelArguments("));
