@@ -38,6 +38,16 @@ const PRESSURE_ROLES = new Set([
   "pressure-memory",
 ]);
 const HYPERQUEUE_SERVICE_ROLES = new Set(["hq-server", "hq-worker"]);
+const SYSTEMD_FAILURE_RESULTS = new Set([
+  "core-dump",
+  "exit-code",
+  "oom-kill",
+  "protocol",
+  "resources",
+  "signal",
+  "timeout",
+  "watchdog",
+]);
 const observationWindowScript = fileURLToPath(
   new URL("./fixtures/systemd-observation-window.mjs", import.meta.url),
 );
@@ -334,7 +344,7 @@ export function boundedHostSystemdArguments(config, input) {
       `--unit=${unit}`,
       `--slice=${config.runId}.slice`,
       `--description=${description}`,
-      "--collect",
+      ...(observationExecution ? [] : ["--collect"]),
       "--quiet",
       "--setenv=HOME=/nonexistent",
       "--setenv=LANG=C.UTF-8",
@@ -627,6 +637,28 @@ export function createBoundedHostProcessManager(config) {
         );
         markerReleased = true;
         result = await execution.completion;
+        if (result.code !== 0 && result.code !== null) {
+          const termination = await showUnit(config, plan.unit, [
+            "Description",
+            "InvocationID",
+            "LoadState",
+            "Result",
+          ]);
+          if (termination.code !== 0 || unitAbsent(termination))
+            throw new Error("bounded_host_process_termination_unproven");
+          const terminationValues = parseShow(termination.stdout);
+          if (
+            terminationValues.Description !== plan.description ||
+            terminationValues.InvocationID !== values.InvocationID ||
+            terminationValues.LoadState !== "loaded" ||
+            !SYSTEMD_FAILURE_RESULTS.has(terminationValues.Result)
+          )
+            throw new Error("bounded_host_process_termination_unproven");
+          result = Object.freeze({
+            ...result,
+            systemdResult: terminationValues.Result,
+          });
+        }
       } catch (error) {
         failure = error;
       }

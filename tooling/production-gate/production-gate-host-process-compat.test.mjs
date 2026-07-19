@@ -53,6 +53,7 @@ describe("HyperQueue gateway probe failure diagnostics", () => {
           stderr: "untrusted wrapper diagnostic",
           stdout:
             '{"failureReason":"hyperqueue_gateway_probe_restart_recovery_failed"}\n',
+          systemdResult: "exit-code",
         },
         "submit-and-recover",
       );
@@ -129,6 +130,22 @@ describe("HyperQueue gateway probe failure diagnostics", () => {
       parseGatewayProbeResult({ code: null, errorCode: "unknown" }),
     ).toThrow("hyperqueue_gateway_probe_execution_failed");
   });
+
+  it.each([
+    ["exit-code", "hyperqueue_gateway_probe_child_failed_without_envelope"],
+    ["oom-kill", "hyperqueue_gateway_probe_memory_limit"],
+    ["signal", "hyperqueue_gateway_probe_child_signaled"],
+    ["timeout", "hyperqueue_gateway_probe_wrapper_timeout"],
+  ])("classifies reviewed systemd result %s", (systemdResult, reason) => {
+    expect(() =>
+      parseGatewayProbeResult({
+        code: 1,
+        stderr: "",
+        stdout: "",
+        systemdResult,
+      }),
+    ).toThrow(reason);
+  });
 });
 
 function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
@@ -196,6 +213,7 @@ function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
     RestrictNamespaces: "yes",
     RestrictRealtime: "yes",
     RestrictSUIDSGID: "yes",
+    Result: "exit-code",
     RuntimeMaxUSec: property("RuntimeMaxSec"),
     SendSIGKILL: "yes",
     Slice: `${runId}.slice`,
@@ -732,11 +750,15 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
     "preserves %s results only after durable observation",
     async (_, expected) => {
       const harness = processManagerHarness(expected);
+      const observedExpected =
+        expected.code !== 0 && expected.code !== null
+          ? { ...expected, systemdResult: "exit-code" }
+          : expected;
       await expect(
         harness.manager.execute("/usr/bin/hq", ["job", "list"], "hq-cli-1", {
           limits: { maxOutputBytes: 1024, timeoutMs: 2_000 },
         }),
-      ).resolves.toEqual(expected);
+      ).resolves.toEqual(observedExpected);
       expect(harness.events).toEqual([
         "prepare",
         "admit",
@@ -752,7 +774,6 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
       expect(harness.runner.start).toHaveBeenCalledWith(
         "/usr/bin/systemd-run",
         expect.arrayContaining([
-          "--collect",
           "--wait",
           "--pipe",
           expect.stringMatching(
@@ -763,6 +784,7 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
         ]),
         { maxOutputBytes: 1024, timeoutMs: 49_000 },
       );
+      expect(harness.runner.start.mock.calls[0][1]).not.toContain("--collect");
       expect(harness.runner.start.mock.calls[0][1]).not.toContain("/bin/sh");
     },
   );

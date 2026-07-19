@@ -352,6 +352,17 @@ export function parseGatewayProbeResult(result, operation) {
   }
   const failureReason = exactGatewayProbeFailureReason(result);
   if (failureReason !== undefined) throw new Error(failureReason);
+  const safeSystemdReason = Object.freeze({
+    "core-dump": "hyperqueue_gateway_probe_child_core_dumped",
+    "exit-code": "hyperqueue_gateway_probe_child_failed_without_envelope",
+    "oom-kill": "hyperqueue_gateway_probe_memory_limit",
+    protocol: "hyperqueue_gateway_probe_protocol_failure",
+    resources: "hyperqueue_gateway_probe_resource_limit",
+    signal: "hyperqueue_gateway_probe_child_signaled",
+    timeout: "hyperqueue_gateway_probe_wrapper_timeout",
+    watchdog: "hyperqueue_gateway_probe_watchdog_timeout",
+  })[result?.systemdResult];
+  if (safeSystemdReason !== undefined) throw new Error(safeSystemdReason);
   if (
     result === null ||
     typeof result !== "object" ||
