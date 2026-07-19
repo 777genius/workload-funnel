@@ -48,7 +48,10 @@ import {
   requireCertainCleanup,
 } from "./host-cleanup.mjs";
 import { removeFixtureTree } from "./fixture-cleanup.mjs";
-import { classifyZeroResidueFailure } from "./residue.mjs";
+import {
+  classifyZeroResidueFailure,
+  writeFailedResidueObservation,
+} from "./residue.mjs";
 import {
   classifyForeignProcesses,
   dockerImageInventory,
@@ -994,6 +997,43 @@ describe("generic review and cleanup evidence", () => {
     expect(classifyZeroResidueFailure({ checks })).toBe(
       "owned_residue_unclassified",
     );
+  });
+
+  test("seals the exact failed residue observation for diagnosis", async () => {
+    const context = { artifactRoot: "/evidence" };
+    const evidence = {
+      checks: { foreignProcesses: [{ pid: 42 }] },
+      zeroResidue: false,
+    };
+    const writeEvidence = vi.fn(
+      async (path, value, { acceptExisting, mode }) => {
+        expect(path).toBe("/evidence/residue-failure-observation.json");
+        expect(value).toBe(evidence);
+        expect(mode).toBe(0o444);
+        expect(
+          acceptExisting({
+            checks: { foreignProcesses: [{ pid: 42 }] },
+            zeroResidue: false,
+          }),
+        ).toBe(true);
+        expect(() =>
+          acceptExisting({
+            ...evidence,
+            checks: { foreignProcesses: [{ pid: 43 }] },
+          }),
+        ).toThrow("residue_failure_observation_conflict");
+      },
+    );
+
+    await writeFailedResidueObservation(context, evidence, writeEvidence);
+    expect(writeEvidence).toHaveBeenCalledOnce();
+    await expect(
+      writeFailedResidueObservation(
+        context,
+        { ...evidence, zeroResidue: true },
+        writeEvidence,
+      ),
+    ).rejects.toThrow("residue_failure_observation_invalid");
   });
 
   test("writes deterministic checksum lines", () => {
