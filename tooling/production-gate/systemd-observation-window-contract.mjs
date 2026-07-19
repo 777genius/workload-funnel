@@ -1,4 +1,4 @@
-export const SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS = 10_000;
+export const SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS = 30_000;
 
 export function exactSystemdObservationWindowInput(marker, timeoutMs) {
   return (

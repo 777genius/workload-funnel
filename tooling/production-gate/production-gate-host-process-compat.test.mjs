@@ -287,14 +287,14 @@ function processManagerHarness(
 describe("systemd 255 bounded synchronous execution compatibility", () => {
   it("binds the caller and observation fixture to one exact timeout", () => {
     const marker = `${workloadRoot}/.observed-hq-cli-1`;
-    expect(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS).toBe(10_000);
+    expect(SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS).toBe(30_000);
     expect(
       exactSystemdObservationWindowInput(
         marker,
         SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS,
       ),
     ).toBe(true);
-    for (const timeoutMs of [4_000, 9_999, 10_001])
+    for (const timeoutMs of [10_000, 29_999, 30_001])
       expect(exactSystemdObservationWindowInput(marker, timeoutMs)).toBe(false);
   });
 
@@ -671,12 +671,12 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
           "--wait",
           "--pipe",
           expect.stringMatching(
-            /^--property=ExecStartPre=\/usr\/bin\/node .*systemd-observation-window\.mjs .*\.observed-hq-cli-1 10000$/u,
+            /^--property=ExecStartPre=\/usr\/bin\/node .*systemd-observation-window\.mjs .*\.observed-hq-cli-1 30000$/u,
           ),
           "--property=RuntimeMaxSec=2s",
           "--property=TimeoutStopSec=12s",
         ]),
-        { maxOutputBytes: 1024, timeoutMs: 17_000 },
+        { maxOutputBytes: 1024, timeoutMs: 37_000 },
       );
       expect(harness.runner.start.mock.calls[0][1]).not.toContain("/bin/sh");
     },
