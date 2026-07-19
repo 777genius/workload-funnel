@@ -125,7 +125,6 @@ function submitArguments(
     "submit",
     "--output-mode",
     "json",
-    "--no-progress",
     "--name",
     canonicalJobName,
     "--max-fails",

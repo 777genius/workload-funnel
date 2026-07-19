@@ -120,6 +120,31 @@ describe("official HyperQueue v0.26.2 CLI schemas", () => {
       jobId: "12",
       state: "cancel_acknowledged",
     });
+    const submitArguments = executeMutation.mock.calls[0]?.[0];
+    expect(submitArguments).toEqual([
+      "submit",
+      "--output-mode",
+      "json",
+      "--name",
+      expect.stringMatching(/^wf-hq-v1-[A-Za-z0-9_-]{86}$/u),
+      "--max-fails",
+      "0",
+      "--cpus",
+      "1",
+      "--",
+      "/opt/workload-funnel/bin/wf-hq-shim",
+      "--protocol",
+      "phase7.scheduler-shim.v1",
+      "--invocation-base64",
+      "e30",
+      "--restart-policy",
+      "never",
+      "--mapping-fingerprint",
+      "mapping-fingerprint-1",
+    ]);
+    expect(submitArguments).not.toEqual(
+      expect.arrayContaining(["--no-progress"]),
+    );
     const cancelArguments = executeMutation.mock.calls[1]?.[0];
     expect(cancelArguments).toEqual([
       "job",
