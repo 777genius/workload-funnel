@@ -76,6 +76,33 @@ describe("HyperQueue gateway probe failure diagnostics", () => {
       ),
     ).toThrow("hyperqueue_gateway_probe_execution_failed");
   });
+
+  it.each([
+    ["command_failed", "hyperqueue_gateway_probe_wrapper_failed"],
+    ["command_output_limit", "hyperqueue_gateway_probe_output_limit"],
+    ["command_timeout", "hyperqueue_gateway_probe_wrapper_timeout"],
+  ])(
+    "classifies bounded runner %s without exposing output",
+    (errorCode, reason) => {
+      expect(() =>
+        parseGatewayProbeResult(
+          {
+            code: null,
+            errorCode,
+            stderr: "untrusted wrapper diagnostic",
+            stdout: "untrusted wrapper output",
+          },
+          "submit-and-recover",
+        ),
+      ).toThrow(reason);
+    },
+  );
+
+  it("fails closed for an unknown bounded runner failure", () => {
+    expect(() =>
+      parseGatewayProbeResult({ code: null, errorCode: "unknown" }),
+    ).toThrow("hyperqueue_gateway_probe_execution_failed");
+  });
 });
 
 function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
@@ -676,7 +703,7 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
           "--property=RuntimeMaxSec=2s",
           "--property=TimeoutStopSec=12s",
         ]),
-        { maxOutputBytes: 1024, timeoutMs: 37_000 },
+        { maxOutputBytes: 1024, timeoutMs: 49_000 },
       );
       expect(harness.runner.start.mock.calls[0][1]).not.toContain("/bin/sh");
     },

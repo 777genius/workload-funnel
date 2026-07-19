@@ -340,6 +340,15 @@ function exactGatewayProbeFailureReason(result) {
 }
 
 export function parseGatewayProbeResult(result, operation) {
+  if (result?.code === null) {
+    const safeRunnerReason = Object.freeze({
+      command_failed: "hyperqueue_gateway_probe_wrapper_failed",
+      command_output_limit: "hyperqueue_gateway_probe_output_limit",
+      command_timeout: "hyperqueue_gateway_probe_wrapper_timeout",
+    })[result.errorCode];
+    if (safeRunnerReason !== undefined) throw new Error(safeRunnerReason);
+    throw new Error("hyperqueue_gateway_probe_execution_failed");
+  }
   const failureReason = exactGatewayProbeFailureReason(result);
   if (failureReason !== undefined) throw new Error(failureReason);
   if (
