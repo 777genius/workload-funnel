@@ -167,16 +167,22 @@ export function exactBoundedHostPropertiesObserved(
   });
   const read = values.IOReadBandwidthMax?.split(/\s+/u);
   const write = values.IOWriteBandwidthMax?.split(/\s+/u);
+  const expectedActiveState =
+    plan.observationWindow === undefined ? "active" : "activating";
+  if (requireControlGroup && values.ActiveState !== expectedActiveState)
+    throw new Error("bounded_host_process_active_state_unproven");
+  if (
+    requireControlGroup &&
+    !/^\/[A-Za-z0-9_./-]+$/u.test(values.ControlGroup ?? "")
+  )
+    throw new Error("bounded_host_process_control_group_unproven");
+  if (!exactExecStartPreObserved(values.ExecStartPre, plan.observationWindow))
+    throw new Error("bounded_host_process_prestart_barrier_unproven");
   if (
     Object.entries(exact).some(([key, expected]) => values[key] !== expected) ||
     values.Environment !==
       "HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TZ=UTC" ||
     !/^[a-f0-9]{32}$/u.test(values.InvocationID ?? "") ||
-    (requireControlGroup &&
-      values.ActiveState !==
-        (plan.observationWindow === undefined ? "active" : "activating")) ||
-    (requireControlGroup &&
-      !/^\/[A-Za-z0-9_./-]+$/u.test(values.ControlGroup ?? "")) ||
     systemdInteger(values.CPUQuotaPerSecUSec, SYSTEMD_DURATION_UNITS) !==
       1_000_000n ||
     systemdInteger(
@@ -211,7 +217,6 @@ export function exactBoundedHostPropertiesObserved(
     ]) ||
     typeof values.SystemCallFilter !== "string" ||
     values.SystemCallFilter.length === 0 ||
-    !exactExecStartPreObserved(values.ExecStartPre, plan.observationWindow) ||
     (joinNetworkOf === undefined
       ? (values.JoinsNamespaceOf ?? "") !== ""
       : !sameWords(values.JoinsNamespaceOf, [joinNetworkOf]))

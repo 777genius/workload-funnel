@@ -234,17 +234,22 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
       expect(exactSystemdObservationWindowInput(marker, timeoutMs)).toBe(false);
   });
 
-  it.each(["active", "deactivating"])(
-    "does not release a synchronous payload observed as %s",
-    async (activeState) => {
+  it.each([
+    ["active state", { ActiveState: "active" }, "active_state"],
+    ["deactivating state", { ActiveState: "deactivating" }, "active_state"],
+    ["empty control group", { ControlGroup: "" }, "control_group"],
+    ["missing pre-start barrier", { ExecStartPre: "" }, "prestart_barrier"],
+  ])(
+    "does not release a synchronous payload with %s",
+    async (_, foreign, reason) => {
       const harness = processManagerHarness(
         { code: 0, stderr: "", stdout: "untrusted" },
-        { foreign: { ActiveState: activeState } },
+        { foreign },
       );
 
       await expect(
         harness.manager.execute("/usr/bin/hq", ["worker", "list"], "hq-cli-1"),
-      ).rejects.toThrow("bounded_host_process_confinement_unproven");
+      ).rejects.toThrow(`bounded_host_process_${reason}_unproven`);
       expect(harness.events).not.toContain("release");
     },
   );
