@@ -313,7 +313,8 @@ const SAFE_GATEWAY_PROBE_FAILURE_REASON =
 function exactGatewayProbeFailureReason(result) {
   if (
     result?.code === 0 ||
-    result?.stderr !== "" ||
+    typeof result?.stderr !== "string" ||
+    Buffer.byteLength(result.stderr) > 128 * 1024 ||
     typeof result?.stdout !== "string" ||
     Buffer.byteLength(result.stdout) > 256 ||
     !result.stdout.endsWith("\n") ||

@@ -41,17 +41,24 @@ describe("HyperQueue gateway probe failure diagnostics", () => {
   });
 
   it("preserves one exact reviewed failure reason", () => {
-    expect(() =>
+    let failure;
+    try {
       parseGatewayProbeResult(
         {
           code: 1,
-          stderr: "",
+          stderr: "untrusted wrapper diagnostic",
           stdout:
             '{"failureReason":"hyperqueue_gateway_probe_restart_recovery_failed"}\n',
         },
         "submit-and-recover",
-      ),
-    ).toThrow("hyperqueue_gateway_probe_restart_recovery_failed");
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toBe(
+      "hyperqueue_gateway_probe_restart_recovery_failed",
+    );
   });
 
   it.each([
