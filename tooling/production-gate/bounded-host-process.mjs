@@ -83,6 +83,22 @@ function systemdInteger(value, units) {
   return BigInt(match[1]) * multiplier;
 }
 
+function observedActiveStateReason(value) {
+  switch (value) {
+    case "active":
+    case "activating":
+    case "deactivating":
+    case "failed":
+    case "inactive":
+    case "maintenance":
+    case "reloading":
+    case "refreshing":
+      return value;
+    default:
+      return "other";
+  }
+}
+
 function systemdRuntimeMicroseconds(value) {
   const single = value?.match(/^(\d+)(ms|s|us)?$/u);
   if (single !== null && single !== undefined)
@@ -170,7 +186,9 @@ export function exactBoundedHostPropertiesObserved(
   const expectedActiveState =
     plan.observationWindow === undefined ? "active" : "activating";
   if (requireControlGroup && values.ActiveState !== expectedActiveState)
-    throw new Error("bounded_host_process_active_state_unproven");
+    throw new Error(
+      `bounded_host_process_active_state_${observedActiveStateReason(values.ActiveState)}_unproven`,
+    );
   if (
     requireControlGroup &&
     !/^\/[A-Za-z0-9_./-]+$/u.test(values.ControlGroup ?? "")

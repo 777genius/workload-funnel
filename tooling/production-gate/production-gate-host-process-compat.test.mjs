@@ -235,8 +235,14 @@ describe("systemd 255 bounded synchronous execution compatibility", () => {
   });
 
   it.each([
-    ["active state", { ActiveState: "active" }, "active_state"],
-    ["deactivating state", { ActiveState: "deactivating" }, "active_state"],
+    ["active state", { ActiveState: "active" }, "active_state_active"],
+    [
+      "deactivating state",
+      { ActiveState: "deactivating" },
+      "active_state_deactivating",
+    ],
+    ["failed state", { ActiveState: "failed" }, "active_state_failed"],
+    ["unknown state", { ActiveState: "foreign" }, "active_state_other"],
     ["empty control group", { ControlGroup: "" }, "control_group"],
     ["missing pre-start barrier", { ExecStartPre: "" }, "prestart_barrier"],
   ])(
