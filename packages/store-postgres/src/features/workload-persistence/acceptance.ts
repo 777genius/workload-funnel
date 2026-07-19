@@ -18,6 +18,11 @@ import type {
   PostgresQueryClient,
 } from "./postgres-pool.js";
 import { decodeAcceptance, type AcceptanceRow } from "./row-codecs.js";
+import {
+  appendCanonicalAudit,
+  completeCanonicalInbox,
+  tupleDigest,
+} from "./canonical-bundle-writes.js";
 
 interface SequenceRow extends Record<string, unknown> {
   readonly sequence_id: string;
@@ -132,6 +137,24 @@ async function insertAcceptance(
       executionGeneration,
     ],
   );
+  await completeCanonicalInbox(client, schema, {
+    consumerId: "control-api",
+    messageId: operationId,
+    operationKind: "submit",
+    payloadDigest: tupleDigest([input.specDigest]),
+  });
+  await appendCanonicalAudit(client, schema, {
+    action: "workload.accepted",
+    actorId: input.principalId,
+    details: Object.freeze({
+      callerScope: input.callerScope,
+      idempotencyKey: input.idempotencyKey,
+      specDigest: input.specDigest,
+    }),
+    eventId: `audit:${operationId}`,
+    resourceId: workloadId,
+    tenantId: input.tenantId,
+  });
   await client.query(
     `INSERT INTO ${schema}.lifecycle_outbox
        (message_id, operation_id, aggregate_id, event_type, payload)

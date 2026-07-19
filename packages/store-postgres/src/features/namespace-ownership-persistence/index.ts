@@ -3,6 +3,13 @@ import type {
   NamespaceOwnershipStore,
 } from "@workload-funnel/workload-control/namespace-ownership";
 
+export {
+  createAsyncPostgresNamespaceOwnershipStore,
+  type AsyncPostgresNamespaceOwnershipStore,
+  type DurableNamespaceOwnership,
+  type PostgresNamespaceExecutor,
+} from "./async-postgres-namespace-store.js";
+
 export interface PostgresNamespaceOwnershipState {
   readonly rows: Map<string, NamespaceOwnership>;
 }

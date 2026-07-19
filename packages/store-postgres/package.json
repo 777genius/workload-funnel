@@ -33,6 +33,10 @@
       "types": "./dist/features/command-inbox/index.d.ts",
       "import": "./dist/features/command-inbox/index.js"
     },
+    "./execution-persistence": {
+      "types": "./dist/features/execution-persistence/index.d.ts",
+      "import": "./dist/features/execution-persistence/index.js"
+    },
     "./namespace-ownership-persistence": {
       "types": "./dist/features/namespace-ownership-persistence/index.d.ts",
       "import": "./dist/features/namespace-ownership-persistence/index.js"

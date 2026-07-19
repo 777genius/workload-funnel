@@ -11,6 +11,14 @@ import {
   type TerminalReleaseRequest,
 } from "@workload-funnel/workload-control/allocation-leasing";
 
+export {
+  createAsyncPostgresCapacityReservationStore,
+  type AsyncPostgresCapacityReservationStore,
+  type DurableAllocation,
+  type DurableCapacitySnapshot,
+  type PostgresCapacityExecutor,
+} from "./async-postgres-capacity-store.js";
+
 export interface PostgresCapacityLedgerState {
   readonly allocations: Map<string, Allocation>;
   readonly byAttempt: Map<string, string>;

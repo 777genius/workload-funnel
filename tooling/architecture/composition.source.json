@@ -4,8 +4,33 @@
     {
       "availableCapabilities": [
         "bounded_capacity_reservation",
-        "local_dispatch",
         "postgres_atomic_acceptance"
+      ],
+      "productionCapabilityRequirements": [
+        "artifact_retention_deletion",
+        "artifact_verification",
+        "authenticated_mtls_transport",
+        "bounded_capacity_reservation",
+        "deterministic_systemd_process_ownership",
+        "durable_audit_ledger",
+        "durable_command_inbox",
+        "durable_namespace_ownership",
+        "durable_node_observations",
+        "durable_reconciliation",
+        "durable_transactional_outbox",
+        "external_scheduler_dispatch",
+        "foreground_runtime_ownership",
+        "host_control_typed_broker",
+        "immutable_execution_generation_fencing",
+        "pinned_execution_paths",
+        "postgres_atomic_acceptance",
+        "postgres_schema_v2",
+        "pressure_fail_closed_admission",
+        "process_tree_cancellation",
+        "provider_runtime_execution",
+        "result_seal_boundary",
+        "scheduler_mutation_gateway",
+        "signed_compatibility_manifest"
       ],
       "profileId": "control-postgres"
     },
@@ -16,6 +41,7 @@
         "bounded_capacity_reservation",
         "local_dispatch"
       ],
+      "productionCapabilityRequirements": [],
       "profileId": "control-sqlite"
     }
   ]

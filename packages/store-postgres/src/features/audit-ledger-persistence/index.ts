@@ -6,6 +6,13 @@ import type {
 } from "@workload-funnel/workload-control/audit-history";
 import { auditRecordHashMaterial } from "@workload-funnel/workload-control/audit-history";
 
+export {
+  createAsyncPostgresAuditLedgerStore,
+  type AsyncPostgresAuditLedgerStore,
+  type DurableAuditRecord,
+  type PostgresAuditExecutor,
+} from "./async-postgres-audit-store.js";
+
 export function createPostgresAuditLedgerStore(
   records: AuditRecord[],
 ): AuditLedgerStore {

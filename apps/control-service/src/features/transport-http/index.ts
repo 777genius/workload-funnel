@@ -24,3 +24,25 @@ export {
   type SignedCursorCodec,
   type SignedCursorPayloadV1,
 } from "./api/signed-cursor.js";
+export {
+  parseProductionCapabilityReceipt,
+  ProductionCapabilityGateError,
+  productionCapabilitySigningPayload,
+  verifyProductionCapabilityReceipt,
+  type ProductionCapabilityDependency,
+  type ProductionCapabilityReceipt,
+  type VerifiedProductionCapabilityReceipt,
+} from "./api/production-capability-receipt.js";
+export {
+  productionDeploymentConfigDigest,
+  ProductionServerConfigurationError,
+  validateProductionServerConfig,
+  type ProductionServerConfig,
+} from "./api/production-server-config.js";
+export {
+  createProductionNetworkService,
+  installProductionSignalHandlers,
+  type ProductionHttpOperations,
+  type ProductionNetworkService,
+  type ProductionRequestPrincipal,
+} from "./api/production-network-server.js";

@@ -3,6 +3,13 @@ import type {
   OutboxStore,
 } from "@workload-funnel/workload-control/control-event-delivery";
 
+export {
+  createAsyncPostgresOutboxStore,
+  type AsyncPostgresOutboxStore,
+  type DurableOutboxDelivery,
+  type PostgresOutboxExecutor,
+} from "./async-postgres-outbox-store.js";
+
 export function createPostgresOutboxStore(
   messages: Map<string, OutboxMessage>,
   faults?: Readonly<{ hit(boundary: string): void }>,

@@ -19,6 +19,11 @@ import {
   type OperationRow,
   type RunRow,
 } from "./row-codecs.js";
+import {
+  appendCanonicalAudit,
+  completeCanonicalInbox,
+  tupleDigest,
+} from "./canonical-bundle-writes.js";
 
 interface CancellationRuntime {
   readonly faults?: PostgresLifecycleFaultInjector;
@@ -29,6 +34,11 @@ interface CancellationRuntime {
 
 interface OwnedOperationRow extends OperationRow {
   readonly caller_scope: string;
+}
+
+interface OwnedRunRow extends RunRow {
+  readonly principal_id: string;
+  readonly tenant_id: string;
 }
 
 async function existingCancellation(
@@ -71,11 +81,13 @@ async function createCancellation(
   operationId: string,
   runId: string,
 ): Promise<CancellationReceipt> {
-  const runResult = await client.query<RunRow>(
+  const runResult = await client.query<OwnedRunRow>(
     `SELECT r.run_id, r.workload_id, r.attempt_id, r.cancellation_desired,
-            r.state, r.terminal_outcome, r.version
+            r.state, r.terminal_outcome, r.version,
+            w.principal_id, w.tenant_id
        FROM ${schema}.lifecycle_run r
        JOIN ${schema}.lifecycle_acceptance a ON a.run_id = r.run_id
+       JOIN ${schema}.lifecycle_workload w ON w.workload_id = r.workload_id
       WHERE r.run_id = $1 AND a.caller_scope = $2
       FOR UPDATE`,
     [runId, callerScope],
@@ -120,6 +132,20 @@ async function createCancellation(
      VALUES ($1, $2, $3)`,
     [operationId, runId, status],
   );
+  await completeCanonicalInbox(client, schema, {
+    consumerId: "control-api",
+    messageId: operationId,
+    operationKind: "cancel",
+    payloadDigest: tupleDigest([callerScope, runId, operationId]),
+  });
+  await appendCanonicalAudit(client, schema, {
+    action: "run.cancellation-requested",
+    actorId: run.principal_id,
+    details: Object.freeze({ callerScope, status }),
+    eventId: `audit:${operationId}`,
+    resourceId: runId,
+    tenantId: run.tenant_id,
+  });
   if (!terminal) {
     await client.query(
       `INSERT INTO ${schema}.lifecycle_outbox

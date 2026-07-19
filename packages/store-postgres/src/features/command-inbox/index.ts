@@ -3,6 +3,13 @@ import type {
   InboxStore,
 } from "@workload-funnel/workload-control/control-event-delivery";
 
+export {
+  createAsyncPostgresInboxStore,
+  type AsyncPostgresInboxStore,
+  type DurableInboxReceipt,
+  type PostgresInboxExecutor,
+} from "./async-postgres-inbox-store.js";
+
 export function createPostgresInboxStore(
   receipts: Map<string, InboxReceipt>,
 ): InboxStore {

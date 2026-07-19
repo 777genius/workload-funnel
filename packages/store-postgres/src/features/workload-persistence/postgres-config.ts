@@ -78,6 +78,14 @@ function validInteger(
   );
 }
 
+function exactKeys(value: object, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return (
+    actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index])
+  );
+}
+
 export function validatePostgresLifecycleConfig(
   value: unknown,
 ): PostgresLifecycleDatabaseConfig {
@@ -88,7 +96,7 @@ export function validatePostgresLifecycleConfig(
   }
   const record = value as Record<string, unknown>;
   if (
-    Object.keys(record).sort().join() !== configKeys.join() ||
+    !exactKeys(record, configKeys) ||
     (record["profile"] !== "production" &&
       record["profile"] !== "disposable-test")
   ) {
@@ -170,7 +178,7 @@ export function validatePostgresLifecycleConfig(
   if (
     typeof tls !== "object" ||
     tls === null ||
-    Object.keys(tls).sort().join() !== "certificateAuthority,serverName" ||
+    !exactKeys(tls, ["certificateAuthority", "serverName"]) ||
     !("certificateAuthority" in tls) ||
     typeof tls.certificateAuthority !== "string" ||
     tls.certificateAuthority.length < 32 ||

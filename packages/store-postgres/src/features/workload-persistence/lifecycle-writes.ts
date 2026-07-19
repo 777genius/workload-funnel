@@ -5,6 +5,11 @@ import type {
 
 import { PostgresLifecycleError } from "./postgres-errors.js";
 import type { PostgresPoolRuntime } from "./postgres-pool.js";
+import {
+  appendCanonicalAudit,
+  completeCanonicalInbox,
+  tupleDigest,
+} from "./canonical-bundle-writes.js";
 
 interface ErasureInput {
   readonly operationId: string;
@@ -178,6 +183,37 @@ export class LifecycleWrites {
             input.pseudonym,
             changed,
           ],
+          signal,
+        );
+        await completeCanonicalInbox(
+          client,
+          this.schema,
+          {
+            consumerId: "control-api",
+            messageId: input.operationId,
+            operationKind: "erasure",
+            payloadDigest: tupleDigest([
+              input.tenantId,
+              input.subjectPrincipalId,
+              input.pseudonym,
+            ]),
+          },
+          signal,
+        );
+        await appendCanonicalAudit(
+          client,
+          this.schema,
+          {
+            action: "principal.references-erased",
+            actorId: input.subjectPrincipalId,
+            details: Object.freeze({
+              changedCount: changed,
+              pseudonym: input.pseudonym,
+            }),
+            eventId: `audit:${input.operationId}`,
+            resourceId: input.subjectPrincipalId,
+            tenantId: input.tenantId,
+          },
           signal,
         );
         return changed;
