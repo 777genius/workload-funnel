@@ -486,6 +486,14 @@ describe("hosted gate fail-closed contracts", () => {
         uid: 0,
         unit: "hosted-compute-agent.service",
       },
+      {
+        comm: "(udev-worker)",
+        executable: "/usr/bin/udevadm",
+        pid: 10_699,
+        ppid: 226,
+        uid: 0,
+        unit: "systemd-udevd.service",
+      },
     ];
     expect(
       classifyForeignProcesses([...processes, ...image20260714240Processes], {
@@ -493,11 +501,27 @@ describe("hosted gate fail-closed contracts", () => {
         runnerUid: 1001,
       }),
     ).toEqual([]);
+    expect(
+      classifyForeignProcesses(
+        [
+          ...processes,
+          ...image20260714240Processes.with(0, {
+            ...image20260714240Processes[0],
+            executable: "/usr/lib/systemd/systemd-udevd",
+          }),
+        ],
+        { currentPid: 100, runnerUid: 1001 },
+      ),
+    ).toEqual([]);
     for (const [index, drift] of [
+      [0, { comm: "udevadm" }],
       [1, { executable: "/usr/lib/linux-azure-tools/hv_kvp_daemon" }],
       [7, { uid: 0 }],
       [9, { uid: 1001 }],
       [13, { comm: "provjobdabcdefg" }],
+      [14, { executable: "/usr/bin/bash" }],
+      [14, { comm: "udev-worker" }],
+      [14, { uid: 1001 }],
     ]) {
       const changed = {
         ...image20260714240Processes[index],
@@ -519,6 +543,19 @@ describe("hosted gate fail-closed contracts", () => {
           {
             ...image20260714240Processes[10],
             pid: 1285,
+          },
+        ],
+        { currentPid: 100, runnerUid: 1001 },
+      ),
+    ).not.toEqual([]);
+    expect(
+      classifyForeignProcesses(
+        [
+          ...processes,
+          ...image20260714240Processes,
+          {
+            ...image20260714240Processes[14],
+            pid: 10_700,
           },
         ],
         { currentPid: 100, runnerUid: 1001 },
