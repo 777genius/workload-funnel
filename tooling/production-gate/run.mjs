@@ -19,7 +19,10 @@ import {
   createBoundedHostProcessManager,
 } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
-import { DECLARED_COMPONENTS } from "./constants.mjs";
+import {
+  DECLARED_COMPONENTS,
+  HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
+} from "./constants.mjs";
 import {
   MINIO_SUPERVISOR_DESTINATION,
   objectContainerArguments,
@@ -698,6 +701,7 @@ async function main() {
               limits: { timeoutMs: 25_000 },
             },
           ),
+        serviceRuntimeMaxSec: HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
         gatewayWalPath,
         jobName: operationKey,
         runner: confinedRunner,

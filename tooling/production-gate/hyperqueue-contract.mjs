@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import { gunzipSync } from "node:zlib";
 
 import {
+  HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC,
   HYPERQUEUE_VERSION,
   HYPERQUEUE_X64_ARCHIVE_SHA256,
   OWNED_RESOURCE_PATTERN,
@@ -447,6 +448,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
     !config.serverDirectory.startsWith("/") ||
     !config.gatewayWalPath.startsWith("/") ||
     !config.syntheticShimExecutable.startsWith("/") ||
+    config.serviceRuntimeMaxSec !== HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC ||
     typeof config.executeGatewayProbe !== "function"
   )
     throw new Error("unsafe_hyperqueue_gate_probe");
@@ -455,6 +457,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
     config.binaryPath,
     [...global, "server", "start", "--host", "127.0.0.1"],
     "hq-server",
+    { runtimeMaxSec: config.serviceRuntimeMaxSec },
   );
   let worker;
   try {
@@ -472,6 +475,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
       config.binaryPath,
       [...global, "worker", "start", "--cpus", "2"],
       "hq-worker",
+      { runtimeMaxSec: config.serviceRuntimeMaxSec },
     );
     const inventory = await poll(
       config,
@@ -523,6 +527,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
       config.binaryPath,
       [...global, "server", "start", "--host", "127.0.0.1"],
       "hq-server",
+      { runtimeMaxSec: config.serviceRuntimeMaxSec },
     );
     await poll(
       config,
@@ -538,6 +543,7 @@ export async function runHyperQueueCompatibilityProbe(config) {
       config.binaryPath,
       [...global, "worker", "start", "--cpus", "2"],
       "hq-worker",
+      { runtimeMaxSec: config.serviceRuntimeMaxSec },
     );
     const restartedInventory = await poll(
       config,

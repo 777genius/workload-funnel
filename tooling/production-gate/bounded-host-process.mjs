@@ -2,6 +2,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { setTimeout as wait } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 
+import { HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC } from "./constants.mjs";
 import { SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS } from "./systemd-observation-window-contract.mjs";
 
 const OBSERVATION_TIMEOUT_STOP_SEC = 12;
@@ -34,6 +35,7 @@ const PRESSURE_ROLES = new Set([
   "pressure-io",
   "pressure-memory",
 ]);
+const HYPERQUEUE_SERVICE_ROLES = new Set(["hq-server", "hq-worker"]);
 const observationWindowScript = fileURLToPath(
   new URL("./fixtures/systemd-observation-window.mjs", import.meta.url),
 );
@@ -290,9 +292,11 @@ export function boundedHostSystemdArguments(config, input) {
   const customRuntimeValid = PRESSURE_ROLES.has(input.role)
     ? runtimeMaxSec >= PRESSURE_RUNTIME_MAX_SEC_RANGE.minimum &&
       runtimeMaxSec <= PRESSURE_RUNTIME_MAX_SEC_RANGE.maximum
-    : observationExecution &&
-      runtimeMaxSec >= 1 &&
-      runtimeMaxSec <= Math.ceil(MAX_EXECUTION_PAYLOAD_TIMEOUT_MS / 1_000);
+    : HYPERQUEUE_SERVICE_ROLES.has(input.role)
+      ? runtimeMaxSec === HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC
+      : observationExecution &&
+        runtimeMaxSec >= 1 &&
+        runtimeMaxSec <= Math.ceil(MAX_EXECUTION_PAYLOAD_TIMEOUT_MS / 1_000);
   if (
     !/^[a-z0-9-]{1,24}$/u.test(input.role) ||
     config.workloadUser !== "workload-funnel-synthetic" ||
