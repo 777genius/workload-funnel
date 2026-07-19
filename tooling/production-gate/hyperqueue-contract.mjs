@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { basename } from "node:path";
@@ -306,7 +307,40 @@ export async function stopHyperQueueCompatibilityProcesses({
   if (server !== undefined) await stopProcess(server);
 }
 
-function parseGatewayProbeResult(result, operation) {
+const SAFE_GATEWAY_PROBE_FAILURE_REASON =
+  /^(?:gateway|hyperqueue|scheduler)_[a-z0-9_]{1,95}$/u;
+
+function exactGatewayProbeFailureReason(result) {
+  if (
+    result?.code === 0 ||
+    result?.stderr !== "" ||
+    typeof result?.stdout !== "string" ||
+    Buffer.byteLength(result.stdout) > 256 ||
+    !result.stdout.endsWith("\n") ||
+    result.stdout.slice(0, -1).includes("\n")
+  )
+    return undefined;
+  let diagnostic;
+  try {
+    diagnostic = JSON.parse(result.stdout);
+  } catch {
+    return undefined;
+  }
+  if (
+    diagnostic === null ||
+    typeof diagnostic !== "object" ||
+    Array.isArray(diagnostic) ||
+    Object.keys(diagnostic).join() !== "failureReason" ||
+    typeof diagnostic.failureReason !== "string" ||
+    !SAFE_GATEWAY_PROBE_FAILURE_REASON.test(diagnostic.failureReason)
+  )
+    return undefined;
+  return diagnostic.failureReason;
+}
+
+export function parseGatewayProbeResult(result, operation) {
+  const failureReason = exactGatewayProbeFailureReason(result);
+  if (failureReason !== undefined) throw new Error(failureReason);
   if (
     result === null ||
     typeof result !== "object" ||

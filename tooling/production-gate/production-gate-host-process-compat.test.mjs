@@ -1,11 +1,14 @@
 import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { setImmediate } from "node:timers";
+import { fileURLToPath, URL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
 import { createBoundedHostProcessManager } from "./bounded-host-process.mjs";
 import { BoundedCommandRunner } from "./command-runner.mjs";
+import { parseGatewayProbeResult } from "./hyperqueue-contract.mjs";
 import {
   exactSystemdObservationWindowInput,
   SYSTEMD_OBSERVATION_WINDOW_TIMEOUT_MS,
@@ -13,6 +16,60 @@ import {
 
 const runId = "wf-production-gate-0123456789abcdef0123456789abcdef";
 const workloadRoot = `/var/lib/workload-funnel/allocations/${runId}`;
+
+describe("HyperQueue gateway probe failure diagnostics", () => {
+  it("emits one bounded diagnostic envelope without stderr", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL("./fixtures/hyperqueue-gateway-probe.mjs", import.meta.url),
+        ),
+      ],
+      {
+        encoding: "utf8",
+        env: { LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" },
+        timeout: 5_000,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(
+      '{"failureReason":"hyperqueue_gateway_probe_arguments_invalid"}\n',
+    );
+  });
+
+  it("preserves one exact reviewed failure reason", () => {
+    expect(() =>
+      parseGatewayProbeResult(
+        {
+          code: 1,
+          stderr: "",
+          stdout:
+            '{"failureReason":"hyperqueue_gateway_probe_restart_recovery_failed"}\n',
+        },
+        "submit-and-recover",
+      ),
+    ).toThrow("hyperqueue_gateway_probe_restart_recovery_failed");
+  });
+
+  it.each([
+    ["foreign namespace", '{"failureReason":"foreign_secret_value"}\n'],
+    [
+      "additional field",
+      '{"failureReason":"hyperqueue_gateway_probe_failed","extra":true}\n',
+    ],
+    ["multiline output", '{"failureReason":"gateway_failed"}\n{}\n'],
+  ])("fails closed for a %s", (_, stdout) => {
+    expect(() =>
+      parseGatewayProbeResult(
+        { code: 1, stderr: "", stdout },
+        "submit-and-recover",
+      ),
+    ).toThrow("hyperqueue_gateway_probe_execution_failed");
+  });
+});
 
 function loadedUnitShow(systemdArguments, { foreign = {}, omit = [] } = {}) {
   const description = systemdArguments

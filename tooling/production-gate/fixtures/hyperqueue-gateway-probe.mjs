@@ -370,9 +370,29 @@ async function replayAfterServerRestart(config) {
   });
 }
 
-const config = parseArguments(process.argv.slice(2));
-const evidence =
-  config.operation === "submit-and-recover"
-    ? await submitAndRecover(config)
-    : await replayAfterServerRestart(config);
-process.stdout.write(`${JSON.stringify(evidence)}\n`);
+const SAFE_FAILURE_REASON =
+  /^(?:gateway|hyperqueue|scheduler)_[a-z0-9_]{1,95}$/u;
+
+function safeFailureReason(error) {
+  return error instanceof Error && SAFE_FAILURE_REASON.test(error.message)
+    ? error.message
+    : "hyperqueue_gateway_probe_unexpected_failure";
+}
+
+async function main() {
+  const config = parseArguments(process.argv.slice(2));
+  const evidence =
+    config.operation === "submit-and-recover"
+      ? await submitAndRecover(config)
+      : await replayAfterServerRestart(config);
+  process.stdout.write(`${JSON.stringify(evidence)}\n`);
+}
+
+try {
+  await main();
+} catch (error) {
+  process.stdout.write(
+    `${JSON.stringify({ failureReason: safeFailureReason(error) })}\n`,
+  );
+  process.exitCode = 1;
+}
