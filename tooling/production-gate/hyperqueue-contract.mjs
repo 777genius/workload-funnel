@@ -477,15 +477,29 @@ export async function runHyperQueueCompatibilityProbe(config) {
     !OWNED_RESOURCE_PATTERN.test(config.jobName) ||
     !config.serverDirectory.startsWith("/") ||
     !config.gatewayWalPath.startsWith("/") ||
+    !config.serverJournalPath.startsWith("/") ||
+    config.serverJournalPath.includes("\u0000") ||
+    config.serverJournalPath === config.gatewayWalPath ||
     !config.syntheticShimExecutable.startsWith("/") ||
     config.serviceRuntimeMaxSec !== HYPERQUEUE_SERVICE_RUNTIME_MAX_SEC ||
     typeof config.executeGatewayProbe !== "function"
   )
     throw new Error("unsafe_hyperqueue_gate_probe");
   const global = ["--server-dir", config.serverDirectory];
+  const serverStartArguments = Object.freeze([
+    ...global,
+    "server",
+    "start",
+    "--host",
+    "127.0.0.1",
+    "--journal",
+    config.serverJournalPath,
+    "--journal-flush-period",
+    "100ms",
+  ]);
   let server = await config.startProcess(
     config.binaryPath,
-    [...global, "server", "start", "--host", "127.0.0.1"],
+    serverStartArguments,
     "hq-server",
     { runtimeMaxSec: config.serviceRuntimeMaxSec },
   );
@@ -542,20 +556,13 @@ export async function runHyperQueueCompatibilityProbe(config) {
       "hyperqueue_job_info_timeout",
     );
     parseOfficialJobInfo(info.stdout, mapping.jobId);
-    const canceled = await config.runner.run(
-      config.binaryPath,
-      officialHyperQueueCancelArguments(config.serverDirectory, mapping.jobId),
-      { timeoutMs: 10_000 },
-    );
-    parseOfficialCancel(successful(canceled, "hyperqueue_cancel_failed"));
-    await observeCanceled(config, global, mapping);
-    await config.stopProcess(worker);
-    worker = undefined;
     await config.stopProcess(server);
     server = undefined;
+    await config.stopProcess(worker);
+    worker = undefined;
     server = await config.startProcess(
       config.binaryPath,
-      [...global, "server", "start", "--host", "127.0.0.1"],
+      serverStartArguments,
       "hq-server-restart",
       { runtimeMaxSec: config.serviceRuntimeMaxSec },
     );
@@ -600,11 +607,19 @@ export async function runHyperQueueCompatibilityProbe(config) {
         initialGatewayEvidence.walRecordCount
     )
       throw new Error("hyperqueue_gateway_journal_restart_identity_mismatch");
+    const canceled = await config.runner.run(
+      config.binaryPath,
+      officialHyperQueueCancelArguments(config.serverDirectory, mapping.jobId),
+      { timeoutMs: 10_000 },
+    );
+    parseOfficialCancel(successful(canceled, "hyperqueue_cancel_failed"));
+    await observeCanceled(config, global, mapping);
     return Object.freeze({
       ...release,
       boundedHistoryCeiling: 1,
       builtGatewayClient: "SchedulerMutationGatewayClient",
       builtMutationBoundary: "HyperQueueMutationBoundary",
+      cancelAfterJournalRestart: true,
       cancelSchema: "empty_object",
       cancelTerminalObservation: "exact_job_and_task_canceled",
       durableGatewayReceiptReplayed: true,

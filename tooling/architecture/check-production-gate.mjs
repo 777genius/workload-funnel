@@ -121,6 +121,10 @@ for (const evidence of [
   "afterCliCall()",
   "parseHyperQueueOperationLookup",
   "RETAINED_HISTORY_CEILING",
+  "serverJournalPath",
+  '"--journal"',
+  '"--journal-flush-period"',
+  "cancelAfterJournalRestart",
   "hyperqueue_gateway_probe_retry_mutated_state",
   "hyperqueue_gateway_journal_restart_identity_mismatch",
 ])

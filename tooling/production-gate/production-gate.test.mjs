@@ -857,7 +857,20 @@ describe("official HyperQueue 0.26.2 translation", () => {
       'submitResponse: "lost_after_cli_result_before_mapping_persist"',
     );
     expect(contract).toContain('"hq-server-restart"');
+    expect(contract).toContain('"--journal"');
+    expect(contract).toContain('"--journal-flush-period"');
+    expect(contract).toContain('"100ms"');
+    expect(contract).toContain("config.serverJournalPath");
+    expect(contract.match(/serverStartArguments/gu)).toHaveLength(3);
+    expect(runner).toContain(
+      "serverJournalPath = `${allocation.root}/hq-server.journal`",
+    );
+    expect(runner).toContain("serverJournalPath,");
     expect(contract).toContain('"hq-worker-restart"');
+    expect(contract).toContain("cancelAfterJournalRestart: true");
+    expect(
+      contract.indexOf('operation: "replay-after-server-restart"'),
+    ).toBeLessThan(contract.lastIndexOf("officialHyperQueueCancelArguments("));
     const dishonestCanceledLabel = ["retained", "CanceledMatches"].join("");
     const inaccurateResponseLabel = ["discarded", "without", "inspection"].join(
       "_",

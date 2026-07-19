@@ -653,6 +653,7 @@ async function main() {
       await mkdir(serverDirectory, { mode: 0o700 });
       await chown(serverDirectory, allocation.uid, allocation.gid);
       const gatewayWalPath = `${allocation.root}/hq-gateway/authority.wal`;
+      const serverJournalPath = `${allocation.root}/hq-server.journal`;
       const operationKey = `${config.runId}-hq-job`;
       let hqServerUnit;
       let hqCommandSequence = 0;
@@ -706,6 +707,7 @@ async function main() {
         gatewayWalPath,
         jobName: operationKey,
         runner: confinedRunner,
+        serverJournalPath,
         serverDirectory,
         startProcess: async (executable, args, role, options) => {
           const process = await processManager.start(executable, args, role, {

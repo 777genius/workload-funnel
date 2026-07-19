@@ -239,10 +239,13 @@ Current repository closure is intentionally fail-closed:
   `HyperQueueMutationBoundary` submit runner returns. It restarts the built
   `SchedulerMutationGatewayClient` composition on the same fsynced WAL/mapping
   state, resolves and replays the durable receipt through the public gateway
-  API, restarts the server on the same journal, and proves the same retained job,
-  the configured history ceiling, stable WAL on retry, and exactly one submit.
-  Its post-restart lookup evidence is `retainedExactJobMatches=1`: exact retained
-  name, job ID, count, and schema, without claiming that lookup re-proves the
+  API, restarts the unfinished job on the same server journal, proves the same
+  retained job, and only then cancels it and observes the exact terminal state.
+  This ordering matches HyperQueue 0.26.2, which does not restore canceled jobs.
+  The gate also proves the configured history ceiling, stable WAL on retry, and
+  exactly one submit. Its post-restart lookup evidence is
+  `retainedExactJobMatches=1`: exact retained name, job ID, count, and schema,
+  without claiming that lookup re-proves the later
   canceled task state.
   The response-loss path cannot be replaced by a standalone lookup probe.
   Invalid output fails closed, zero is never absence, and no unresolved name is
